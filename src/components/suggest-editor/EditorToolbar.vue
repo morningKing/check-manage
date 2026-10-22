@@ -102,12 +102,66 @@
 
         <span class="se-bubble-sep" />
 
+        <el-dropdown trigger="click" @command="(size: string) => applyFontSize(size)">
+          <span class="se-bubble-btn" title="字号">字号</span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="">默认</el-dropdown-item>
+              <el-dropdown-item v-for="size in FONT_SIZES" :key="size" :command="size">{{ size }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click" @command="(color: string) => applyColor(color)">
+          <span class="se-bubble-btn" title="文字颜色">颜色</span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="">默认</el-dropdown-item>
+              <el-dropdown-item v-for="color in TEXT_COLORS" :key="color" :command="color">
+                <span class="se-color-dot" :style="{ background: color }" />{{ color }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click" @command="(color: string) => applyHighlight(color)">
+          <span class="se-bubble-btn" title="高亮">高亮</span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="">清除</el-dropdown-item>
+              <el-dropdown-item v-for="color in HIGHLIGHT_COLORS" :key="color" :command="color">
+                <span class="se-color-dot" :style="{ background: color }" />{{ color }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <button v-for="align in ALIGNMENTS" :key="align.value" type="button"
+          class="se-bubble-btn" :class="{ 'is-active': editor.isActive({ textAlign: align.value }) }"
+          :title="align.label" @click="applyAlign(align.value)">{{ align.icon }}</button>
+        <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+          style="display: none" @change="onImageChosen" />
+        <button type="button" class="se-bubble-btn" title="插入图片" @click="openImagePicker">图片</button>
+
+        <template v-if="editor.isActive('table')">
+          <span class="se-bubble-sep" />
+          <button type="button" class="se-bubble-btn" title="上方插入行" @click="TABLE_COMMANDS.addRowBefore(editor)">↑行</button>
+          <button type="button" class="se-bubble-btn" title="下方插入行" @click="TABLE_COMMANDS.addRowAfter(editor)">↓行</button>
+          <button type="button" class="se-bubble-btn" title="删除行" @click="TABLE_COMMANDS.deleteRow(editor)">删行</button>
+          <button type="button" class="se-bubble-btn" title="左侧插入列" @click="TABLE_COMMANDS.addColumnBefore(editor)">←列</button>
+          <button type="button" class="se-bubble-btn" title="右侧插入列" @click="TABLE_COMMANDS.addColumnAfter(editor)">→列</button>
+          <button type="button" class="se-bubble-btn" title="删除列" @click="TABLE_COMMANDS.deleteColumn(editor)">删列</button>
+          <button type="button" class="se-bubble-btn" title="合并单元格" @click="TABLE_COMMANDS.mergeCells(editor)">合并</button>
+          <button type="button" class="se-bubble-btn" title="拆分单元格" @click="TABLE_COMMANDS.splitCell(editor)">拆分</button>
+          <button type="button" class="se-bubble-btn" title="切换表头行" @click="TABLE_COMMANDS.toggleHeaderRow(editor)">表头</button>
+          <button type="button" class="se-bubble-btn" title="删除表格" @click="TABLE_COMMANDS.deleteTable(editor)">删表</button>
+        </template>
+
+        <span class="se-bubble-sep" />
+
         <button
           type="button"
           title="清除格式"
           class="se-bubble-btn"
           @mousedown.prevent
-          @click="editor.chain().focus().unsetAllMarks().clearNodes().run()"
+          @click="clearFormatting(editor)"
         >✕</button>
       </template>
       </div>
@@ -126,11 +180,17 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
+import { FONT_SIZES, TEXT_COLORS, HIGHLIGHT_COLORS, clearFormatting } from './core/formatting'
+import { TABLE_COMMANDS } from './core/table'
+import { insertFigure } from './core/figure'
+import { uploadAttachment } from '@/api/suggestEditor'
 
 const props = defineProps<{
   editor: Editor
   /** 右侧建议栏是否展开——展开时工具栏行加同宽占位，保证与纸张对齐 */
   withSidebarPad?: boolean
+  /** 当前文档 id（图片上传需要） */
+  docId: string
 }>()
 
 const BLOCK_OPTIONS = [
@@ -223,4 +283,51 @@ function applyLink(): void {
   }
   closeLink()
 }
+
+const ALIGNMENTS = [
+  { value: 'left', label: '左对齐', icon: '⯇' },
+  { value: 'center', label: '居中', icon: '≡' },
+  { value: 'right', label: '右对齐', icon: '⯈' },
+  { value: 'justify', label: '两端对齐', icon: '☰' },
+] as const
+
+function applyFontSize(size: string): void {
+  if (!size) props.editor.chain().focus().unsetFontSize().run()
+  else props.editor.chain().focus().setFontSize(size).run()
+}
+
+function applyColor(color: string): void {
+  if (!color) props.editor.chain().focus().unsetColor().run()
+  else props.editor.chain().focus().setColor(color).run()
+}
+
+function applyHighlight(color: string): void {
+  if (!color) props.editor.chain().focus().unsetHighlight().run()
+  else props.editor.chain().focus().setHighlight({ color }).run()
+}
+
+function applyAlign(align: string): void {
+  props.editor.chain().focus().setTextAlign(align).run()
+}
+
+const imageInput = ref<HTMLInputElement | null>(null)
+
+function openImagePicker(): void {
+  imageInput.value?.click()
+}
+
+async function onImageChosen(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const { attachment } = await uploadAttachment(props.docId, file)
+    insertFigure(props.editor, { src: attachment.url, alt: file.name })
+  } catch {
+    // 错误提示由请求拦截器统一处理
+  }
+}
+
+defineExpose({ openImagePicker })
 </script>

@@ -314,6 +314,9 @@
 /* ---------------- 工具栏按钮（头部固定工具栏使用；原浮动工具栏已移除） ---------------- */
 
 .se-bubble-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 26px;
   height: 26px;
   padding: 0 6px;
@@ -324,6 +327,16 @@
   font-size: 12.5px;
   line-height: 1;
   cursor: pointer;
+}
+
+.se-color-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border: 1px solid rgba(0, 0, 0, .15);
+  border-radius: 50%;
+  vertical-align: middle;
 }
 
 .se-bubble-btn:hover {
@@ -340,6 +353,62 @@
   height: 18px;
   margin: 0 4px;
   background: var(--se-line);
+}
+
+.doc-surface table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.doc-surface th,
+.doc-surface td {
+  position: relative;
+  padding: 6px 8px;
+  border: 1px solid var(--el-border-color);
+  vertical-align: top;
+}
+
+.doc-surface th {
+  background: var(--el-fill-color-light);
+  font-weight: 600;
+  text-align: left;
+}
+
+.doc-surface .column-resize-handle {
+  width: 2px;
+  background: var(--el-color-primary);
+}
+
+.doc-surface .selectedCell::after {
+  position: absolute;
+  inset: 0;
+  background: rgba(64, 158, 255, .12);
+  content: '';
+  pointer-events: none;
+}
+
+.doc-surface figure.se-figure {
+  margin: 14px 0;
+  text-align: center;
+}
+
+.doc-surface figure.se-figure img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.doc-surface figure.se-figure figcaption {
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.doc-surface figure.se-figure figcaption:empty::before {
+  color: var(--el-text-color-placeholder);
+  content: '图注（可选）';
 }
 
 .se-bubble-link-editor {

@@ -22,7 +22,8 @@
           <span class="se-hint">格式用上方工具栏 · 输入 / 插入块 · 停笔自动分析/联想 · Tab 接受</span>
           <slot name="actions" />
         </header>
-        <EditorToolbar v-if="editor" :editor="editor" :with-sidebar-pad="sidebarOpen" />
+        <EditorToolbar v-if="editor" ref="toolbarRef" :editor="editor"
+          :with-sidebar-pad="sidebarOpen" :doc-id="docId" />
       </div>
       <div class="se-workspace">
         <EditorContent v-if="editor" :editor="editor" class="se-editor-host" />
@@ -94,7 +95,10 @@ import { CompletionGhost } from './core/completion'
 import { createSlashMenu } from './core/slash-menu'
 import { createSuggestionLayers, SUGGESTIONS_REFRESH_META, type SuggestionItem } from './core/suggestions'
 import { compileRules, type CompiledRules } from './core/check-rules'
-import { getRules, getSnippets, type LocalCheckRule, type TextSnippet } from '@/api/suggestEditor'
+import { FORMATTING_EXTENSIONS } from './core/formatting'
+import { TABLE_EXTENSIONS } from './core/table'
+import { FIGURE_EXTENSIONS, insertFigure } from './core/figure'
+import { getRules, getSnippets, uploadAttachment, type LocalCheckRule, type TextSnippet } from '@/api/suggestEditor'
 
 const props = defineProps<{ docId: string; token: string }>()
 const emit = defineEmits<{ (e: 'synced'): void }>()
@@ -129,6 +133,7 @@ interface ReviseMenu {
 const ydoc = new Y.Doc()
 
 const editorRef = shallowRef<Editor | null>(null)
+const toolbarRef = ref<InstanceType<typeof EditorToolbar> | null>(null)
 const myRewriteIds = new Set<string>()
 const assistant = reactive<AssistantStatus>({})
 const syncState = ref<'connecting' | 'synced' | 'disconnected'>('connecting')
@@ -154,6 +159,8 @@ const syncStateLabel = computed(() =>
 const statusText = computed(() => {
   if (assistant.state === 'analyzing') return assistant.hint ? `正在分析 · ${assistant.hint}` : '正在分析…'
   if (assistant.state === 'error') return `分析失败：${assistant.error ?? '未知错误'}`
+  // 导入基线/块级缓存等空闲态提示也要可见，否则用户只看到“待分析”
+  if (assistant.hint) return assistant.hint
   if (typeof assistant.lastApplied === 'number') return `上次分析新增 ${assistant.lastApplied} 条建议`
   return '待分析'
 })
@@ -194,6 +201,9 @@ const editor = useEditor({
     Placeholder.configure({
       placeholder: '输入正文…（输入 / 唤起块菜单，格式用上方工具栏）',
     }),
+    ...FORMATTING_EXTENSIONS,
+    ...TABLE_EXTENSIONS,
+    ...FIGURE_EXTENSIONS,
     Collaboration.configure({ document: ydoc, field: 'default' }),
     suggestionLayer.extension,
     CompletionGhost({ ydoc, getEditor: () => editorRef.value }),
@@ -201,6 +211,23 @@ const editor = useEditor({
   ],
   editorProps: {
     attributes: { class: 'doc-surface' },
+    handlePaste: (_view, event) => {
+      const files = Array.from(event.clipboardData?.files ?? [])
+        .filter((file) => file.type.startsWith('image/'))
+      if (!files.length) return false
+      event.preventDefault()
+      void insertUploadedImages(files)
+      return true
+    },
+    handleDrop: (_view, event, _slice, moved) => {
+      if (moved) return false
+      const files = Array.from(event.dataTransfer?.files ?? [])
+        .filter((file) => file.type.startsWith('image/'))
+      if (!files.length) return false
+      event.preventDefault()
+      void insertUploadedImages(files)
+      return true
+    },
     handleDOMEvents: {
       // 选中文本后右键：弹出改写菜单（未选中时保留系统菜单）
       contextmenu: (view, event) => {
@@ -224,7 +251,9 @@ const editor = useEditor({
 
 watch(
   editor,
-  (value) => {
+  (value, previous) => {
+    previous?.view.dom.removeEventListener('se:insert-image', onInsertImageEvent)
+    value?.view.dom.addEventListener('se:insert-image', onInsertImageEvent)
     editorRef.value = value ?? null
     // 调试钩子：?debug=1 时暴露 editor / ydoc（编辑器实例就绪即挂，供 E2E 与控制台排查）
     if (value && new URLSearchParams(window.location.search).has('debug')) {
@@ -234,6 +263,22 @@ watch(
   },
   { immediate: true },
 )
+
+function onInsertImageEvent(): void {
+  toolbarRef.value?.openImagePicker()
+}
+
+async function insertUploadedImages(files: File[]): Promise<void> {
+  for (const file of files) {
+    try {
+      const { attachment } = await uploadAttachment(props.docId, file)
+      if (!editorRef.value) return
+      insertFigure(editorRef.value, { src: attachment.url, alt: file.name })
+    } catch {
+      // 错误提示由请求拦截器统一处理；继续上传其余图片
+    }
+  }
+}
 
 function refreshSuggestions(): void {
   const view = editorRef.value?.view

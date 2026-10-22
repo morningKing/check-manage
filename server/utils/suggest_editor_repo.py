@@ -15,7 +15,7 @@ from db import get_db
 def _doc_row(row) -> dict:
     if not row:
         return {}
-    return {
+    data = {
         "id": row["id"],
         "title": row["title"],
         "ownerUserId": row["owner_user_id"],
@@ -25,6 +25,10 @@ def _doc_row(row) -> dict:
         "updatedAt": row["updated_at"].isoformat() if row.get("updated_at") else None,
         "lastOpenedAt": row["last_opened_at"].isoformat() if row.get("last_opened_at") else None,
     }
+    # 大字段只随单文档读取返回；列表查询不 SELECT 该列，因此不出现在列表响应里
+    if "seed_content_html" in row:
+        data["seedContentHtml"] = row["seed_content_html"]
+    return data
 
 
 def _template_row(row) -> dict:
@@ -60,8 +64,8 @@ def get_document(doc_id: str) -> dict | None:
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, title, owner_user_id, template_id, status, created_at, updated_at, last_opened_at "
-                "FROM se_documents WHERE id = %s",
+                "SELECT id, title, owner_user_id, template_id, status, created_at, updated_at, "
+                "last_opened_at, seed_content_html FROM se_documents WHERE id = %s",
                 (doc_id,),
             )
             row = cur.fetchone()
@@ -77,6 +81,27 @@ def create_document(doc_id: str, title: str, owner_user_id: str, template_id: st
             )
         conn.commit()
     return get_document(doc_id)
+
+
+def set_document_seed(doc_id: str, content_html: str) -> bool:
+    """一次性写入导入种子；已有种子或已产生 Yjs state 时拒绝（返回 False）。"""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE se_documents SET seed_content_html = %s "
+                "WHERE id = %s AND seed_content_html IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM se_document_states WHERE document_id = %s)",
+                (content_html, doc_id, doc_id))
+            ok = cur.rowcount > 0
+        conn.commit()
+    return ok
+
+
+def clear_document_seed(doc_id: str) -> None:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE se_documents SET seed_content_html = NULL WHERE id = %s", (doc_id,))
+        conn.commit()
 
 
 def rename_document(doc_id: str, title: str) -> dict | None:

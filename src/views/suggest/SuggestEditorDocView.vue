@@ -28,6 +28,9 @@
       <template #actions>
         <el-button size="small" @click="rulesVisible = true">规则</el-button>
         <el-button size="small" @click="vocabVisible = true">词表</el-button>
+        <el-button size="small" :loading="exporting" :disabled="!canExport" @click="exportWord">
+          导出 Word
+        </el-button>
         <el-button
           v-if="auth.can('admin.suggest_editor')"
           size="small"
@@ -64,6 +67,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import SuggestEditorCore from '@/components/suggest-editor/SuggestEditorCore.vue'
 import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
 import RuleManagerDialog from '@/components/suggest-editor/RuleManagerDialog.vue'
+import { applySeedIfEmpty } from '@/components/suggest-editor/core/seed'
+import { downloadDocx, exportDocx } from '@/components/suggest-editor/core/docx-export'
+import { attachmentFetchPath } from '@/components/suggest-editor/core/attachment-url'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
 import { computed } from 'vue'
@@ -74,6 +80,7 @@ import {
   getTemplateById,
   getVocabulary,
   importVocabulary,
+  markDocumentSeedApplied,
   openDocument,
   renameDocument,
   saveVocabulary,
@@ -92,6 +99,38 @@ const coreRef = ref<InstanceType<typeof SuggestEditorCore> | null>(null)
 const savingTemplate = ref(false)
 const vocabVisible = ref(false)
 const rulesVisible = ref(false)
+const exporting = ref(false)
+const canExport = computed(() => {
+  const editor = coreRef.value?.editor
+  return !!editor && !editor.isEmpty
+})
+
+async function exportWord(): Promise<void> {
+  const editor = coreRef.value?.editor
+  if (!editor || editor.isEmpty) return
+  exporting.value = true
+  try {
+    const token = JSON.parse(localStorage.getItem('check-manage:token') || '""') as string
+    const blob = await exportDocx(editor.getJSON(), {
+      title: doc.value?.title ?? '未命名文档',
+      fetchImage: async (canonical) => {
+        const res = await fetch(attachmentFetchPath(canonical), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) throw new Error('图片加载失败')
+        return {
+          data: await res.arrayBuffer(),
+          type: res.headers.get('Content-Type') ?? 'image/png',
+        }
+      },
+    })
+    downloadDocx(blob, doc.value?.title ?? '未命名文档')
+  } catch (error) {
+    ElMessage.error((error as Error).message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
 
 /** 本文档词表（优先于全局词表；属主维护） */
 const docVocabAsset = computed<SeTextAssetApi>(() => ({
@@ -107,8 +146,9 @@ const docVocabAsset = computed<SeTextAssetApi>(() => ({
   placeholder: '综上所述\n人工智能|AI',
 }))
 
-/** 模板只灌一次（多客户端同开时先到者写，其余看到 Yjs 同步来的内容自然跳过） */
+/** 模板/种子只灌一次（多客户端同开时先到者写，其余看到 Yjs 同步来的内容自然跳过） */
 let templateApplied = false
+let seedHandled = false
 
 const docId = String(route.params.docId ?? '')
 
@@ -124,11 +164,23 @@ onMounted(async () => {
 })
 
 async function onSynced(): Promise<void> {
-  if (templateApplied || !doc.value?.templateId) return
   const core = coreRef.value
   const ydoc: Y.Doc | undefined = core?.ydoc
   const editor: Editor | undefined = core?.editor
   if (!ydoc || !editor) return
+
+  // 导入种子优先于模板：应用后立即清空服务端大字段；非空文档只清理不覆盖
+  if (!seedHandled && doc.value?.seedContentHtml) {
+    seedHandled = true
+    const applied = applySeedIfEmpty(editor, ydoc, doc.value.seedContentHtml)
+    await markDocumentSeedApplied(docId).catch(() => {})
+    if (applied) {
+      templateApplied = true
+      return
+    }
+  }
+
+  if (templateApplied || !doc.value?.templateId) return
   // 只在「确实空」时灌模板（比如刷新页面恢复的旧文档虽带 templateId 也不该重灌）
   if (ydoc.getXmlFragment('default').length > 0) {
     templateApplied = true
