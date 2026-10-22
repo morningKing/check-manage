@@ -11,6 +11,8 @@ export interface SuggestDocument {
   createdAt: string | null
   updatedAt: string | null
   lastOpenedAt: string | null
+  /** 导入 Word 的初始正文（一次性；应用后服务端清空） */
+  seedContentHtml?: string | null
 }
 
 export interface SuggestTemplate {

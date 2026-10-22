@@ -64,6 +64,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import SuggestEditorCore from '@/components/suggest-editor/SuggestEditorCore.vue'
 import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
 import RuleManagerDialog from '@/components/suggest-editor/RuleManagerDialog.vue'
+import { applySeedIfEmpty } from '@/components/suggest-editor/core/seed'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
 import { computed } from 'vue'
@@ -74,6 +75,7 @@ import {
   getTemplateById,
   getVocabulary,
   importVocabulary,
+  markDocumentSeedApplied,
   openDocument,
   renameDocument,
   saveVocabulary,
@@ -107,8 +109,9 @@ const docVocabAsset = computed<SeTextAssetApi>(() => ({
   placeholder: '综上所述\n人工智能|AI',
 }))
 
-/** 模板只灌一次（多客户端同开时先到者写，其余看到 Yjs 同步来的内容自然跳过） */
+/** 模板/种子只灌一次（多客户端同开时先到者写，其余看到 Yjs 同步来的内容自然跳过） */
 let templateApplied = false
+let seedHandled = false
 
 const docId = String(route.params.docId ?? '')
 
@@ -124,11 +127,23 @@ onMounted(async () => {
 })
 
 async function onSynced(): Promise<void> {
-  if (templateApplied || !doc.value?.templateId) return
   const core = coreRef.value
   const ydoc: Y.Doc | undefined = core?.ydoc
   const editor: Editor | undefined = core?.editor
   if (!ydoc || !editor) return
+
+  // 导入种子优先于模板：应用后立即清空服务端大字段；非空文档只清理不覆盖
+  if (!seedHandled && doc.value?.seedContentHtml) {
+    seedHandled = true
+    const applied = applySeedIfEmpty(editor, ydoc, doc.value.seedContentHtml)
+    await markDocumentSeedApplied(docId).catch(() => {})
+    if (applied) {
+      templateApplied = true
+      return
+    }
+  }
+
+  if (templateApplied || !doc.value?.templateId) return
   // 只在「确实空」时灌模板（比如刷新页面恢复的旧文档虽带 templateId 也不该重灌）
   if (ydoc.getXmlFragment('default').length > 0) {
     templateApplied = true
