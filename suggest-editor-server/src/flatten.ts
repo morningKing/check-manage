@@ -80,6 +80,24 @@ export function flattenFragment(fragment: Y.XmlFragment): FlattenedDoc {
     if (!text.endsWith("\n")) appendRaw("\n")
   }
 
+  const appendCellContent = (cell: Y.XmlElement) => {
+    let first = true
+    for (const child of cell.toArray()) {
+      if (child instanceof Y.XmlText) {
+        appendYText(child)
+        first = false
+      } else if (child instanceof Y.XmlElement) {
+        if (child.nodeName === "paragraph") {
+          if (!first) appendRaw(" ")
+          appendInline(child)
+        } else {
+          appendInline(child)
+        }
+        first = false
+      }
+    }
+  }
+
   const appendBlock = (element: Y.XmlElement) => {
     switch (element.nodeName) {
       case "heading": {
@@ -119,6 +137,43 @@ export function flattenFragment(fragment: Y.XmlFragment): FlattenedDoc {
       }
       case "horizontalRule": {
         appendRaw("---")
+        endBlock()
+        break
+      }
+      case "table": {
+        const rows = element.toArray().filter(
+          (child): child is Y.XmlElement =>
+            child instanceof Y.XmlElement && child.nodeName === "tableRow",
+        )
+        rows.forEach((row, rowIndex) => {
+          const cells = row.toArray().filter(
+            (child): child is Y.XmlElement =>
+              child instanceof Y.XmlElement &&
+              (child.nodeName === "tableCell" || child.nodeName === "tableHeader"),
+          )
+          appendRaw("| ")
+          cells.forEach((cell, cellIndex) => {
+            appendCellContent(cell)
+            appendRaw(cellIndex === cells.length - 1 ? " |" : " | ")
+          })
+          appendRaw("\n")
+          if (rowIndex === 0 && cells[0]?.nodeName === "tableHeader") {
+            appendRaw("| " + cells.map(() => "---").join(" | ") + " |\n")
+          }
+        })
+        endBlock()
+        break
+      }
+      case "figure": {
+        for (const child of element.toArray()) {
+          if (!(child instanceof Y.XmlElement)) continue
+          if (child.nodeName === "image") {
+            const alt = child.getAttribute("alt")
+            if (alt) appendRaw(`[图片] ${alt} `)
+          } else if (child.nodeName === "figureCaption") {
+            appendInline(child)
+          }
+        }
         endBlock()
         break
       }
