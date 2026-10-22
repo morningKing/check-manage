@@ -23,16 +23,87 @@ const RULES = [
   { re: /但是/, to: "然而", label: "「但是」偏口语，正式文档可用「然而」", severity: "info" },
 ]
 
+/**
+ * 测试语义表：只在「分析 prompt 里出现了指定规则名/检查要点」且「文档快照里出现了
+ * 指定缺陷短语」两个条件同时满足时产出建议。
+ *
+ * 这个双条件很关键：
+ * - 规则未注入时不误报（验证 E2E 确实走了规则 → prompt 注入链路）；
+ * - 机械缺陷留给前端本地规则层，这里只模拟语义类判断（mock 不接真模型）。
+ *
+ * 约束：仅影响 AGENT_KIND=mock；真实 opencode 路径完全不读这张表。
+ */
+const SEMANTIC_CASES = [
+  {
+    promptHas: "绝对化表述",
+    textHas: "支持所有型号",
+    quote: "支持所有型号",
+    replacement: "支持 9800M12、9600M12",
+    reason: "[绝对化表述] 不要承诺支持所有型号，需列出适用范围",
+    severity: "warn",
+  },
+  {
+    promptHas: "指代明确",
+    textHas: "该系统",
+    quote: "该系统",
+    replacement: "本方案中的 9800UPS 系统",
+    reason: "[指代明确] “该系统”缺少明确指代",
+    severity: "info",
+  },
+  {
+    promptHas: "数据一致性",
+    textHas: "总计 10 台",
+    quote: "总计 10 台",
+    replacement: "总计 12 台",
+    reason: "[数据一致性] 总计与明细表 12 台不一致",
+    severity: "error",
+  },
+  {
+    promptHas: "回滚方案",
+    textHas: "上线步骤",
+    quote: "上线步骤",
+    replacement: "",
+    reason: "[回滚方案] 缺少回滚步骤与触发条件",
+    severity: "warn",
+  },
+  {
+    promptHas: "权限与加密",
+    textHas: "管理员密码",
+    quote: "管理员密码",
+    replacement: "管理员密码（加密存储）",
+    reason: "[权限与加密] 不得明文描述密码处理方式",
+    severity: "error",
+  },
+]
+
+/** 分析 prompt 是否真的带了检查项（检查规则 aiPrompt / 全局检查要点） */
+const HAS_CHECK_SECTION = /检查要点|领域检查规则/
+
 const sessions = new Map()
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-function buildSuggestions(text) {
+function buildSuggestions(text, promptText = "") {
   const out = []
-  for (const rule of RULES) {
-    const match = text.match(rule.re)
-    if (!match) continue
-    out.push({ quote: match[0], replacement: rule.to, reason: rule.label, severity: rule.severity })
+  // 通用写作规则只在 prompt 带检查项时启用：这样「没有检查项」的文档
+  // 完全不会收到 AI 建议（E2E 用这个开关隔离本地规则层与 AI 层）。
+  if (HAS_CHECK_SECTION.test(promptText)) {
+    for (const rule of RULES) {
+      const match = text.match(rule.re)
+      if (!match) continue
+      out.push({ quote: match[0], replacement: rule.to, reason: rule.label, severity: rule.severity })
+      if (out.length >= 5) break
+    }
+  }
+  for (const item of SEMANTIC_CASES) {
     if (out.length >= 5) break
+    if (!promptText.includes(item.promptHas)) continue
+    if (!text.includes(item.textHas)) continue
+    out.push({
+      quote: item.quote,
+      replacement: item.replacement,
+      reason: item.reason,
+      severity: item.severity,
+    })
   }
   return out
 }
@@ -142,7 +213,7 @@ const agent = {
     }
     if (!text.trim()) return { stopReason: "end_turn" }
 
-    const suggestions = buildSuggestions(text)
+    const suggestions = buildSuggestions(text, promptText)
 
     await cx.notify(acp.methods.client.session.update, {
       sessionId,

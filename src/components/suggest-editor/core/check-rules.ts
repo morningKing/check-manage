@@ -7,6 +7,9 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 
 export type CheckSeverity = 'info' | 'warn' | 'error'
 
+/** 命中机制：UI 的 data-mechanism / E2E 精确定位用 */
+export type CheckMechanism = 'maps' | 'patterns' | 'whitelists' | 'presence'
+
 export interface LocalCheckRuleInput {
   id: string
   name: string
@@ -23,6 +26,7 @@ export interface RuleMatch {
   id: string
   ruleId: string
   ruleName: string
+  mechanism: CheckMechanism
   severity: CheckSeverity
   reason: string
   from: number
@@ -125,7 +129,7 @@ function matchInTextNode(
     const globalTo = pos + to
     out.push({
       id: `rule:${rule.id}:${mechanism}:${entryIndex}:${globalFrom}:${globalTo}`,
-      ruleId: rule.id, ruleName: rule.name,
+      ruleId: rule.id, ruleName: rule.name, mechanism,
       severity: rule.severity, reason: `[${rule.name}] ${message}`,
       from: globalFrom, to: globalTo, text: text.slice(from, to),
       replacement, notice,
@@ -222,6 +226,7 @@ export function runCheckRules(doc: ProseMirrorNode, compiled: CompiledRules): Ru
     if (!spot) continue
     matches.push({
       id: `rule:${entry.rule.id}:presence:${i}`, ruleId: entry.rule.id, ruleName: entry.rule.name,
+      mechanism: 'presence',
       severity: entry.rule.severity, reason: `[${entry.rule.name}] ${entry.message}`,
       from: spot.from, to: spot.to, text: trigger, replacement: null, notice: true,
     })

@@ -2,6 +2,13 @@
   <article
     class="se-suggest-note"
     :class="{ 'is-active': active }"
+    :data-source="item.source"
+    :data-rule-id="item.ruleId ?? ''"
+    :data-mechanism="item.mechanism ?? ''"
+    :data-severity="item.severity"
+    :data-quote="item.quote"
+    :data-notice="item.notice ? 'true' : 'false'"
+    :data-suggestion-id="item.id"
     @mouseenter="emit('hover', item.id)"
     @mouseleave="emit('hover', null)"
     @click="emit('focus', item)"

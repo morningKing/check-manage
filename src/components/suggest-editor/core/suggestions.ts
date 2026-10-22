@@ -25,6 +25,8 @@ export interface SuggestionItem {
   ruleName?: string
   /** 命中的检查规则 id（仅动态规则命中，用于忽略记忆键） */
   ruleId?: string
+  /** 命中机制（内置格式规则 / 规则四类 / AI），供 UI data 属性与测试定位 */
+  mechanism?: 'builtin' | 'maps' | 'patterns' | 'whitelists' | 'presence' | 'ai'
   /** 完整性提醒：不可接受，只能忽略 */
   notice?: boolean
 }
@@ -192,6 +194,7 @@ export function createSuggestionLayers(options: {
           from,
           to,
           index: null,
+          mechanism: "ai",
         })
       })
     }
@@ -211,6 +214,8 @@ export function createSuggestionLayers(options: {
         from: match.from,
         to: match.to,
         index: null,
+        ruleId: match.ruleId,
+        mechanism: match.mechanism,
       })
     }
 
@@ -232,6 +237,7 @@ export function createSuggestionLayers(options: {
         index: null,
         ruleName: match.ruleName,
         ruleId: match.ruleId,
+        mechanism: match.mechanism,
         notice: match.notice,
       })
     }

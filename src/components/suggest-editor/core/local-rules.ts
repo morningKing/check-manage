@@ -41,6 +41,8 @@ export const LOCAL_RULES: LocalRule[] = [
 export interface LocalMatch {
   id: string
   ruleId: string
+  /** 内置格式规则（UI 的 data-mechanism） */
+  mechanism: 'builtin'
   severity: Severity
   reason: string
   /** ProseMirror 位置 */
@@ -71,6 +73,7 @@ export function runLocalRules(doc: ProseMirrorNode): LocalMatch[] {
         matches.push({
           id: `${rule.id}:${from}`,
           ruleId: rule.id,
+          mechanism: "builtin",
           severity: rule.severity,
           reason: rule.reason,
           from,

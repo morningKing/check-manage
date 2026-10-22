@@ -340,6 +340,9 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
       const row = document.createElement("div")
       row.className = `completion-item${index === pane.selected ? " is-selected" : ""}`
       row.setAttribute("role", "option")
+      // 稳定定位：候选按分数排序，文案顺序不是契约
+      row.setAttribute("data-vocab-term", candidate.label)
+      row.setAttribute("data-vocab-source", candidate.source)
 
       // VS Code 风格行首图标（词表 / 文档），鼠标悬停显示来源名
       const icon = document.createElement("span")
