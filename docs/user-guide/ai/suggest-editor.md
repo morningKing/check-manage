@@ -167,6 +167,9 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
   超限或解析失败会明确提示，且**不会留下半成品文档**（失败自动删除刚创建的文档及其附件）。
 - 保真范围：标题 / 段落 / 列表 / 表格 / 图片 / 加粗 / 斜体 / 下划线 / 删除线 / 链接；
   字体、颜色、页眉页脚、目录、分页等版式不保证（mammoth 语义映射）。
+- **不支持的图片格式（EMF/WMF 公式图、bmp、tiff 等）只跳过该图，不中断导入**；
+  可导入类型与附件白名单一致（png/jpeg/gif/webp），单图数据损坏、单张上传失败同样只跳过。
+  完成提示会注明跳过数量（如「已跳过 2 张不支持的图片」）。
 - 导入完成后会汇总提示被降级的元素（如嵌套表格、不支持的标签、上传失败的图片）。
 - **导入后的 AI 检查**：首轮只把现有内容记为「已分析基线」，**不调用模型**；之后只分析用户改动的块，
   避免打开几十页文档就产生一次全量模型调用。本地规则仍然对整个文档毫秒级生效。
@@ -279,6 +282,6 @@ DevTools → Network → 该请求的 Response（或页面弹窗）里看这句 
 | 数据 | 正文/建议在数据库（随系统备份）；agent 工作区、图片附件（`.data/attachments/<文档id>/`）与全局词表 / 检查要点 / 检查规则 / 快捷填充模板在 `suggest-editor-server/.data/`（临时数据不备份；删除文档时附件一并清理） |
 | 一期迁移 | `se_attachments` 表与 `se_documents.seed_content_html` 随 Flask 启动自动迁移；部署新版本需**重启 proxy**（后端不热重载），并确保 `SE_DATA_DIR/attachments` 可写 |
 | 一期 E2E | `e2e/suggest-editor-word-parity.spec.ts`（表格规则 / 图片图注 / 排版 / Word 导入导出与导入基线） |
-| 质量 E2E | `e2e/suggest-editor-quality-{local,ai,vocab,import}.spec.ts` 共 30 例（内置格式规则/maps/patterns/whitelists/presence/严重度/禁用广播/接受忽略、mock 语义矩阵、词表矩阵、导入场景；**必须 mock 栈**，用例经 API 快照恢复全局规则/要点/词表） |
+| 质量 E2E | `e2e/suggest-editor-quality-{local,ai,vocab,import}.spec.ts` 共 31 例（内置格式规则/maps/patterns/whitelists/presence/严重度/禁用广播/接受忽略、mock 语义矩阵、词表矩阵、导入场景含不支持图片跳过；**必须 mock 栈**，用例经 API 快照恢复全局规则/要点/词表） |
 | 体检 | `server/scripts/stale_check.py` 已识别 1234 端口（角色：智能写作(SE)） |
 | 冒烟探针 | `node e2e/manual/suggest-editor-ws-smoke.mjs`（WS+落库，mock 即可）；`node e2e/manual/suggest-editor-real-agent-check.mjs`（真模型出建议，含检查要点命中验证）；`node e2e/manual/suggest-editor-real-model-quality.mjs`（真模型语义质量烟测，`SE_QUALITY_CASE=absolute/pronoun/data/rollback/security` 选缺陷，不进 CI） |

@@ -240,4 +240,52 @@ test.describe('导入文档', () => {
       await deleteDocsByTitle(api, token, title).catch(() => {})
     }
   })
+
+  test('I5 不支持的图片格式只跳过该图：整份导入成功，png 正常显示', async ({ page }) => {
+    test.setTimeout(240_000)
+    const ts = Date.now()
+    const fixture = path.join(os.tmpdir(), `E2E-I5-${ts}.docx`)
+    const title = titleOf(fixture)
+    const png = Buffer.from(PNG_B64, 'base64')
+    // 假 BMP：前端/服务端白名单都不收，导入必须跳过它而不是中断
+    const fakeBmp = Buffer.concat([Buffer.from('BM'), Buffer.alloc(64, 0)])
+    try {
+      await writeDocxFixture(fixture, (docx) => new docx.Document({
+        sections: [{
+          children: [
+            new docx.Paragraph({ text: '混合图片文档' }),
+            new docx.Paragraph({
+              children: [new docx.ImageRun({
+                type: 'bmp', data: fakeBmp, transformation: { width: 40, height: 40 },
+              })],
+            }),
+            new docx.Paragraph({
+              children: [new docx.ImageRun({
+                type: 'png', data: png, transformation: { width: 40, height: 40 },
+              })],
+            }),
+          ],
+        }],
+      }))
+
+      await importDocx(page, fixture)
+      await page.waitForURL(/\/suggest-editor\/[0-9a-f-]+/, { timeout: 120_000 })
+
+      // 导入完成提示里应出现「已跳过」，且不出现导入错误
+      await expect(page.locator('.el-message', { hasText: '已跳过' })).toBeVisible({ timeout: 15_000 })
+
+      // png 正常落进 figure；被跳过的 bmp 不留死链/空 figure
+      const img = page.locator('.doc-surface figure img').first()
+      await expect(img).toBeVisible({ timeout: 20_000 })
+      await expect.poll(
+        () => img.evaluate((el) => (el as HTMLImageElement).naturalWidth),
+      ).toBeGreaterThan(0)
+      const figureCount = await page.locator('.doc-surface figure').count()
+      expect(figureCount).toBe(1)
+      await expect(page.locator('.doc-surface')).toContainText('混合图片文档')
+    } finally {
+      fs.rmSync(fixture, { force: true })
+      await deleteDocsByTitle(api, token, title).catch(() => {})
+    }
+  })
 })
