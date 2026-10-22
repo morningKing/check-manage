@@ -28,6 +28,9 @@
       <template #actions>
         <el-button size="small" @click="rulesVisible = true">规则</el-button>
         <el-button size="small" @click="vocabVisible = true">词表</el-button>
+        <el-button size="small" :loading="exporting" :disabled="!canExport" @click="exportWord">
+          导出 Word
+        </el-button>
         <el-button
           v-if="auth.can('admin.suggest_editor')"
           size="small"
@@ -65,6 +68,8 @@ import SuggestEditorCore from '@/components/suggest-editor/SuggestEditorCore.vue
 import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
 import RuleManagerDialog from '@/components/suggest-editor/RuleManagerDialog.vue'
 import { applySeedIfEmpty } from '@/components/suggest-editor/core/seed'
+import { downloadDocx, exportDocx } from '@/components/suggest-editor/core/docx-export'
+import { attachmentFetchPath } from '@/components/suggest-editor/core/attachment-url'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
 import { computed } from 'vue'
@@ -94,6 +99,38 @@ const coreRef = ref<InstanceType<typeof SuggestEditorCore> | null>(null)
 const savingTemplate = ref(false)
 const vocabVisible = ref(false)
 const rulesVisible = ref(false)
+const exporting = ref(false)
+const canExport = computed(() => {
+  const editor = coreRef.value?.editor
+  return !!editor && !editor.isEmpty
+})
+
+async function exportWord(): Promise<void> {
+  const editor = coreRef.value?.editor
+  if (!editor || editor.isEmpty) return
+  exporting.value = true
+  try {
+    const token = JSON.parse(localStorage.getItem('check-manage:token') || '""') as string
+    const blob = await exportDocx(editor.getJSON(), {
+      title: doc.value?.title ?? '未命名文档',
+      fetchImage: async (canonical) => {
+        const res = await fetch(attachmentFetchPath(canonical), {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!res.ok) throw new Error('图片加载失败')
+        return {
+          data: await res.arrayBuffer(),
+          type: res.headers.get('Content-Type') ?? 'image/png',
+        }
+      },
+    })
+    downloadDocx(blob, doc.value?.title ?? '未命名文档')
+  } catch (error) {
+    ElMessage.error((error as Error).message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
 
 /** 本文档词表（优先于全局词表；属主维护） */
 const docVocabAsset = computed<SeTextAssetApi>(() => ({

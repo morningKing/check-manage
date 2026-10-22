@@ -4,9 +4,14 @@ import {
   Document,
   ExternalHyperlink,
   HeadingLevel,
+  ImageRun,
   Packer,
   Paragraph,
+  Table,
+  TableCell,
+  TableRow,
   TextRun,
+  WidthType,
   type IRunOptions,
 } from 'docx'
 import type { JSONContent } from '@tiptap/core'
@@ -149,9 +154,73 @@ export function blockToParagraphs(node: JSONContent): Paragraph[] {
   }
 }
 
+async function blockToDocx(
+  node: JSONContent,
+  options: ExportOptions,
+): Promise<Array<Paragraph | Table>> {
+  if (node.type === 'table') {
+    const rows = (node.content ?? []).map((row) => new TableRow({
+      tableHeader: row.content?.[0]?.type === 'tableHeader',
+      children: (row.content ?? []).map((cell) => new TableCell({
+        columnSpan: cell.attrs?.colspan ? Number(cell.attrs.colspan) : undefined,
+        rowSpan: cell.attrs?.rowspan ? Number(cell.attrs.rowspan) : undefined,
+        children: (cell.content ?? []).flatMap(blockToParagraphs),
+      })),
+    }))
+    return [new Table({
+      rows,
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: {
+        top: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+        bottom: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+        left: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+        right: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+        insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+        insideVertical: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+      },
+    })]
+  }
+  if (node.type === 'figure') {
+    const imageNode = (node.content ?? []).find((child) => child.type === 'image')
+    const captionNode = (node.content ?? []).find((child) => child.type === 'figureCaption')
+    const source = String(imageNode?.attrs?.src ?? '')
+    const parts: Array<Paragraph | Table> = []
+    try {
+      const { data, type } = await options.fetchImage(source)
+      const imageType = type.includes('jpeg') ? 'jpg'
+        : type.includes('gif') ? 'gif'
+          : type.includes('bmp') ? 'bmp' : 'png'
+      parts.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new ImageRun({
+          type: imageType as 'png' | 'jpg' | 'gif' | 'bmp',
+          data,
+          transformation: { width: 480, height: 270 },
+        })],
+      }))
+    } catch {
+      parts.push(new Paragraph({
+        children: [new TextRun(`[图片缺失: ${String(imageNode?.attrs?.alt ?? '')}]`)],
+      }))
+    }
+    parts.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({
+        text: (captionNode?.content ?? []).map((child) => child.text ?? '').join(''),
+        italics: true,
+        size: 18,
+      })],
+    }))
+    return parts
+  }
+  return blockToParagraphs(node)
+}
+
 export async function exportDocx(json: JSONContent, options: ExportOptions): Promise<Blob> {
-  void options // 图片映射在 Task 12 接入；核心导出先用纯文本块
-  const paragraphs = (json.content ?? []).flatMap(blockToParagraphs)
+  const children: Array<Paragraph | Table> = []
+  for (const node of json.content ?? []) {
+    children.push(...await blockToDocx(node, options))
+  }
   const doc = new Document({
     numbering: {
       config: [{
@@ -161,7 +230,7 @@ export async function exportDocx(json: JSONContent, options: ExportOptions): Pro
     },
     sections: [{
       properties: { page: { size: { width: 11906, height: 16838 } } },
-      children: paragraphs,
+      children,
     }],
   })
   return Packer.toBlob(doc)
