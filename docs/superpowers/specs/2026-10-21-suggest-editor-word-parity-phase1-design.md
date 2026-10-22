@@ -1,7 +1,7 @@
 # 智能写作一期：表格 / 图片 / 排版 / Word 导入导出 设计
 
 - 日期：2026-10-21
-- 状态：待评审
+- 状态：已实现（2026-10-22，分支 `feat/suggest-editor-word-parity`，代码提交 `b5f236a..6fb9c03`）
 - 范围：智能写作（suggest-editor）一期“最小可用”的 Word 对齐能力
 - 相关代码：`src/components/suggest-editor/`、`src/views/suggest/`、`server/routes/suggest_editor.py`、`server/utils/suggest_editor_repo.py`、`suggest-editor-server/src/{flatten,engine}.ts`
 
@@ -391,3 +391,12 @@ def run():
 - 迁移随 Flask 启动执行（`app.py` 注册）；Node 服务需重启以加载 flatten/engine 改动。
 - 前端需 `npm run build`；proxy 直接服务 `dist/`。
 - 回滚：前端回退 dist、后端回退代码；新表与 `seed_content_html` 列可保留（旧代码不读，无副作用）。已导入文档的表格/图片在旧前端中可能被丢弃——回滚前需确认无此类文档或先导出。
+
+## 14. 实施记录（2026-10-22）
+
+- 迁移落为 Python 幂等模块 `server/migrations/2026_10_21_suggest_editor_attachments.py`（建 `se_attachments` + 加 `seed_content_html`），已在 `app.py` 显式注册并通过迁移护栏测试。
+- `_doc_row` 仅在单文档查询选中该列时返回 `seedContentHtml`，列表接口不携带大字段。
+- 工具栏新控件复用既有 `.se-bubble-btn` 样式；图片 NodeView 渲染时拼 `/api` + 当前 token。
+- `.se-status` 现在会显示空闲态 hint（导入基线/块级缓存），否则基线提示会被“待分析”遮住。
+- 验证结果：pytest SE+迁移 72 例、Node flatten/engine 5 例、vitest 160 文件/1491 例、Playwright 智能写作 13 例（含本期 3 例）全部通过；`vue-tsc` 与生产构建通过。
+- 已知边界（与第 1.2 节一致）：图片内容与格式类要求不被 AI 检查；跨单元格引文不锚定；表格整块 hash；附件 token 过期需刷新页面。
