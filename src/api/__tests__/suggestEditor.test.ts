@@ -39,6 +39,9 @@ import {
   saveRules,
   importRules,
   rulesExportUrl,
+  uploadAttachment,
+  setDocumentSeed,
+  markDocumentSeedApplied,
 } from '../suggestEditor'
 
 beforeEach(() => {
@@ -206,5 +209,24 @@ describe('suggestEditor rules api', () => {
     expect((form as FormData).get('mode')).toBe('replace')
     expect(rulesExportUrl({ kind: 'global' }))
       .toBe('/api/suggest-editor/rules/global/export?access_token=tok')
+  })
+})
+
+describe('suggestEditor attachments/seed api', () => {
+  it('uploadAttachment posts multipart; seed write/apply hit owner endpoints', async () => {
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    await uploadAttachment('doc-1', file)
+    const [url, form, config] = vi.mocked(post).mock.calls[0]
+    expect(url).toBe('/suggest-editor/documents/doc-1/attachments')
+    expect((form as FormData).get('file')).toBe(file)
+    expect(config).toMatchObject({ headers: { 'Content-Type': 'multipart/form-data' } })
+
+    await setDocumentSeed('doc-1', '<p>x</p>')
+    expect(put).toHaveBeenCalledWith('/suggest-editor/documents/doc-1/seed', {
+      contentHtml: '<p>x</p>',
+    })
+
+    await markDocumentSeedApplied('doc-1')
+    expect(vi.mocked(post).mock.calls[1][0]).toBe('/suggest-editor/documents/doc-1/seed/applied')
   })
 })

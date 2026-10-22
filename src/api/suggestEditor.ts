@@ -226,3 +226,11 @@ export function uploadAttachment(docId: string, file: File) {
     { headers: { 'Content-Type': 'multipart/form-data' } },
   )
 }
+
+export function setDocumentSeed(docId: string, contentHtml: string) {
+  return put<{ ok: boolean }>(`/suggest-editor/documents/${docId}/seed`, { contentHtml })
+}
+
+export function markDocumentSeedApplied(docId: string) {
+  return post<{ ok: boolean }>(`/suggest-editor/documents/${docId}/seed/applied`)
+}

@@ -25,6 +25,7 @@
             <el-button v-if="auth.can('admin.suggest_editor')" @click="openTemplateManager">
               模板管理
             </el-button>
+            <el-button @click="importVisible = true">导入 Word</el-button>
             <el-button type="primary" @click="openCreateDialog">新建文档</el-button>
           </div>
         </div>
@@ -95,6 +96,9 @@
     <RuleManagerDialog v-model:visible="rulesVisible" :scope="{ kind: 'global' }" />
     <!-- 快捷填充模板（admin）：编辑器 / 菜单里的可配置文本模板 -->
     <SnippetManagerDialog v-model:visible="snippetsVisible" />
+    <!-- Word 导入（所有登录用户；只创建自己的文档） -->
+    <ImportDocxDialog v-model:visible="importVisible"
+      @imported="(id: string) => router.push(`/suggest-editor/${id}`)" />
 
     <!-- 模板管理（admin.suggest_editor） -->
     <el-dialog v-model="templateManagerVisible" title="写作模板管理" width="860px">
@@ -155,6 +159,7 @@ import { useAuthStore } from '@/stores/auth'
 import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
 import RuleManagerDialog from '@/components/suggest-editor/RuleManagerDialog.vue'
 import SnippetManagerDialog from '@/components/suggest-editor/SnippetManagerDialog.vue'
+import ImportDocxDialog from '@/components/suggest-editor/ImportDocxDialog.vue'
 import {
   createDocument,
   createTemplate,
@@ -190,6 +195,7 @@ const vocabVisible = ref(false)
 const checklistVisible = ref(false)
 const rulesVisible = ref(false)
 const snippetsVisible = ref(false)
+const importVisible = ref(false)
 
 const VOCAB_HINT = [
   '一行一个词条：<code>词条</code>／<code>词条|别名</code>（输入别名替换成词条）／片段占位符 <code>${1:默认值}</code>；<code>#</code> 开头为注释。',
