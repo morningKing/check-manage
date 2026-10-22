@@ -159,6 +159,8 @@ const syncStateLabel = computed(() =>
 const statusText = computed(() => {
   if (assistant.state === 'analyzing') return assistant.hint ? `正在分析 · ${assistant.hint}` : '正在分析…'
   if (assistant.state === 'error') return `分析失败：${assistant.error ?? '未知错误'}`
+  // 导入基线/块级缓存等空闲态提示也要可见，否则用户只看到“待分析”
+  if (assistant.hint) return assistant.hint
   if (typeof assistant.lastApplied === 'number') return `上次分析新增 ${assistant.lastApplied} 条建议`
   return '待分析'
 })
