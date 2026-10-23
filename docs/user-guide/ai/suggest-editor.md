@@ -75,7 +75,8 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
   链接下划线、分割线、任务清单等 Notion 式行文节奏。
 - **对齐 / 字号 / 颜色 / 高亮**（2026-10-21）：工具栏新增左/中/右/两端对齐、12–24pt 字号、
   8 色文字颜色、6 色高亮；「清除格式」一并清除这些 marks 与对齐。
-- **表格**：输入 `/` 选「表格」插入 3×3 带表头；光标在表格内时工具栏出现增删行列、合并/拆分、
+- **表格**：输入 `/` 选「表格」插入 3×3 带表头；**悬停该条目会弹出行列选择网格（最大 8 行 × 6 列），
+  点格子按所选尺寸插入**，直接点击/回车仍是默认 3×3；光标在表格内时工具栏出现增删行列、合并/拆分、
   切换表头行、删除表格；支持拖动列宽。单元格文本会被本地检查规则与 AI 分析照常覆盖。
 - **图片与图注**：工具栏「图片」或粘贴/拖拽上传图片（png/jpeg/gif/webp，单张 ≤10MB）；
   图片下方图注可直接编辑；文档只保存附件 URL，渲染时带当前登录 token。
@@ -281,7 +282,7 @@ DevTools → Network → 该请求的 Response（或页面弹窗）里看这句 
 | ⚠️ opencode 版本 | ACP 模式务必用 `OPENCODE_DIR` 指到平台自带的 oc126（1.2.26）——npm 全局 opencode 1.19.3 的 `session/prompt` 会返回 "OpenCode service failure"（2026-10-19 实测二分定位） |
 | 数据 | 正文/建议在数据库（随系统备份）；agent 工作区、图片附件（`.data/attachments/<文档id>/`）与全局词表 / 检查要点 / 检查规则 / 快捷填充模板在 `suggest-editor-server/.data/`（临时数据不备份；删除文档时附件一并清理） |
 | 一期迁移 | `se_attachments` 表与 `se_documents.seed_content_html` 随 Flask 启动自动迁移；部署新版本需**重启 proxy**（后端不热重载），并确保 `SE_DATA_DIR/attachments` 可写 |
-| 一期 E2E | `e2e/suggest-editor-word-parity.spec.ts`（表格规则 / 图片图注 / 排版 / Word 导入导出与导入基线） |
+| 一期 E2E | `e2e/suggest-editor-word-parity.spec.ts`（表格规则 / 表格插入尺寸自定义 / 图片图注 / 排版 / Word 导入导出与导入基线） |
 | 质量 E2E | `e2e/suggest-editor-quality-{local,ai,vocab,import}.spec.ts` 共 31 例（内置格式规则/maps/patterns/whitelists/presence/严重度/禁用广播/接受忽略、mock 语义矩阵、词表矩阵、导入场景含不支持图片跳过；**必须 mock 栈**，用例经 API 快照恢复全局规则/要点/词表） |
 | 体检 | `server/scripts/stale_check.py` 已识别 1234 端口（角色：智能写作(SE)） |
 | 冒烟探针 | `node e2e/manual/suggest-editor-ws-smoke.mjs`（WS+落库，mock 即可）；`node e2e/manual/suggest-editor-real-agent-check.mjs`（真模型出建议，含检查要点命中验证）；`node e2e/manual/suggest-editor-real-model-quality.mjs`（真模型语义质量烟测，`SE_QUALITY_CASE=absolute/pronoun/data/rollback/security` 选缺陷，不进 CI） |

@@ -484,6 +484,44 @@
   font-size: 12px;
 }
 
+/* 表格插入的行列选择网格（斜杠菜单悬停「表格」时弹出，挂 body） */
+
+.se-table-grid {
+  position: fixed;
+  z-index: 70;
+  display: grid;
+  grid-template-columns: repeat(6, 24px);
+  gap: 3px;
+  padding: 10px 10px 6px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.se-table-grid .table-grid-cell {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #d1d5db;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.se-table-grid .table-grid-cell.is-picked {
+  background: #e8f0fe;
+  border-color: #93b4fd;
+}
+
+.se-table-grid .table-grid-label {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  text-align: center;
+  color: var(--se-muted);
+  font-size: 11px;
+}
+
 /* -------- 建议：Word 式批注（正文只留标注线 + 行内标记，卡片在右侧栏） -------- */
 
 .se-scope .suggest {

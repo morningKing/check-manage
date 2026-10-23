@@ -213,6 +213,69 @@ test('表格单元格内的本地规则实时命中', async ({ page, playwright 
   }
 })
 
+// ---------------------------------------------------------------------------
+// 表格插入尺寸自定义（2026-10-23）：悬停斜杠菜单「表格」弹出行列网格，
+// 点格子按所选尺寸插入；直接点击/回车仍是默认 3×3（上一条用例覆盖）。
+// ---------------------------------------------------------------------------
+test('表格插入尺寸可自定义：悬停选 4×5 插入', async ({ page, playwright }) => {
+  test.setTimeout(180_000)
+  const title = `E2E-表格尺寸-${Date.now()}`
+  const api = await playwright.request.newContext()
+  let token = ''
+  let testFailure: unknown = null
+
+  try {
+    await page.goto('/home')
+    token = await tokenOf(page)
+    expect(token).toBeTruthy()
+
+    await gotoSuggestList(page)
+    await createBlankDoc(page, title)
+    await page.locator('.doc-surface').click()
+    await page.keyboard.type('/')
+    await page.keyboard.type('biaoge')
+    const menu = page.locator('.se-slash-menu')
+    await expect(menu).toBeVisible({ timeout: 10_000 })
+
+    const tableItem = menu.locator('.slash-item', { hasText: '表格' })
+    await tableItem.hover()
+    const grid = page.locator('.se-table-grid')
+    await expect(grid).toBeVisible({ timeout: 5_000 })
+    // 默认高亮 3×3（标签文案），最大 8 行 × 6 列
+    await expect(grid.locator('.table-grid-label')).toHaveText('3 行 × 3 列')
+    await expect(grid.locator('.table-grid-cell[data-rows="8"][data-cols="6"]')).toHaveCount(1)
+
+    await grid.locator('.table-grid-cell[data-rows="4"][data-cols="5"]').click()
+    await expect(page.locator('.doc-surface table')).toBeVisible({ timeout: 10_000 })
+    // rows=4 含表头行：1 行 th（5 列）+ 3 行 td（5 列）
+    await expect(page.locator('.doc-surface table tr')).toHaveCount(4)
+    await expect(page.locator('.doc-surface table th')).toHaveCount(5)
+    await expect(page.locator('.doc-surface table td')).toHaveCount(15)
+
+    // 直接点击条目仍插入默认 3×3（回归锚点）
+    await page.locator('.doc-surface').click()
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type('/')
+    await page.keyboard.type('biaoge')
+    await expect(page.locator('.se-slash-menu')).toBeVisible({ timeout: 10_000 })
+    await page.locator('.se-slash-menu .slash-item', { hasText: '表格' }).click()
+    await expect(page.locator('.doc-surface table')).toHaveCount(2, { timeout: 10_000 })
+    await expect(page.locator('.doc-surface table').nth(1).locator('tr')).toHaveCount(3)
+  } catch (error) {
+    testFailure = error
+  } finally {
+    const cleanupErrors: string[] = []
+    try {
+      await deleteDocsByTitle(api, token, title)
+    } catch (error) {
+      cleanupErrors.push(`删除文档「${title}」失败：${String(error)}`)
+    }
+    await api.dispose()
+    if (cleanupErrors.length) throw new Error(`清理未完成：\n- ${cleanupErrors.join('\n- ')}`)
+    if (testFailure) throw testFailure
+  }
+})
+
 test('图片图注与排版持久化', async ({ page, playwright }) => {
   test.setTimeout(180_000)
   const title = `E2E-图片排版-${Date.now()}`

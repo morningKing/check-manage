@@ -9,6 +9,8 @@ interface SlashItem {
   badge: string
   /** 可配置文本模板（与内置块类型区分，便于样式与测试定位） */
   isSnippet?: boolean
+  /** 悬停时弹出行列选择网格（如「表格」）；直接点击/回车仍按 command 里的默认尺寸插入 */
+  tableGrid?: { maxRows: number; maxCols: number }
   command: (props: { editor: Editor; range: Range }) => void
 }
 
@@ -93,9 +95,10 @@ const BLOCK_ITEMS: SlashItem[] = [
   },
   {
     title: "表格",
-    hint: "3×3，带表头",
+    hint: "默认 3×3，悬停选行列",
     keywords: "table biaoge",
     badge: "▦",
+    tableGrid: { maxRows: 8, maxCols: 6 },
     command: ({ editor, range }) =>
       editor.chain().focus().deleteRange(range).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
   },
@@ -169,6 +172,96 @@ export function createSlashMenu(getSnippets: () => TextSnippet[] = () => []): Ex
             let popup: HTMLElement | null = null
             let current: SlashItem[] = []
             let selected = 0
+            let activeEditor: Editor | null = null
+            let activeRange: Range | null = null
+            let grid: HTMLElement | null = null
+
+            const closeGrid = (): void => {
+              grid?.remove()
+              grid = null
+            }
+
+            /** 行列选择网格（Notion 式）：悬停高亮 rows×cols，点格子按该尺寸插入 */
+            const openGrid = (item: SlashItem): void => {
+              if (grid && grid.dataset.title === item.title) return
+              closeGrid()
+              const { maxRows, maxCols } = item.tableGrid!
+              const el = document.createElement("div")
+              el.className = "se-table-grid"
+              el.dataset.title = item.title
+
+              const cells: HTMLButtonElement[] = []
+              for (let rows = 1; rows <= maxRows; rows += 1) {
+                for (let cols = 1; cols <= maxCols; cols += 1) {
+                  const cell = document.createElement("button")
+                  cell.type = "button"
+                  cell.className = "table-grid-cell"
+                  cell.dataset.rows = String(rows)
+                  cell.dataset.cols = String(cols)
+                  cell.setAttribute("aria-label", `${rows} 行 × ${cols} 列`)
+                  cell.addEventListener("mousedown", (event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    closeGrid()
+                    // 用所选尺寸覆盖默认 command
+                    const insert = (props: { editor: Editor; range: Range }): void => {
+                      props.editor
+                        .chain()
+                        .focus()
+                        .deleteRange(props.range)
+                        .insertTable({ rows, cols, withHeaderRow: true })
+                        .run()
+                    }
+                    insert({ editor: activeEditor!, range: activeRange! })
+                  })
+                  el.append(cell)
+                  cells.push(cell)
+                }
+              }
+
+              const label = document.createElement("div")
+              label.className = "table-grid-label"
+              el.append(label)
+
+              const paint = (rows: number, cols: number): void => {
+                for (const cell of cells) {
+                  const picked =
+                    Number(cell.dataset.rows) <= rows && Number(cell.dataset.cols) <= cols
+                  cell.classList.toggle("is-picked", picked)
+                }
+                label.textContent = `${rows} 行 × ${cols} 列`
+              }
+              cells.forEach((cell) =>
+                cell.addEventListener("mouseenter", () =>
+                  paint(Number(cell.dataset.rows), Number(cell.dataset.cols)),
+                ),
+              )
+              paint(3, 3)
+
+              el.style.setProperty("--grid-cols", String(maxCols))
+              const rect = popup?.getBoundingClientRect()
+              if (rect) {
+                const width = maxCols * 27 + 20
+                const height = maxRows * 27 + 38
+                const left =
+                  rect.right + width <= window.innerWidth ? rect.right + 6 : rect.left - width - 6
+                const top = Math.min(rect.top, Math.max(8, window.innerHeight - height - 8))
+                el.style.left = `${Math.round(Math.max(8, left))}px`
+                el.style.top = `${Math.round(top)}px`
+              }
+              grid = el
+              document.body.append(el)
+            }
+
+            /** 当前选中项带 tableGrid 就开网格，否则收起（悬停/键盘移动共用） */
+            const syncGrid = (): void => {
+              const item = current[selected]
+              if (item?.tableGrid && activeEditor && activeRange && popup) {
+                openGrid(item)
+              } else {
+                closeGrid()
+              }
+            }
 
             const render = (rect?: DOMRect | null) => {
               const element = popup
@@ -211,9 +304,11 @@ export function createSlashMenu(getSnippets: () => TextSnippet[] = () => []): Ex
                   execute()
                 })
                 row.addEventListener("mouseenter", () => {
-                  if (selected === index) return
-                  selected = index
-                  render(rect)
+                  if (selected !== index) {
+                    selected = index
+                    render(rect)
+                  }
+                  syncGrid()
                 })
 
                 element.append(row)
@@ -236,36 +331,46 @@ export function createSlashMenu(getSnippets: () => TextSnippet[] = () => []): Ex
               onStart: (props) => {
                 current = props.items
                 selected = 0
+                activeEditor = props.editor
+                activeRange = props.range
                 popup = document.createElement("div")
                 popup.className = "se-slash-menu"
                 popup.setAttribute("role", "listbox")
                 document.body.append(popup)
                 executeRef = () => props.command(props.items[selected])
                 render(props.clientRect?.() ?? null)
+                syncGrid()
               },
               onUpdate: (props) => {
                 current = props.items
                 selected = Math.min(selected, Math.max(current.length - 1, 0))
+                activeEditor = props.editor
+                activeRange = props.range
                 executeRef = () => props.command(props.items[selected])
                 render(props.clientRect?.() ?? null)
+                if (grid) syncGrid() // 查询变化后若表格项还在选中位，网格跟随新位置
               },
               onKeyDown: (props) => {
                 const { event } = props
                 if (event.key === "ArrowDown") {
                   selected = current.length === 0 ? 0 : (selected + 1) % current.length
                   render()
+                  syncGrid()
                   return true
                 }
                 if (event.key === "ArrowUp") {
                   selected = current.length === 0 ? 0 : (selected - 1 + current.length) % current.length
                   render()
+                  syncGrid()
                   return true
                 }
                 if (event.key === "Enter" || event.key === "Tab") {
+                  closeGrid()
                   execute()
                   return true
                 }
                 if (event.key === "Escape") {
+                  closeGrid()
                   popup?.remove()
                   popup = null
                   return true
@@ -273,6 +378,7 @@ export function createSlashMenu(getSnippets: () => TextSnippet[] = () => []): Ex
                 return false
               },
               onExit: () => {
+                closeGrid()
                 popup?.remove()
                 popup = null
               },
