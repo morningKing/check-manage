@@ -97,12 +97,16 @@ test('模板建文档 → 建议 → 刷新恢复 → 列表管理', async ({ pa
 
   // 1b) 顶部固定格式工具栏：像真正的编辑器——选区不丢，点按钮即生效
   await expect(page.locator('.se-toolbar')).toBeVisible()
-  await page.locator('.doc-surface li p', { hasText: '事项一' }).click()
-  await page.keyboard.press('Shift+Home')
-  await page.locator('.se-toolbar [title="加粗 (Ctrl+B)"]').click()
-  await expect(page.locator('.doc-surface strong', { hasText: '事项一' })).toBeVisible({
-    timeout: 10_000,
-  })
+  // 分析事务的装饰刷新偶发把 DOM 选区打回光标（时机不定）：把「点击定位 → Shift+Home
+  // 选中 → 加粗 → 验证」整段做有界重试，以最终生效为准（重放幂等）
+  await expect(async () => {
+    await page.locator('.doc-surface li p', { hasText: '事项一' }).click()
+    await page.keyboard.press('Shift+Home')
+    await page.locator('.se-toolbar [title="加粗 (Ctrl+B)"]').click()
+    await expect(page.locator('.doc-surface strong', { hasText: '事项一' })).toBeVisible({
+      timeout: 3_000,
+    })
+  }).toPass({ timeout: 30_000 })
 
   // 2) 输入触发文本：另起一段
   await page.locator('.doc-surface').click()

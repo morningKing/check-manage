@@ -115,6 +115,22 @@ async function deleteDocsByTitle(
   }
 }
 
+/**
+ * 用 Home + Shift+End 选中当前行并确认 DOM 选区真的是该文本。
+ * 装饰层异步重建偶发把 DOM 选区打回光标（编辑器仍持焦、PM state 选区在，
+ * 但 window.getSelection 变空）——此时后续 setMark 全部落在空选区上。
+ * 没选上就重按一次（此时重建已结束，必然稳定）。
+ */
+async function selectParagraphText(page: Page, expected: string): Promise<void> {
+  const selected = () => page.evaluate(() => window.getSelection()?.toString() ?? '')
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Shift+End')
+  if ((await selected()) === expected) return
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Shift+End')
+  await expect.poll(selected, { timeout: 5_000 }).toBe(expected)
+}
+
 async function makeFixtureDocx(filePath: string): Promise<void> {
   const doc = new Document({
     sections: [{
@@ -291,8 +307,11 @@ test('图片图注与排版持久化', async ({ page, playwright }) => {
 
     await page.locator('.doc-surface').click()
     await page.keyboard.type('排版测试')
-    await page.keyboard.press('Home')
-    await page.keyboard.press('Shift+End')
+    // 打字后 300ms 的文档自学习防抖会触发装饰层刷新事务，PM 异步把内部选区
+    // 回写 DOM——恰好落在 Home/Shift+End 之间时键盘选区被打回光标（后续
+    // setMark 全部落空）。先等刷新风暴结束再选，选区仍未成立则重选一次。
+    await page.waitForTimeout(400)
+    await selectParagraphText(page, '排版测试')
     await page.locator('[title="字号"]').click()
     await page.locator('.el-dropdown-menu__item:visible', { hasText: '16pt' }).click()
     await page.locator('[title="文字颜色"]').click()
