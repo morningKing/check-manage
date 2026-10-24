@@ -116,13 +116,38 @@ test('长文档：头部常驻、正文区内滚动；选中无浮动工具栏�
   expect(outerOverflow.ok).toBe(true)
   expect(outerOverflow.overflow).toBeLessThanOrEqual(1)
 
+  // 滚动必须发生在 .se-editor-host 内：host 被视口约束（clientHeight ≈ 页面盒）且真的能滚。
+  // 回归背景（2026-10-23）：.se-scope 缺高度 → height:100% 链断裂 → host 被内容撑开
+  // （scrollHeight == clientHeight，无滚动条），长文档被外层 overflow:hidden 裁掉，
+  // 而本用例旧断言在该坏布局下同样成立，测不出来——所以这里必须显式验证可滚。
+  const scrollProbe = await page.evaluate(() => {
+    const host = document.querySelector('.se-editor-host') as HTMLElement | null
+    const pageBox = document.querySelector('.suggest-doc-page') as HTMLElement | null
+    if (!host || !pageBox) return { ok: false as const }
+    const bounded = host.clientHeight <= pageBox.clientHeight + 2
+    const overflows = host.scrollHeight - host.clientHeight > 50
+    const before = host.scrollTop
+    host.scrollTop = 500
+    const moved = host.scrollTop > before
+    host.scrollTop = before
+    return { ok: true as const, bounded, overflows, moved }
+  })
+  expect(scrollProbe.ok).toBe(true)
+  expect(scrollProbe.bounded).toBe(true)
+  expect(scrollProbe.overflows).toBe(true)
+  expect(scrollProbe.moved).toBe(true)
+
   // 正文区滚动到底，头部位置不变
   await page.locator('.se-editor-host').evaluate((el) => {
     el.scrollTop = el.scrollHeight
   })
   await page.waitForTimeout(400)
   const toolbarAfter = await toolbar.boundingBox()
-  expect(Math.abs((toolbarAfter?.y ?? -1) - (toolbarBefore?.y ?? -2))).toBeLessThanOrEqual(1)
+  const winY = await page.evaluate(() => window.scrollY)
+  const yBefore = toolbarBefore?.y ?? -2
+  const yAfter = toolbarAfter?.y ?? -1
+  expect(Math.abs(yAfter - yBefore), `toolbar y before=${yBefore} after=${yAfter} winY=${winY}`)
+    .toBeLessThanOrEqual(1)
   await expect(toolbar).toBeVisible()
 
   // 选中文字：不得出现浮动格式工具栏

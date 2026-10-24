@@ -6,6 +6,11 @@
  */
 
 .se-scope {
+  /* 编辑器根：必须自身有确定高度，.se-layout 的 height:100% 才能解析——
+     否则整条链被内容撑开、.se-editor-host 不再是滚动容器，
+     长文档（典型：导入的 Word）被外层 overflow:hidden 裁掉看不见末尾 */
+  height: 100%;
+  min-height: 0;
   --se-ink: #1f2328;
   --se-muted: #6b7280;
   --se-line: #e5e7eb;
