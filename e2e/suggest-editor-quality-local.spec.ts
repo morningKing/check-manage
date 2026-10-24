@@ -223,12 +223,12 @@ test.describe('本地确定性规则', () => {
       // 提醒不可接受：只有忽略按钮
       await expect(card.getByRole('button', { name: '接受' })).toHaveCount(0)
 
-      // 25GE → 100GE：提醒应立即消失
-      await page.locator('.doc-surface').click()
-      await page.keyboard.press('Control+End')
-      for (let index = 0; index < 4; index += 1) await page.keyboard.press('Backspace')
-      await page.keyboard.type('100GE', { delay: 15 })
-      await expect(card).toHaveCount(0, { timeout: 5_000 })
+      // 25GE → 100GE：与其它用例一致的确定性选法（盲按 Backspace 会被选区竞态打歪），
+      // 以卡片消失为最终判据做有界重试
+      await expect(async () => {
+        await replaceInParagraph(page, '端口类型', 13, 4, '100GE')
+        await expect(card).toHaveCount(0, { timeout: 2_000 })
+      }).toPass({ timeout: 20_000 })
     } finally {
       if (docId) await deleteDocument(api, token, docId)
     }
@@ -540,6 +540,52 @@ test.describe('本地确定性规则', () => {
       await acceptCard(page, doubleSpace)
       await expect(page.locator('.doc-surface th').first()).toHaveText('完成。 继续')
     } finally {
+      if (docId) await deleteDocument(api, token, docId)
+    }
+  })
+
+  test('L17 内置规则临时屏蔽：规则对话框关闭「连续空格」，即时生效、刷新后仍屏蔽、可恢复', async ({ page }) => {
+    test.setTimeout(180_000)
+    let docId = ''
+    const clearDisable = () => page.evaluate(() =>
+      localStorage.removeItem('check-manage:se:disabled-local-rules')).catch(() => {})
+    try {
+      docId = await openWithRules(page, `E2E-L17-${Date.now()}`, [])
+      await page.locator('.doc-surface').click()
+      await page.keyboard.type('方案  说明。', { delay: 15 })
+      const card = cardByRule(page, 'double-space')
+      await expectCardShape(card, {
+        source: 'local', mechanism: 'builtin', severity: 'error', quote: '  ', reasonHas: '连续空格',
+      })
+
+      // 规则对话框底部「内置格式规则」区：关闭「连续空格」
+      await page.getByRole('button', { name: '规则', exact: true }).click()
+      const rulesDialog = page.locator('.el-dialog').filter({
+        has: page.locator('.el-dialog__title', { hasText: '检查规则' }),
+      })
+      await rulesDialog.waitFor({ state: 'visible' })
+      await rulesDialog.locator('.builtin-rule-row', { hasText: '连续空格' }).locator('.el-switch').click()
+
+      // 开关写 localStorage 后广播重载，卡片即时消失（对话框开着也能看到）
+      await expect(card).toHaveCount(0, { timeout: 10_000 })
+      await rulesDialog.getByRole('button', { name: '关闭', exact: true }).click()
+      await rulesDialog.waitFor({ state: 'hidden', timeout: 10_000 })
+
+      // 刷新后仍屏蔽：同一处双空格不再出卡片（localStorage 持久化）
+      await page.reload()
+      await expect(page.locator('.se-badge').first()).toHaveText('已同步', { timeout: 30_000 })
+      await expectRuleBadge(page, 0)
+      await page.waitForTimeout(800)
+      await expect(card).toHaveCount(0)
+
+      // 重新打开开关：卡片恢复
+      await page.getByRole('button', { name: '规则', exact: true }).click()
+      await rulesDialog.waitFor({ state: 'visible' })
+      await rulesDialog.locator('.builtin-rule-row', { hasText: '连续空格' }).locator('.el-switch').click()
+      await expect(card).toBeVisible({ timeout: 10_000 })
+    } finally {
+      // 兜底清理屏蔽状态，避免污染后续用例（测试正常路径结束时已重新启用）
+      await clearDisable()
       if (docId) await deleteDocument(api, token, docId)
     }
   })

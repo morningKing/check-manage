@@ -52,15 +52,46 @@ export interface LocalMatch {
   replacement: string
 }
 
+/* --------------------------- 内置规则的临时开关 --------------------------- */
+
+const DISABLED_KEY = "check-manage:se:disabled-local-rules"
+
+/** 被临时屏蔽的内置规则 id（本浏览器 localStorage 持久化，跨标签页广播生效） */
+export function disabledLocalRuleIds(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(DISABLED_KEY) ?? "[]")
+    return Array.isArray(parsed) ? parsed.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+export function isLocalRuleEnabled(id: string): boolean {
+  return !disabledLocalRuleIds().includes(id)
+}
+
+export function setLocalRuleEnabled(id: string, enabled: boolean): void {
+  const disabled = new Set(disabledLocalRuleIds())
+  if (enabled) disabled.delete(id)
+  else disabled.add(id)
+  try {
+    localStorage.setItem(DISABLED_KEY, JSON.stringify([...disabled]))
+  } catch {
+    /* 隐私模式等存储不可用：静默降级为不可持久化 */
+  }
+}
+
 /** 在 PM 文档的每个文本节点内跑规则；文本节点内匹配 → 位置天然就是 PM 坐标 */
 export function runLocalRules(doc: ProseMirrorNode): LocalMatch[] {
   const matches: LocalMatch[] = []
+  const disabled = new Set(disabledLocalRuleIds())
 
   doc.descendants((node, pos) => {
     if (!node.isText || !node.text) return true
     const text = node.text
 
     for (const rule of LOCAL_RULES) {
+      if (disabled.has(rule.id)) continue
       const pattern = new RegExp(rule.pattern.source, "g")
       pattern.lastIndex = 0
       let match: RegExpExecArray | null

@@ -73,6 +73,19 @@
       </el-table-column>
     </el-table>
 
+    <!-- 内置格式规则（毫秒级本地检查的固定六条）：临时屏蔽入口。
+         开关只写本浏览器 localStorage，不动服务端规则文件；保存即广播生效。 -->
+    <el-divider content-position="left">内置格式规则（临时屏蔽，仅本浏览器生效）</el-divider>
+    <div class="builtin-rules">
+      <div v-for="rule in BUILTIN_RULES" :key="rule.id" class="builtin-rule-row">
+        <span class="builtin-rule-name">{{ rule.reason }}</span>
+        <el-switch
+          :model-value="!builtinDisabled.has(rule.id)"
+          @update:model-value="(value: string | number | boolean) => toggleBuiltin(rule.id, Boolean(value))"
+        />
+      </div>
+    </div>
+
     <el-dialog
       v-model="editVisible"
       :title="draft.id ? '编辑规则' : '新建规则'"
@@ -278,11 +291,25 @@ import {
   type LocalCheckRule,
   type VocabularyScope,
 } from '@/api/suggestEditor'
+import {
+  LOCAL_RULES,
+  disabledLocalRuleIds,
+  setLocalRuleEnabled,
+} from './core/local-rules'
 
 const props = defineProps<{ visible: boolean; scope: VocabularyScope }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'saved'): void }>()
 
 type Severity = LocalCheckRule['severity']
+
+/** 内置格式规则的临时屏蔽（本浏览器 localStorage，不动服务端规则文件） */
+const BUILTIN_RULES = LOCAL_RULES
+const builtinDisabled = ref(new Set(disabledLocalRuleIds()))
+function toggleBuiltin(id: string, enabled: boolean): void {
+  setLocalRuleEnabled(id, enabled)
+  builtinDisabled.value = new Set(disabledLocalRuleIds())
+  broadcastRulesChanged()
+}
 
 interface MapDraft {
   wrong: string
@@ -747,6 +774,26 @@ function downloadTemplate(): void {
 
 .rules-alert {
   margin-bottom: 12px;
+}
+
+.builtin-rules {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 32px;
+  margin-bottom: 8px;
+}
+
+.builtin-rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px;
+}
+
+.builtin-rule-name {
+  color: var(--el-text-color-regular);
+  font-size: 12.5px;
 }
 
 .rule-rows {
