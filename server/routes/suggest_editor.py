@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -425,12 +426,23 @@ def _read_vocab_file(path: str) -> str:
 
 
 def _write_vocab_file(path: str, content: str) -> None:
-    """原子写（临时文件 + replace），Node 侧随时可能并发读，避免读到半截文件。"""
+    """原子写（临时文件 + replace），Node 侧随时可能并发读，避免读到半截文件。
+    Windows 上 replace 会因目标正被读端打开而 PermissionError——短重试兜底
+    （2026-10-23 实测：E2E 清理 PUT 规则撞上 Node 分析读 规则-全局.json 返回 500）。"""
     target = Path(_vocab_safe_path(path))
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_text(content, encoding="utf-8", newline="")  # newline='' 防 \n→\r\n 翻译
-    tmp.replace(target)
+    last_error: PermissionError | None = None
+    for _ in range(3):
+        try:
+            tmp.replace(target)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.05)
+    if last_error is not None:
+        raise last_error
 
 
 def _vocab_entries(content: str) -> list[str]:
