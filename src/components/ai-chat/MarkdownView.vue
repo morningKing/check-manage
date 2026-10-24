@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { MdPreview } from 'md-editor-v3'
-import { ElIcon, ElMessage } from 'element-plus'
-import { CopyDocument, Download } from '@element-plus/icons-vue'
+import { ElIcon, ElInput, ElMessage } from 'element-plus'
+import { CopyDocument, Download, Link } from '@element-plus/icons-vue'
 import 'md-editor-v3/lib/preview.css'
 import './md-editor-setup' // register bundled mermaid/echarts (side effect)
 import { copyText } from '@/utils/clipboard'
 import { useDarkMode } from '@/composables/useDarkMode'
+import { getPlantumlServer, plantumlSvgUrl, setPlantumlServer } from './plantuml'
 
 const props = defineProps<{ text: string }>()
 
@@ -15,18 +16,20 @@ const props = defineProps<{ text: string }>()
 const isDark = useDarkMode()
 const mdTheme = computed(() => (isDark.value ? 'dark' : 'light'))
 
-// We render ```svg``` fences as inline <img> ourselves rather than letting
-// markdown-it do it, because md-editor's default validateLink only accepts
-// data: URLs whose MIME is image/{gif,png,jpeg,webp} — image/svg+xml is
-// rejected, so the markdown `![alt](data:image/svg+xml;...)` would render
-// as literal text (the base64 looks like mojibake in the bubble). By
-// splitting the text and dropping an <img> directly, we sidestep the
-// validation entirely. <img>-loaded SVG is XSS-safe (browser disables
-// scripts inside it), so no DOMPurify needed.
+// We render ```svg``` / ```plantuml``` fences as inline <img> ourselves rather
+// than letting markdown-it do it. For svg, md-editor's default validateLink
+// only accepts data: URLs whose MIME is image/{gif,png,jpeg,webp} —
+// image/svg+xml is rejected, so the markdown `![alt](data:image/svg+xml;...)`
+// would render as literal text (the base64 looks like mojibake in the bubble).
+// For plantuml there is no offline JS engine at all: the diagram is hex-encoded
+// into an <img> URL pointing at a PlantUML server (see ./plantuml). Both cases
+// sidestep link validation entirely. <img>-loaded SVG is XSS-safe (browser
+// disables scripts inside it), so no DOMPurify needed.
 
 interface MdSeg { type: 'md'; text: string }
 interface SvgSeg { type: 'svg'; src: string; raw: string }
-type Seg = MdSeg | SvgSeg
+interface PumlSeg { type: 'puml'; code: string }
+type Seg = MdSeg | SvgSeg | PumlSeg
 
 // Models routinely emit "Add & Norm" or "X & Y" in <text> nodes — a bare `&`
 // is invalid XML and the browser refuses to render the whole SVG
@@ -46,17 +49,23 @@ function svgToDataUrl(svg: string): string {
 
 const segments = computed<Seg[]>(() => {
   const src = props.text
-  const fence = /```svg[^\n]*\n([\s\S]*?)```/g
+  // \b keeps compound labels (svgbob, plantuml2…) out of the diagram branches —
+  // they are not renderable and stay as ordinary code blocks.
+  const fence = /```(svg|plantuml|puml)\b[^\n]*\n([\s\S]*?)```/gi
   const out: Seg[] = []
   let last = 0
   let m: RegExpExecArray | null
   fence.lastIndex = 0
   while ((m = fence.exec(src))) {
     if (m.index > last) out.push({ type: 'md', text: src.slice(last, m.index) })
-    const body = m[1].replace(/\n+$/, '').trim()
+    const body = m[2].replace(/\n+$/, '').trim()
     if (body) {
-      const safe = sanitizeSvgEntities(body)
-      out.push({ type: 'svg', src: svgToDataUrl(body), raw: safe })
+      if (m[1].toLowerCase() === 'svg') {
+        const safe = sanitizeSvgEntities(body)
+        out.push({ type: 'svg', src: svgToDataUrl(body), raw: safe })
+      } else {
+        out.push({ type: 'puml', code: body })
+      }
     }
     last = m.index + m[0].length
   }
@@ -65,8 +74,36 @@ const segments = computed<Seg[]>(() => {
   return out
 })
 
+// PlantUML 走服务器渲染：img 加载失败（服务不可达 / 语法有误 / URL 超限）时
+// 降级为「源码 + 自建服务配置」卡。失败状态按源码内容记忆——流式期间 segments
+// 每个分片都会重算，按内容记才能不让已失败的图闪回 img 态。
+const pumlErrors = reactive(new Set<string>())
+const pumlServerInput = ref('')
+// 重试计数：作为 img 的 key 触发重挂载重新发请求（错误响应不带缓存，
+// 同 src 的普通重渲染不会自动重发）。
+const pumlRetryTick = ref(0)
+
+onMounted(() => { pumlServerInput.value = getPlantumlServer() })
+
+function markPumlError(code: string) { pumlErrors.add(code) }
+
+function retryPuml() {
+  setPlantumlServer(pumlServerInput.value)
+  pumlErrors.clear()
+  pumlRetryTick.value++
+}
+
+function pumlUrl(code: string): string {
+  return plantumlSvgUrl(code)
+}
+
 async function copySvg(raw: string) {
   if (await copyText(raw)) ElMessage.success('已复制 SVG 源码')
+  else ElMessage.error('复制失败')
+}
+
+async function copyPuml(code: string) {
+  if (await copyText(code)) ElMessage.success('已复制 PlantUML 源码')
   else ElMessage.error('复制失败')
 }
 </script>
@@ -93,6 +130,49 @@ async function copySvg(raw: string) {
           >
             <ElIcon><Download /></ElIcon>
           </a>
+        </div>
+      </div>
+      <div v-else-if="seg.type === 'puml'" class="markdown-view__svg-wrap markdown-view__puml-wrap">
+        <template v-if="!pumlErrors.has(seg.code)">
+          <img
+            :key="`puml-${pumlRetryTick}`"
+            class="markdown-view__svg markdown-view__puml-img"
+            :src="pumlUrl(seg.code)"
+            alt="PlantUML 图"
+            loading="lazy"
+            @error="markPumlError(seg.code)"
+          />
+          <div class="markdown-view__svg-actions">
+            <button
+              class="markdown-view__svg-btn" type="button"
+              title="复制 PlantUML 源码" aria-label="复制 PlantUML 源码"
+              @click="copyPuml(seg.code)"
+            >
+              <ElIcon><CopyDocument /></ElIcon>
+            </button>
+            <a
+              class="markdown-view__svg-btn"
+              title="在新窗口打开" aria-label="在新窗口打开"
+              :href="pumlUrl(seg.code)" target="_blank" rel="noopener"
+            >
+              <ElIcon><Link /></ElIcon>
+            </a>
+          </div>
+        </template>
+        <div v-else class="markdown-view__puml-err">
+          <div class="markdown-view__puml-err-tip">
+            PlantUML 渲染失败（服务不可达、语法有误或图过大）。可改为自建 PlantUML 服务后重试：
+          </div>
+          <div class="markdown-view__puml-err-ops">
+            <ElInput
+              v-model="pumlServerInput"
+              size="small"
+              placeholder="https://plantuml.example.com/plantuml"
+              @keyup.enter="retryPuml"
+            />
+            <button class="markdown-view__puml-retry" type="button" @click="retryPuml">重试</button>
+          </div>
+          <pre class="markdown-view__puml-src">{{ seg.code }}</pre>
         </div>
       </div>
       <MdPreview v-else :modelValue="seg.text" :theme="mdTheme" :code-foldable="false" />
@@ -173,5 +253,48 @@ html.dark .markdown-view :deep(.md-editor-dark) {
   background: #fff;
   color: var(--el-color-primary);
   border-color: var(--el-color-primary);
+}
+/* PlantUML 渲染失败降级卡：说明 + 自建服务输入 + 源码兜底展示 */
+.markdown-view__puml-err {
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background: var(--el-fill-color-light);
+  padding: 8px 10px;
+}
+.markdown-view__puml-err-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
+.markdown-view__puml-err-ops {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0;
+}
+.markdown-view__puml-retry {
+  flex: none;
+  padding: 0 14px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+  cursor: pointer;
+}
+.markdown-view__puml-retry:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+.markdown-view__puml-src {
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--el-fill-color);
+  border-radius: 4px;
 }
 </style>

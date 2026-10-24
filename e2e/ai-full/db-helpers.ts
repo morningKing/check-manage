@@ -52,7 +52,9 @@ export async function seedPlainSession(o: PlainSessionOpts): Promise<string> {
   if (o.workspacePath) { cols.push('workspace_path'); vals.push(`'${o.workspacePath.replace(/\\/g, '/')}'`) }
   dbSeed(`INSERT INTO ai_chat_sessions (${cols.join(',')}) VALUES (${vals.join(',')})`)
   for (const m of o.messages ?? []) {
-    dbSeed(`INSERT INTO ai_chat_messages (id, session_id, role, content) VALUES ('${newId('msg_')}', '${sid}', '${m.role}', '[{"type":"text","text":"${m.text}"}]')`)
+    // 文本必须经 JSON.stringify 转义（换行→\n、引号→\"、反斜杠→\\），
+    // 否则 content jsonb 列拒收裸 0x0a（多行消息，如带 ``` 围栏的渲染用例）
+    dbSeed(`INSERT INTO ai_chat_messages (id, session_id, role, content) VALUES ('${newId('msg_')}', '${sid}', '${m.role}', '[{"type":"text","text":${JSON.stringify(m.text)}}]')`)
   }
   return sid
 }

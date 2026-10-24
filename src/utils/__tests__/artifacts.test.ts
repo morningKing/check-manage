@@ -119,6 +119,18 @@ describe('splitArtifacts', () => {
     expect(segs.every(s => s.type === 'text')).toBe(true)
   })
 
+  it('keeps a large plantuml block inline (MarkdownView renders it to a server image)', () => {
+    const diagram = ['@startuml', 'Bob -> Alice: hi', 'Alice --> Bob: ok', 'Bob -> Alice: again', 'Alice --> Bob: done', 'Bob -> Alice: more', '@enduml'].join('\n')
+    for (const lang of ['plantuml', 'puml']) {
+      const src = `时序图：\n\n\`\`\`${lang}\n${diagram}\n\`\`\`\n`
+      const segs = splitArtifacts(src)
+      expect(segs.every(s => s.type === 'text'), `lang=${lang}`).toBe(true)
+      expect(segs.map(s => (s as any).text).join('')).toContain('@startuml')
+    }
+    expect(isInlineRenderLang('plantuml')).toBe(true)
+    expect(isInlineRenderLang('puml')).toBe(true)
+  })
+
   it('still lifts a large non-diagram code block', () => {
     const code = Array.from({ length: 8 }, (_, i) => `line ${i}`).join('\n')
     const segs = splitArtifacts('```python\n' + code + '\n```')

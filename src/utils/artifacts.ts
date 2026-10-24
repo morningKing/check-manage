@@ -32,8 +32,10 @@ function isArtifact(lang: string, code: string): boolean {
   return lines >= 8 || code.length >= 320
 }
 
-/** Diagram/chart langs md-editor renders inline; never lift these into artifacts. */
-const INLINE_RENDER_LANGS = new Set(['mermaid', 'echarts'])
+/** Diagram/chart langs rendered inline; never lift these into artifacts.
+ *  mermaid/echarts 由 md-editor 渲染；plantuml/puml 由 MarkdownView 预处理成
+ *  指向 PlantUML 服务器的 <img>（见 components/ai-chat/plantuml.ts）。 */
+const INLINE_RENDER_LANGS = new Set(['mermaid', 'echarts', 'plantuml', 'puml'])
 
 export function isInlineRenderLang(lang: string): boolean {
   return INLINE_RENDER_LANGS.has((lang || '').trim().toLowerCase())

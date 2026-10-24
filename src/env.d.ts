@@ -18,6 +18,8 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE_URL: string
   /** 智能写作：置为 "off" 关闭 LLM 续写兜底（词表/文档层照常） */
   readonly VITE_LLM_COMPLETION?: string
+  /** AI 会话 PlantUML 渲染服务器基址（内网自建；未设时用官方公共服务） */
+  readonly VITE_PLANTUML_SERVER?: string
 }
 
 interface ImportMeta {
