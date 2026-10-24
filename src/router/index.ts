@@ -79,7 +79,8 @@ const staticRoutes: RouteRecordRaw[] = [
       { path: 'workflow/:id', name: 'WorkflowEditor', component: () => import('@/views/workflow/WorkflowEditor.vue'), meta: { title: '编辑工作流' } },
       // 智能写作（suggest-editor）：文档列表 + 全屏编辑页（WS 走 /suggest-ws）
       { path: 'suggest-editor', name: 'SuggestEditorList', component: () => import('@/views/suggest/SuggestEditorListView.vue'), meta: { title: '智能写作' } },
-      { path: 'suggest-editor/:docId', name: 'SuggestEditorDoc', component: () => import('@/views/suggest/SuggestEditorDocView.vue'), meta: { title: '智能写作' } },
+      // 编辑页默认隐藏 ContentArea 页签栏（hideTabBar），把纵向空间还给正文
+      { path: 'suggest-editor/:docId', name: 'SuggestEditorDoc', component: () => import('@/views/suggest/SuggestEditorDocView.vue'), meta: { title: '智能写作', hideTabBar: true } },
       // 通用动态数据页面（通过 pageId 参数匹配）
       {
         path: 'page/:pageId',

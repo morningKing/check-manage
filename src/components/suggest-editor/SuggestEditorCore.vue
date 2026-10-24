@@ -1,29 +1,38 @@
 <template>
-  <div class="se-scope">
+  <div class="se-scope" :class="{ 'is-focus': focusMode }">
     <div class="se-layout">
       <!-- 头部整体 sticky 兜底：正常布局下外层零溢出（正文只在下方区域内滚动），
-           任何意外溢出时标题栏与工具栏也不会被滚走 -->
+           任何意外溢出时标题栏与工具栏也不会被滚走。
+           顶栏与格式工具合并为单行：状态收敛为状态药丸、低频格式收「⋯」、删提示文案 -->
       <div class="se-head">
         <header class="se-topbar">
           <slot name="title" />
-          <span class="se-badge" :class="`se-badge-${syncState}`">{{ syncStateLabel }}</span>
-          <span class="se-status">{{ rewriteHint ?? statusText }}</span>
-          <span
-            class="se-rules-badge"
-            :class="{ 'is-error': loadedRuleCount === null }"
-            :title="loadedRuleCount === null
-              ? '检查规则加载失败：当前仅内置规则生效'
-              : `已加载 ${loadedRuleCount} 条检查规则（本地毫秒级实时检查）`"
-          >规则 {{ loadedRuleCount ?? '?' }}</span>
-          <span v-if="connectionHint" class="se-conn-hint">⚠ {{ connectionHint }}</span>
+          <EditorToolbar v-if="editor" ref="toolbarRef" :editor="editor" :doc-id="docId" />
+          <span class="se-status-pill">
+            <i class="se-status-dot" :class="`is-${syncState}`" />
+            <span class="se-badge" :class="`se-badge-${syncState}`">{{ syncStateLabel }}</span>
+            <span
+              class="se-rules-badge"
+              :class="{ 'is-error': loadedRuleCount === null }"
+              :title="loadedRuleCount === null
+                ? '检查规则加载失败：当前仅内置规则生效'
+                : `已加载 ${loadedRuleCount} 条检查规则（本地毫秒级实时检查）`"
+            >规则 {{ loadedRuleCount ?? '?' }}</span>
+          </span>
+          <span v-if="connectionHint" class="se-conn-hint" :title="connectionHint">⚠ {{ connectionHint }}</span>
+          <span class="se-status" :title="rewriteHint ?? statusText">{{ rewriteHint ?? statusText }}</span>
           <button type="button" class="se-badge se-badge-toggle" @click="sidebarOpen = !sidebarOpen">
-            {{ sidebarOpen ? '隐藏建议栏' : `建议 ${notes.ai.length + notes.local.length}` }}
+            {{ sidebarOpen ? '收起' : `建议 ${notes.ai.length + notes.local.length}` }}
           </button>
-          <span class="se-hint">格式用上方工具栏 · 输入 / 插入块 · 停笔自动分析/联想 · Tab 接受</span>
           <slot name="actions" />
+          <button
+            type="button"
+            class="se-focus-btn"
+            :aria-label="focusMode ? '退出专注' : '专注模式'"
+            :title="focusMode ? '退出专注 (Esc)' : '专注模式：隐藏工具栏与页签，正文满屏'"
+            @click="toggleFocus"
+          >⛶</button>
         </header>
-        <EditorToolbar v-if="editor" ref="toolbarRef" :editor="editor"
-          :with-sidebar-pad="sidebarOpen" :doc-id="docId" />
       </div>
       <div class="se-workspace">
         <EditorContent v-if="editor" :editor="editor" class="se-editor-host" />
@@ -69,6 +78,14 @@
         </div>
       </div>
     </div>
+    <!-- 专注模式下的浮动退出钮（顶栏整体隐藏后唯一常驻出口；Esc 同效） -->
+    <button
+      v-if="focusMode"
+      type="button"
+      class="se-focus-exit"
+      title="退出专注 (Esc)"
+      @click="exitFocus"
+    >退出专注 (Esc)</button>
   </div>
 </template>
 
@@ -79,7 +96,7 @@
  * - 三层建议（本地规则 / AI 分析 / 用户改写）经 decoration 呈现，接受才落正文；
  * - 模板初始化由父组件（SuggestEditorDocView）在 synced 后调用 setContent 完成。
  */
-import { computed, onActivated, onBeforeUnmount, onDeactivated, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Collaboration from '@tiptap/extension-collaboration'
@@ -99,9 +116,45 @@ import { FORMATTING_EXTENSIONS } from './core/formatting'
 import { TABLE_EXTENSIONS } from './core/table'
 import { FIGURE_EXTENSIONS, insertFigure } from './core/figure'
 import { getRules, getSnippets, uploadAttachment, type LocalCheckRule, type TextSnippet } from '@/api/suggestEditor'
+import { useAppStore } from '@/stores/app'
 
 const props = defineProps<{ docId: string; token: string }>()
 const emit = defineEmits<{ (e: 'synced'): void }>()
+
+/** 专注模式：全局 UI 态（AppLayout 据此隐藏平台头部，ContentArea 隐藏页签） */
+const appStore = useAppStore()
+const focusMode = computed(() => appStore.focusMode)
+let sidebarWasOpen = true
+
+function enterFocus(): void {
+  sidebarWasOpen = sidebarOpen.value
+  appStore.setFocusMode(true)
+  sidebarOpen.value = false
+}
+
+function exitFocus(): void {
+  if (!appStore.focusMode) return
+  appStore.setFocusMode(false)
+  sidebarOpen.value = sidebarWasOpen
+}
+
+function toggleFocus(): void {
+  if (focusMode.value) exitFocus()
+  else enterFocus()
+}
+
+function onEscKey(event: KeyboardEvent): void {
+  if (event.key === 'Escape') exitFocus()
+}
+
+watch(focusMode, (active) => {
+  if (active) window.addEventListener('keydown', onEscKey)
+  else window.removeEventListener('keydown', onEscKey)
+})
+
+onMounted(() => {
+  if (focusMode.value) window.addEventListener('keydown', onEscKey)
+})
 
 /** 走同源反向代理（vite dev / proxy.py 均提供 /suggest-ws 的 WS 隧道），免去跨端口/CORS */
 function wsUrl(): string {
@@ -418,6 +471,8 @@ provider = createProvider()
 onDeactivated(() => {
   releaseProvider()
   syncState.value = 'disconnected'
+  // keep-alive 切走时必须退出专注：否则回列表页仍顶着全屏态（平台头部被藏）
+  exitFocus()
 })
 
 onActivated(() => {
@@ -431,6 +486,8 @@ onBeforeUnmount(() => {
   releaseProvider()
   rulesChannel?.close()
   rulesChannel = null
+  window.removeEventListener('keydown', onEscKey)
+  if (appStore.focusMode) appStore.setFocusMode(false)
   suggestionsMap.unobserveDeep(onSuggestionsChanged)
   assistantMap.unobserveDeep(() => readAssistantStatus())
   commandsMap.unobserve(onCommandsChanged)

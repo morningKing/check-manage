@@ -9,8 +9,8 @@
  */
 <template>
   <div class="content-area">
-    <!-- 标签栏 -->
-    <div class="tab-bar">
+    <!-- 标签栏（编辑类路由 meta.hideTabBar 或专注模式下隐藏；v-show 保住页签状态机） -->
+    <div v-show="!tabBarHidden" class="tab-bar">
       <div class="tab-list" ref="tabListRef">
         <div
           v-for="(tab, index) in tabs"
@@ -76,15 +76,20 @@
  * 4. 路由视图容器 + keep-alive 缓存
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Close } from '@element-plus/icons-vue'
-import { useTabStore } from '@/stores'
+import { useAppStore, useTabStore } from '@/stores'
 import type { TabItem } from '@/stores/tab'
 
 // ==================== Store & Router ====================
 
 const tabStore = useTabStore()
+const appStore = useAppStore()
+const route = useRoute()
 const router = useRouter()
+
+/** 页签栏隐藏：编辑类路由（meta.hideTabBar）或专注模式 */
+const tabBarHidden = computed(() => Boolean(route.meta.hideTabBar) || appStore.focusMode)
 
 // ==================== 计算属性 ====================
 

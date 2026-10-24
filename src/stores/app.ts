@@ -87,6 +87,16 @@ export const useAppStore = defineStore('app', () => {
     return sidebarCollapsed.value ? 64 : 240
   })
 
+  /**
+   * 专注模式（智能写作编辑页）：隐藏平台头部/页签栏/内容区 padding，把纵向空间让给正文。
+   * 不持久化——每次进入编辑页都是常态，keep-alive 切走时由页面主动退出。
+   */
+  const focusMode = ref<boolean>(false)
+
+  function setFocusMode(value: boolean): void {
+    focusMode.value = value
+  }
+
   // ==================== Actions ====================
 
   /**
@@ -226,11 +236,13 @@ export const useAppStore = defineStore('app', () => {
     fontSize,
     compactMode,
     lastBusinessPath,
+    focusMode,
     // Getters
     sidebarWidth,
     // Actions
     toggleSidebar,
     setSidebarCollapsed,
+    setFocusMode,
     setLastBusinessPath,
     showLoading,
     hideLoading,

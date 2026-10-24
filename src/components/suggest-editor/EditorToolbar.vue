@@ -1,7 +1,6 @@
 <template>
-  <div class="se-toolbar-row">
-    <div class="se-toolbar">
-      <div class="se-toolbar-inner">
+  <div class="se-toolbar">
+    <div class="se-toolbar-inner">
       <template v-if="linkOpen">
         <input
           v-model="linkValue"
@@ -22,23 +21,6 @@
         </button>
       </template>
       <template v-else>
-        <button
-          type="button"
-          class="se-bubble-btn"
-          title="撤销 (Ctrl+Z)"
-          :disabled="!canUndo()"
-          @click="editor.chain().focus().undo().run()"
-        >↶</button>
-        <button
-          type="button"
-          class="se-bubble-btn"
-          title="重做 (Ctrl+Y)"
-          :disabled="!canRedo()"
-          @click="editor.chain().focus().redo().run()"
-        >↷</button>
-
-        <span class="se-bubble-sep" />
-
         <el-select
           :model-value="blockType"
           size="small"
@@ -83,24 +65,6 @@
           @mousedown.prevent
           @click="editor.chain().focus().toggleStrike().run()"
         ><span style="text-decoration: line-through">S</span></button>
-        <button
-          type="button"
-          title="行内代码"
-          class="se-bubble-btn"
-          :class="{ 'is-active': isActive('code') }"
-          @mousedown.prevent
-          @click="editor.chain().focus().toggleCode().run()"
-        >&lt;&gt;</button>
-        <button
-          type="button"
-          title="链接 (Ctrl+K)"
-          class="se-bubble-btn"
-          :class="{ 'is-active': isActive('link') }"
-          @mousedown.prevent
-          @click="openLink"
-        >🔗</button>
-
-        <span class="se-bubble-sep" />
 
         <el-dropdown trigger="click" @command="(size: string) => applyFontSize(size)">
           <span class="se-bubble-btn" title="字号">字号</span>
@@ -112,7 +76,7 @@
           </template>
         </el-dropdown>
         <el-dropdown trigger="click" @command="(color: string) => applyColor(color)">
-          <span class="se-bubble-btn" title="文字颜色">颜色</span>
+          <span class="se-bubble-btn" title="文字颜色">色</span>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="">默认</el-dropdown-item>
@@ -123,7 +87,7 @@
           </template>
         </el-dropdown>
         <el-dropdown trigger="click" @command="(color: string) => applyHighlight(color)">
-          <span class="se-bubble-btn" title="高亮">高亮</span>
+          <span class="se-bubble-btn" title="高亮">亮</span>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="">清除</el-dropdown-item>
@@ -140,43 +104,44 @@
           style="display: none" @change="onImageChosen" />
         <button type="button" class="se-bubble-btn" title="插入图片" @click="openImagePicker">图片</button>
 
-        <template v-if="editor.isActive('table')">
-          <span class="se-bubble-sep" />
-          <button type="button" class="se-bubble-btn" title="上方插入行" @click="TABLE_COMMANDS.addRowBefore(editor)">↑行</button>
-          <button type="button" class="se-bubble-btn" title="下方插入行" @click="TABLE_COMMANDS.addRowAfter(editor)">↓行</button>
-          <button type="button" class="se-bubble-btn" title="删除行" @click="TABLE_COMMANDS.deleteRow(editor)">删行</button>
-          <button type="button" class="se-bubble-btn" title="左侧插入列" @click="TABLE_COMMANDS.addColumnBefore(editor)">←列</button>
-          <button type="button" class="se-bubble-btn" title="右侧插入列" @click="TABLE_COMMANDS.addColumnAfter(editor)">→列</button>
-          <button type="button" class="se-bubble-btn" title="删除列" @click="TABLE_COMMANDS.deleteColumn(editor)">删列</button>
-          <button type="button" class="se-bubble-btn" title="合并单元格" @click="TABLE_COMMANDS.mergeCells(editor)">合并</button>
-          <button type="button" class="se-bubble-btn" title="拆分单元格" @click="TABLE_COMMANDS.splitCell(editor)">拆分</button>
-          <button type="button" class="se-bubble-btn" title="切换表头行" @click="TABLE_COMMANDS.toggleHeaderRow(editor)">表头</button>
-          <button type="button" class="se-bubble-btn" title="删除表格" @click="TABLE_COMMANDS.deleteTable(editor)">删表</button>
-        </template>
-
         <span class="se-bubble-sep" />
 
-        <button
-          type="button"
-          title="清除格式"
-          class="se-bubble-btn"
-          @mousedown.prevent
-          @click="clearFormatting(editor)"
-        >✕</button>
+        <!-- 低频/上下文操作收进「⋯」（撤销重做、行内代码、链接、清除格式、表格行列操作） -->
+        <el-dropdown trigger="click" @command="onMoreCommand">
+          <span class="se-bubble-btn" title="更多格式与操作">⋯</span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="undo" :disabled="!canUndo()">撤销</el-dropdown-item>
+              <el-dropdown-item command="redo" :disabled="!canRedo()">重做</el-dropdown-item>
+              <el-dropdown-item command="code" divided>行内代码</el-dropdown-item>
+              <el-dropdown-item command="link">链接…</el-dropdown-item>
+              <el-dropdown-item command="clear">清除格式</el-dropdown-item>
+              <template v-if="editor.isActive('table')">
+                <el-dropdown-item command="rowBefore" divided>上方插入行</el-dropdown-item>
+                <el-dropdown-item command="rowAfter">下方插入行</el-dropdown-item>
+                <el-dropdown-item command="rowDelete">删除行</el-dropdown-item>
+                <el-dropdown-item command="colBefore">左侧插入列</el-dropdown-item>
+                <el-dropdown-item command="colAfter">右侧插入列</el-dropdown-item>
+                <el-dropdown-item command="colDelete">删除列</el-dropdown-item>
+                <el-dropdown-item command="merge">合并单元格</el-dropdown-item>
+                <el-dropdown-item command="split">拆分单元格</el-dropdown-item>
+                <el-dropdown-item command="headerRow">切换表头行</el-dropdown-item>
+                <el-dropdown-item command="tableDelete" divided>删除表格</el-dropdown-item>
+              </template>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </template>
-      </div>
     </div>
-    <!-- 建议栏占位：工具栏只在「正文区宽度」内居中，与纸张像素对齐 -->
-    <div v-if="withSidebarPad" class="se-toolbar-pad" />
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * 编辑器顶部固定格式工具栏（Word / Google Docs 式）：
- * 与纸张同宽居中，常驻可见——格式操作的唯一入口（原选中浮出工具栏已移除，
- * 避免遮挡正文）。撤销/重做走 Collaboration 扩展注册的 Yjs UndoManager 命令。
- * 所有格式按钮 @mousedown.prevent：点按钮不丢编辑器选区。
+ * 编辑器格式工具段（与顶栏合并为单行，Word / Google Docs 式常驻）：
+ * 高频格式控件直接可见，低频/上下文操作（撤销重做、行内代码、链接、清除格式、
+ * 表格行列操作）收进「⋯」菜单。撤销/重做走 Collaboration 扩展注册的
+ * Yjs UndoManager 命令。所有格式按钮 @mousedown.prevent：点按钮不丢编辑器选区。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
@@ -187,8 +152,6 @@ import { uploadAttachment } from '@/api/suggestEditor'
 
 const props = defineProps<{
   editor: Editor
-  /** 右侧建议栏是否展开——展开时工具栏行加同宽占位，保证与纸张对齐 */
-  withSidebarPad?: boolean
   /** 当前文档 id（图片上传需要） */
   docId: string
 }>()
@@ -288,7 +251,6 @@ const ALIGNMENTS = [
   { value: 'left', label: '左对齐', icon: '⯇' },
   { value: 'center', label: '居中', icon: '≡' },
   { value: 'right', label: '右对齐', icon: '⯈' },
-  { value: 'justify', label: '两端对齐', icon: '☰' },
 ] as const
 
 function applyFontSize(size: string): void {
@@ -308,6 +270,29 @@ function applyHighlight(color: string): void {
 
 function applyAlign(align: string): void {
   props.editor.chain().focus().setTextAlign(align).run()
+}
+
+/** 「⋯」菜单命令分发（低频 + 表格上下文操作） */
+function onMoreCommand(command: string): void {
+  const editor = props.editor
+  const chain = editor.chain().focus()
+  switch (command) {
+    case 'undo': chain.undo().run(); break
+    case 'redo': chain.redo().run(); break
+    case 'code': chain.toggleCode().run(); break
+    case 'link': openLink(); break
+    case 'clear': clearFormatting(editor); break
+    case 'rowBefore': TABLE_COMMANDS.addRowBefore(editor); break
+    case 'rowAfter': TABLE_COMMANDS.addRowAfter(editor); break
+    case 'rowDelete': TABLE_COMMANDS.deleteRow(editor); break
+    case 'colBefore': TABLE_COMMANDS.addColumnBefore(editor); break
+    case 'colAfter': TABLE_COMMANDS.addColumnAfter(editor); break
+    case 'colDelete': TABLE_COMMANDS.deleteColumn(editor); break
+    case 'merge': TABLE_COMMANDS.mergeCells(editor); break
+    case 'split': TABLE_COMMANDS.splitCell(editor); break
+    case 'headerRow': TABLE_COMMANDS.toggleHeaderRow(editor); break
+    case 'tableDelete': TABLE_COMMANDS.deleteTable(editor); break
+  }
 }
 
 const imageInput = ref<HTMLInputElement | null>(null)

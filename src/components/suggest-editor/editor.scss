@@ -40,12 +40,23 @@
 .se-topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  flex-wrap: nowrap;
+  gap: 4px;
+  padding: 6px 12px;
   background: #fff;
   border-bottom: 1px solid var(--se-line);
   font-size: 13px;
   flex: none;
+
+  /* 标题输入定宽；相邻 el-button 收紧默认 12px 间距 */
+  .se-doc-title-input {
+    width: 130px;
+    flex: none;
+  }
+
+  .el-button + .el-button {
+    margin-left: 4px;
+  }
 }
 
 .se-badge {
@@ -73,6 +84,34 @@
 
 .se-status {
   color: var(--se-muted);
+  /* 合并行里的弹性位：窄窗口时收缩省位，完整内容看 title 悬浮 */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态药丸：同步态 + 规则计数收敛为一枚，hover 看明细 */
+.se-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px;
+  border: 1px solid var(--se-line);
+  border-radius: 999px;
+  flex: none;
+}
+
+.se-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+
+  &.is-synced { background: #22c55e; }
+  &.is-connecting { background: #eab308; }
+  &.is-disconnected { background: #ef4444; }
 }
 
 .se-rules-badge {
@@ -92,15 +131,56 @@
 .se-conn-hint {
   color: #b91c1c;
   font-size: 12px;
-  max-width: 420px;
+  max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: none;
 }
 
-.se-hint {
-  margin-left: auto;
-  color: #9ca3af;
+/* 专注模式：顶栏整体隐藏，正文吃满；右上角浮动退出钮 */
+.se-scope.is-focus .se-head {
+  display: none;
+}
+
+.se-scope.is-focus .se-editor-host {
+  padding: 12px;
+}
+
+.se-focus-btn {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--se-line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--se-muted);
+  font-size: 12px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--se-accent);
+    border-color: var(--se-accent);
+  }
+}
+
+.se-focus-exit {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 90;
+  padding: 4px 12px;
+  border: 1px solid var(--se-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--se-muted);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12);
+
+  &:hover {
+    color: var(--se-accent);
+    border-color: var(--se-accent);
+  }
 }
 
 .se-editor-host {
@@ -108,46 +188,31 @@
   display: flex;
   justify-content: center;
   overflow: auto;
-  padding: 24px 16px 32px;
+  padding: 16px 16px 32px;
   min-width: 0;
 }
 
-/* ---------------- 顶部固定格式工具栏（与纸张同宽居中，常驻可见） ---------------- */
-
-/* 工具栏行的宽度结构镜像正文区：flex:1 的工具栏 + 建议栏同宽占位（展开时），
-   这样工具栏在「正文区宽度」内居中，和纸张像素对齐（此前按整页居中会错位半栏） */
-.se-toolbar-row {
-  display: flex;
-  align-items: flex-start;
-}
+/* ---------------- 格式工具段（并入顶栏单行，常驻可见） ---------------- */
 
 .se-toolbar {
-  flex: 1;
+  flex: none;
   min-width: 0;
   display: flex;
-  justify-content: center;
-  padding: 10px 16px 0;
-}
-
-.se-toolbar-pad {
-  width: 320px;
-  flex: none;
+  align-items: center;
 }
 
 .se-toolbar-inner {
   display: flex;
   align-items: center;
   gap: 2px;
-  width: min(760px, 100%);
-  padding: 4px 8px;
+  padding: 1px 4px;
   background: #fff;
   border: 1px solid var(--se-line);
-  border-bottom: none;
-  border-radius: 10px 10px 0 0;
+  border-radius: 8px;
 }
 
 .se-toolbar-inner .se-block-select {
-  width: 112px;
+  width: 84px;
   margin: 0 4px;
 
   .el-select__wrapper {
@@ -322,9 +387,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 26px;
+  min-width: 24px;
   height: 26px;
-  padding: 0 6px;
+  padding: 0 4px;
   background: transparent;
   border: none;
   border-radius: 6px;
@@ -770,6 +835,8 @@
   background: #fff;
   border: 1px solid var(--se-line);
   cursor: pointer;
+  white-space: nowrap;
+  flex: none;
 }
 
 /* 续写联想的 ghost 文本 */

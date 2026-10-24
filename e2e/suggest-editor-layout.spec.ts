@@ -59,8 +59,8 @@ async function gotoSuggestList(page: Page) {
   await expect(page.getByRole('button', { name: '新建文档' })).toBeVisible({ timeout: 15_000 })
 }
 
-test('长文档：头部常驻、正文区内滚动；选中无浮动工具栏遮挡', async ({ page }) => {
-  test.setTimeout(120_000)
+test('长文档：chrome 精简、头部常驻、正文区内滚动；专注模式近满屏', async ({ page }) => {
+  test.setTimeout(180_000)
   const title = `E2E-布局-${Date.now()}`
 
   await gotoSuggestList(page)
@@ -81,31 +81,21 @@ test('长文档：头部常驻、正文区内滚动；选中无浮动工具栏�
   }, paras)
   await page.waitForTimeout(800)
 
+  // tab 页签在编辑路由默认隐藏（meta.hideTabBar）
+  await expect(page.locator('.tab-bar')).toBeHidden()
+
+  // 顶栏与格式工具合并为单行：行高预算（title+tools+状态药丸+动作+专注 ≤ 52px）
   const topbar = page.locator('.se-topbar')
   const toolbar = page.locator('.se-toolbar')
   await expect(topbar).toBeVisible()
   await expect(toolbar).toBeVisible()
-  const toolbarBefore = await toolbar.boundingBox()
+  const topbarBox = await topbar.boundingBox()
+  expect(topbarBox?.height ?? 99, `topbar height=${topbarBox?.height}`).toBeLessThanOrEqual(52)
 
-  // 工具栏必须与纸张「中心对齐」——占位镜像正文区宽度（此前按整页居中错位半栏）
-  const align = await page.evaluate(() => {
-    const inner = document.querySelector('.se-toolbar-inner') as HTMLElement | null
-    const paper = document.querySelector('.doc-surface') as HTMLElement | null
-    if (!inner || !paper) return null
-    const a = inner.getBoundingClientRect()
-    const b = paper.getBoundingClientRect()
-    return {
-      toolbarCenter: a.left + a.width / 2,
-      paperCenter: b.left + b.width / 2,
-      toolbarWidth: a.width,
-      paperWidth: b.width,
-    }
-  })
-  expect(align).not.toBeNull()
-  expect(Math.abs((align as { toolbarCenter: number }).toolbarCenter
-    - (align as { paperCenter: number }).paperCenter)).toBeLessThanOrEqual(2)
-  expect((align as { toolbarWidth: number }).toolbarWidth)
-    .toBeCloseTo((align as { paperWidth: number }).paperWidth, -1)
+  // chrome 纵向预算：正文纸面顶边不得低于 170px（本次改造的直接目标）
+  const paperTop = (await page.locator('.doc-surface').boundingBox())?.y ?? -1
+  expect(paperTop, `doc-surface top=${paperTop}`).toBeGreaterThan(0)
+  expect(paperTop).toBeLessThanOrEqual(170)
 
   // 外层容器不得出现可滚动溢出（否则滚轮会把头部挤走）
   const outerOverflow = await page.evaluate(() => {
@@ -138,17 +128,17 @@ test('长文档：头部常驻、正文区内滚动；选中无浮动工具栏�
   expect(scrollProbe.moved).toBe(true)
 
   // 正文区滚动到底，头部位置不变
+  const topbarBefore = await topbar.boundingBox()
   await page.locator('.se-editor-host').evaluate((el) => {
     el.scrollTop = el.scrollHeight
   })
   await page.waitForTimeout(400)
-  const toolbarAfter = await toolbar.boundingBox()
-  const winY = await page.evaluate(() => window.scrollY)
-  const yBefore = toolbarBefore?.y ?? -2
-  const yAfter = toolbarAfter?.y ?? -1
-  expect(Math.abs(yAfter - yBefore), `toolbar y before=${yBefore} after=${yAfter} winY=${winY}`)
+  const topbarAfter = await topbar.boundingBox()
+  const yBefore = topbarBefore?.y ?? -2
+  const yAfter = topbarAfter?.y ?? -1
+  expect(Math.abs(yAfter - yBefore), `topbar y before=${yBefore} after=${yAfter}`)
     .toBeLessThanOrEqual(1)
-  await expect(toolbar).toBeVisible()
+  await expect(topbar).toBeVisible()
 
   // 选中文字：不得出现浮动格式工具栏
   await page.locator('.doc-surface p').first().click()
@@ -157,6 +147,21 @@ test('长文档：头部常驻、正文区内滚动；选中无浮动工具栏�
   await expect(page.locator('.bubble-toolbar, .se-bubble-toolbar')).toHaveCount(0)
 
   await page.screenshot({ path: 'e2e/screenshots/suggest-editor-long-doc.png' })
+
+  // 专注模式：平台头部/页内顶栏全部隐藏，正文顶到视口上沿；Esc 退出后恢复
+  await page.locator('.se-focus-btn').click()
+  await expect(page.locator('.app-header')).toBeHidden()
+  await expect(page.locator('.se-head')).toBeHidden()
+  await expect(page.locator('.se-focus-exit')).toBeVisible()
+  const focusTop = (await page.locator('.doc-surface').boundingBox())?.y ?? -1
+  expect(focusTop, `focus doc-surface top=${focusTop}`).toBeLessThanOrEqual(80)
+
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.se-head')).toBeVisible()
+  await expect(page.locator('.app-header')).toBeVisible()
+  await expect(page.locator('.se-focus-exit')).toHaveCount(0)
+  const restoredTop = (await page.locator('.doc-surface').boundingBox())?.y ?? -1
+  expect(restoredTop).toBeLessThanOrEqual(170)
 
   // 清理
   await gotoSuggestList(page)

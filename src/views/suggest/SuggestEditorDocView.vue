@@ -25,20 +25,26 @@
           @change="commitTitle"
         />
       </template>
+      <!-- 动作收纳为图标钮（aria-label 保持可访问名，E2E getByRole 不变） -->
       <template #actions>
-        <el-button size="small" @click="rulesVisible = true">规则</el-button>
-        <el-button size="small" @click="vocabVisible = true">词表</el-button>
-        <el-button size="small" :loading="exporting" :disabled="!canExport" @click="exportWord">
-          导出 Word
-        </el-button>
+        <el-button size="small" aria-label="规则" title="检查规则（本文档）" @click="rulesVisible = true">规</el-button>
+        <el-button size="small" aria-label="词表" title="本文档词表" @click="vocabVisible = true">词</el-button>
+        <el-button
+          size="small"
+          aria-label="导出 Word"
+          title="导出 Word"
+          :loading="exporting"
+          :disabled="!canExport"
+          @click="exportWord"
+        >⤓</el-button>
         <el-button
           v-if="auth.can('admin.suggest_editor')"
           size="small"
+          aria-label="存为模板"
+          title="把当前文档存为写作模板"
           :loading="savingTemplate"
           @click="saveAsTemplate"
-        >
-          存为模板
-        </el-button>
+        >⎘</el-button>
       </template>
     </SuggestEditorCore>
     <div v-else class="suggest-doc-loading" v-loading="true" element-loading-text="加载文档…" />
@@ -252,7 +258,7 @@ async function saveAsTemplate(): Promise<void> {
 }
 
 :deep(.se-doc-title-input) {
-  width: 260px;
+  width: 130px;
 
   .el-input__wrapper {
     box-shadow: none;

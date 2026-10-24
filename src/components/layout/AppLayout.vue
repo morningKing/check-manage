@@ -17,7 +17,7 @@
  * └─────────────────────────────────────┘
  */
 <template>
-  <el-container class="app-layout">
+  <el-container class="app-layout" :class="{ 'focus-mode': appStore.focusMode }">
     <!-- 左侧导航区域 -->
     <el-aside :width="sidebarWidth + 'px'" class="app-aside">
       <SettingsSideMenu v-if="isSettingsShell" />
@@ -495,6 +495,15 @@ onUnmounted(() => {
   padding: 20px;
   background-color: var(--el-bg-color-page);
   overflow: hidden;
+}
+
+/* 专注模式（智能写作编辑页）：隐头部、压缩内容区留白，正文接近满屏 */
+.focus-mode .app-header {
+  display: none;
+}
+
+.focus-mode .app-content {
+  padding: 8px;
 }
 
 /* 全局加载遮罩 */
