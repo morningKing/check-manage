@@ -26,7 +26,7 @@ from utils.batch_repo import (append_to_batch, cancel_batch,
                               get_session_usage, list_batches,
                               reset_failed_to_pending)
 from utils.filename import safe_filename
-from utils.operation_log import log_api_operation, log_operation
+from utils.operation_log import log_api_operation
 # 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
 # rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
 from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
@@ -743,8 +743,8 @@ def create_takeover_link(batch_id, child_id):
         return err('ttlHours 不合法', 'INVALID_TTL', 400)
     token, expires_at = takeover_repo.create_takeover_token(
         key['ownerUserId'], batch_id, child['id'], key['id'], ttl_hours=ttl_hours)
-    log_operation('ai.batch_takeover_link_created', 'ai_batch', batch_id,
-                  d.get('name') or batch_id, f'签发子任务接管链接 seq={child.get("batch_seq")}')
+    log_api_operation('ai.batch_takeover_link_created', 'ai_batch', batch_id,
+                      d.get('name') or batch_id, f'签发子任务接管链接 seq={child.get("batch_seq")}')
     return jsonify({'token': token,
                     'path': f'/takeover/session?t={token}',
                     'expiresAt': expires_at.isoformat()}), 201
@@ -771,8 +771,8 @@ def revoke_takeover_link(batch_id, child_id):
         key['ownerUserId'], batch_id, child['id'], token_id)
     if not ok:
         return err('令牌不存在', NOT_FOUND, 404)
-    log_operation('ai.batch_takeover_link_revoked', 'ai_batch', batch_id,
-                  d.get('name') or batch_id, f'吊销接管令牌 {token_id}')
+    log_api_operation('ai.batch_takeover_link_revoked', 'ai_batch', batch_id,
+                      d.get('name') or batch_id, f'吊销接管令牌 {token_id}')
     return jsonify({'revoked': True})
 
 
