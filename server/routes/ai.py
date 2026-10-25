@@ -20,6 +20,9 @@ from utils.mcp_servers import (
     list_servers, create_server, update_server, delete_server, McpServerError,
     internal_mcp_enabled, set_internal_mcp_enabled,
 )
+from utils.mcp_tool_rules import (
+    list_tool_governance, replace_tool_rules, ToolRulesError,
+)
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
 
@@ -286,3 +289,25 @@ def delete_mcp_server(server_id):
                   (row or {}).get('name') if isinstance(row, dict) else server_id,
                   f'删除外部 MCP Server {server_id}')
     return jsonify({'ok': True})
+
+
+@ai_bp.route('/mcp-tools', methods=['GET'])
+@require_permission('admin.ai_settings')
+def list_mcp_tools():
+    """工具治理视图：分组清单 + 角色×工具矩阵（spec §6）。数据来自快照表
+    join 矩阵；mcp-server 未同步时 groups 为空（前端提示未同步）。"""
+    return jsonify(list_tool_governance())
+
+
+@ai_bp.route('/mcp-tool-rules', methods=['PUT'])
+@require_permission('admin.ai_settings')
+def update_mcp_tool_rules():
+    """全量替换矩阵（即时生效：mcp-server TTL 3s 内传播，call 时拒绝）。"""
+    body = request.get_json(silent=True) or {}
+    try:
+        result = replace_tool_rules(body.get('rules'))
+    except ToolRulesError as e:
+        return jsonify({'error': str(e)}), 400
+    log_operation('update', 'ai_mcp_tool_rules', 'matrix', '工具治理矩阵',
+                  f"{result['updated']} 项变更: {result['diff']}")
+    return jsonify(result)
