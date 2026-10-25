@@ -39,6 +39,9 @@ export interface AiSessionSearchHit {
   batchSeq?: number | null
   inputFileName?: string | null
   isBatchChild?: boolean
+  /** content 命中时的消息锚点（title/file/preview 命中为 null） */
+  messageId?: string | null
+  seq?: number | null
 }
 
 export interface AiMessageMeta {
@@ -226,6 +229,20 @@ export function getMessages(id: string, opts?: { since?: string; before?: string
   const qs = q.toString()
   return get<{ messages: AiMessage[]; hasMore?: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages${qs ? '?' + qs : ''}`)
+}
+
+/** 会话大纲条目：用户输入回合投影（GET /turns）；local 标记为前端在途补尾 */
+export interface SessionTurn {
+  id: string
+  seq?: number
+  createdAt?: string
+  preview: string
+  local?: boolean
+}
+
+export function getTurns(id: string) {
+  return get<{ turns: SessionTurn[] }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/turns`)
 }
 
 /** 会话复用任务段：子会话里每条 user 消息 = 一次委派任务（边界）。

@@ -26,6 +26,7 @@ vi.mock('@/api/aiChat', () => ({
   deleteSession: vi.fn(),
   clearSession: vi.fn(),
   getMessages: vi.fn(),
+  getTurns: vi.fn(async () => ({ turns: [] })),
   sendMessage: vi.fn(),
   uploadFile: vi.fn(),
   listFiles: vi.fn(() => Promise.resolve({ files: [] })),

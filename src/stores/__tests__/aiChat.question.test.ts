@@ -9,6 +9,7 @@ vi.mock('@/api/aiChat', () => ({
   // other named exports used by the store module must exist as no-ops
   createSession: vi.fn(), listSessions: vi.fn(), renameSession: vi.fn(),
   deleteSession: vi.fn(), getMessages: vi.fn(), sendMessage: vi.fn(),
+  getTurns: vi.fn(async () => ({ turns: [] })),
   uploadFile: vi.fn(), listFiles: vi.fn(), getChanges: vi.fn(),
   createEventStream: vi.fn(() => ({ close() {} })),
 }))

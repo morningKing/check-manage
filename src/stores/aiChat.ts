@@ -25,11 +25,12 @@ import {
   getPendingPermission, replyPermission, getSessionSkillFit,
   getRuntimeState,
   getSessionToolCalls,
+  getTurns,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
   type LspServerStatus, type FormatterStatus,
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
-  type PermissionRequest, type SessionToolCall,
+  type PermissionRequest, type SessionToolCall, type SessionTurn,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
 import { latestTodosFromMessages, type TodoItem } from '@/utils/todos'
@@ -81,6 +82,10 @@ interface State {
   hasMoreMessages: Record<string, boolean>
   /** 当前已加载消息里最早一条的 seq（"加载更早"的 before 游标） */
   oldestLoadedSeq: Record<string, number | null>
+  /** 会话大纲：用户输入回合投影（GET /turns；spec 2026-10-25-session-outline §5） */
+  turnsBySession: Record<string, SessionTurn[]>
+  /** 大纲拉取失败标记（面板行内重试；失败保留旧列表） */
+  turnsError: Record<string, boolean>
   streaming: Record<string, boolean>
   reasoning: Record<string, string>
   thinking: Record<string, boolean>
@@ -232,6 +237,8 @@ export const useAiChatStore = defineStore('aiChat', {
     messages: {},
     hasMoreMessages: {} as Record<string, boolean>,
     oldestLoadedSeq: {} as Record<string, number | null>,
+    turnsBySession: {} as Record<string, SessionTurn[]>,
+    turnsError: {} as Record<string, boolean>,
     streaming: {},
     reasoning: {},
     thinking: {},
@@ -407,6 +414,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.loadPendingQuestion(id)
       this.loadPendingPermission(id)
       this.loadSessionSkillFit(id)
+      void this.loadTurns(id)
       // 批子会话由 worker 驱动、浏览器中途打开：SSE 订阅起点由后端补发
       // 进行中回合的快照爆发（message.updated 带 snapshot 标记 →
       // _adoptStreamTarget 收编流式目标 + 置 streaming），因此轮询守卫
@@ -461,15 +469,49 @@ export const useAiChatStore = defineStore('aiChat', {
       if (!before) return false
       try {
         const history = await getMessages(id, { before: String(before), limit: 200 })
-        if (!history.messages.length) {
-          this.hasMoreMessages[id] = false
-          return false
-        }
-        this.messages[id] = [...history.messages, ...(this.messages[id] ?? [])]
-        this.hasMoreMessages[id] = !!history.hasMore
-        this.oldestLoadedSeq[id] = history.messages[0]?.seq ?? before
-        return true
+        return this._prependOlderWindow(id, history)
       } catch { return false }
+    },
+
+    /** 把一页更早历史前插进消息数组并推进游标（loadOlderMessages /
+     *  ensureLoadedUntil 共用；前插保证消息流连续，流式目标按 id 定位不受影响）。 */
+    _prependOlderWindow(id: string, history: { messages: AiMessage[]; hasMore?: boolean }): boolean {
+      if (!history.messages.length) {
+        this.hasMoreMessages[id] = false
+        return false
+      }
+      this.messages[id] = [...history.messages, ...(this.messages[id] ?? [])]
+      this.hasMoreMessages[id] = !!history.hasMore
+      this.oldestLoadedSeq[id] = history.messages[0]?.seq ?? this.oldestLoadedSeq[id]
+      return true
+    },
+
+    /** 大纲/搜索定位（spec §5）：把历史窗口向前加载到覆盖 targetSeq 为止
+     *  （1000/页）。返回 targetSeq 对应消息是否已在内存窗口中。 */
+    async ensureLoadedUntil(id: string, targetSeq: number): Promise<boolean> {
+      while ((this.oldestLoadedSeq[id] ?? 0) > targetSeq) {
+        const before = this.oldestLoadedSeq[id]
+        if (before == null) break
+        let history: { messages: AiMessage[]; hasMore?: boolean }
+        try {
+          history = await getMessages(id, { before: String(before), limit: 1000 })
+        } catch { break }
+        const ok = this._prependOlderWindow(id, history)
+        if (!ok || this.oldestLoadedSeq[id] === before) break  // 游标不动 → 防死循环
+        if (this.hasMoreMessages[id] === false) break  // hasMore=false → 历史已到头，不再翻页
+      }
+      return (this.messages[id] ?? []).some(m => m.seq === targetSeq)
+    },
+
+    /** 会话大纲：拉取用户回合投影；失败保留旧列表并标记错误（面板行内重试）。 */
+    async loadTurns(id: string) {
+      try {
+        const { turns } = await getTurns(id)
+        this.turnsBySession[id] = turns
+        this.turnsError[id] = false
+      } catch {
+        this.turnsError[id] = true
+      }
     },
 
     /** 采用一次服务端拉取作为该会话的完整消息窗口（初始加载/清空后）。 */
@@ -1335,6 +1377,7 @@ export const useAiChatStore = defineStore('aiChat', {
           this._recomputeUsage(sid)  // 本回合 meta 已落库 → 状态条数值刷新
         }
       } catch { /* non-fatal: keep the in-memory copy */ }
+      void this.loadTurns(sid)  // 回合结束：新输入进大纲
     },
 
     _resetStreamState(sid: string) {

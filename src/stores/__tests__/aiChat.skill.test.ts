@@ -7,6 +7,7 @@ vi.mock('@/api/aiChat', () => ({
   getMcpServices: vi.fn(),
   createSession: vi.fn(), listSessions: vi.fn(), renameSession: vi.fn(), deleteSession: vi.fn(),
   getMessages: vi.fn(), sendMessage: vi.fn(), uploadFile: vi.fn(), listFiles: vi.fn(),
+  getTurns: vi.fn(async () => ({ turns: [] })),
   getChanges: vi.fn(), createEventStream: vi.fn(() => ({ close() {} })),
 }))
 import { uploadSkill, getCommands } from '@/api/aiChat'
