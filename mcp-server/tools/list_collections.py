@@ -12,7 +12,10 @@ register_meta(NAME, group='data-query', access='read')
 
 TOOL = types.Tool(
     name=NAME,
-    description="List business data collections visible to the caller.",
+    description=(
+        "列出当前用户角色可见的业务数据集合（返回集合标识与数据页显示名）。"
+        "当不确定平台有哪些数据可查、或需要拿集合标识/显示名去调其它数据工具时，先调它。"
+    ),
     inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
 )
 

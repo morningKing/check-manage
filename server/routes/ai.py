@@ -18,7 +18,7 @@ from utils.memory import (
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from utils.mcp_servers import (
     list_servers, create_server, update_server, delete_server, McpServerError,
-    internal_mcp_enabled, set_internal_mcp_enabled,
+    internal_mcp_enabled, set_internal_mcp_enabled, INTERNAL_MCP_NAME,
 )
 from utils.mcp_tool_rules import (
     list_tool_governance, replace_tool_rules, ToolRulesError,
@@ -208,7 +208,7 @@ def list_mcp_servers():
         'servers': list_servers(),
         # 平台内置 MCP 的管理视图：AI 设置页与外部服务同一张卡片里管理。
         'internal': {
-            'name': 'check-manage',
+            'name': INTERNAL_MCP_NAME,
             'url': MCP_SERVER_URL,
             'enabled': internal_mcp_enabled(),
         },
@@ -246,9 +246,9 @@ def update_internal_mcp():
     enabled = set_internal_mcp_enabled(bool(body.get('enabled', True)))
     from config import MCP_SERVER_URL
     state_text = '启用' if enabled else '停用'
-    log_operation('update', 'ai_mcp_internal', 'check-manage', '内置 MCP',
-                  f'{state_text}内置 MCP Server(check-manage)')
-    return jsonify({'enabled': enabled, 'name': 'check-manage', 'url': MCP_SERVER_URL})
+    log_operation('update', 'ai_mcp_internal', INTERNAL_MCP_NAME, '内置 MCP',
+                  f'{state_text}内置 MCP Server({INTERNAL_MCP_NAME})')
+    return jsonify({'enabled': enabled, 'name': INTERNAL_MCP_NAME, 'url': MCP_SERVER_URL})
 
 
 @ai_bp.route('/mcp-servers', methods=['POST'])

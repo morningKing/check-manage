@@ -56,7 +56,8 @@ from utils.workspace_outputs import list_session_files
 from utils.mention_files import inline_file_mentions
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.session_history import render_history_block
-from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
+from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
+    INTERNAL_MCP_NAME as MCP_NAME
 from utils import agent_ledger
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
@@ -77,8 +78,6 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
-
-MCP_NAME = 'check-manage'
 
 # SSE 存活参数（2026-10-09 生产间歇性卡顿修复）：聊天事件流是常驻 generator，
 # 原实现同步阻塞在上游 iter_lines（read_timeout=None）——上游无事件时它既不

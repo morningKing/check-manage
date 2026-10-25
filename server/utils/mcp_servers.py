@@ -18,6 +18,9 @@ class McpServerError(ValueError):
 
 VALID_TYPES = ('remote', 'local')
 
+# opencode.json 注入名（对外单一呈现名）。改名会破坏存量会话工作区，勿动。
+INTERNAL_MCP_NAME = 'check-manage'
+
 
 def _normalize(*, name, type, url, command, headers, environment, enabled):
     name = (name or '').strip()

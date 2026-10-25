@@ -346,10 +346,11 @@ def _prepare_workspace(user_id: str, session_id: str,
     # ensure_batch_permissions 幂等合并 permission 键（不动 MCP 段）。
     from config import (AI_SESSION_TTL_HOURS, MCP_SERVER_URL,
                         get_default_chat_model)
-    from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
+    from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
+        INTERNAL_MCP_NAME as MCP_NAME
     from utils.session_token import generate_token
     from utils.workspace import write_opencode_config
-    _mcp_name = 'check-manage'
+    _mcp_name = MCP_NAME
     write_opencode_config(
         ws, mcp_name=_mcp_name,
         mcp_url=(f'{MCP_SERVER_URL}/mcp?token='
