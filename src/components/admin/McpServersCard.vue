@@ -32,6 +32,7 @@
         <el-button size="small" text :loading="healthLoading" @click="checkInternalHealth">
           检测连接
         </el-button>
+        <el-button size="small" text @click="govOpen = true">工具治理</el-button>
         <el-switch
           :model-value="internalMcp.enabled"
           style="margin-left: auto"
@@ -39,7 +40,7 @@
         />
       </div>
       <div class="internal-mcp__desc">
-        平台自带 MCP，是 AI 助手数据查询、长期记忆、执行轨迹分析等平台工具的来源。禁用后仅影响之后新建/清空的会话；期间「执行轨迹分析」会拒绝执行并提示。
+        平台自带 MCP，是 AI 助手数据查询、长期记忆、执行轨迹分析等平台工具的来源。禁用后仅影响之后新建/清空的会话；期间「执行轨迹分析」会拒绝执行并提示。工具级开关（角色×矩阵，即时生效）见「工具治理」。
       </div>
     </div>
 
@@ -102,6 +103,8 @@
       <el-button type="primary" :loading="mcpSaving" @click="saveMcp">保存</el-button>
     </template>
   </el-dialog>
+
+  <McpToolGovernanceDrawer v-model="govOpen" />
 </template>
 
 <script setup lang="ts">
@@ -112,6 +115,7 @@ import {
   getInternalMcpHealth, setInternalMcpEnabled,
   type McpServer, type InternalMcp, type InternalMcpHealth,
 } from '@/api/aiMcpServers'
+import McpToolGovernanceDrawer from './McpToolGovernanceDrawer.vue'
 
 // --- External MCP servers ---------------------------------------------------
 const mcpServers = ref<McpServer[]>([])
@@ -127,6 +131,7 @@ const mcpForm = reactive({
 const internalMcp = ref<InternalMcp>({ name: 'check-manage', url: '', enabled: true })
 const internalHealth = ref<InternalMcpHealth | null>(null)
 const healthLoading = ref(false)
+const govOpen = ref(false)
 
 async function checkInternalHealth() {
   healthLoading.value = true

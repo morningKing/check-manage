@@ -1,7 +1,22 @@
 <script setup lang="ts">
-import type { McpServer } from '@/api/aiChat'
+import { computed } from 'vue'
+import type { McpServer, McpTool } from '@/api/aiChat'
 
-defineProps<{ servers: McpServer[] }>()
+const props = defineProps<{ servers: McpServer[] }>()
+
+/** 工具带 group_name 时按组分区（首现顺序）；缺组归「其他」。 */
+function groupTools(tools: McpTool[]): { title: string; tools: McpTool[] }[] {
+  const map = new Map<string, { title: string; tools: McpTool[] }>()
+  for (const t of tools) {
+    const title = t.group_name || '其他'
+    if (!map.has(title)) map.set(title, { title, tools: [] })
+    map.get(title)!.tools.push(t)
+  }
+  return [...map.values()]
+}
+
+const anyGrouped = computed(() =>
+  props.servers.some(s => s.tools.some(t => t.group_name)))
 </script>
 
 <template>
@@ -14,7 +29,17 @@ defineProps<{ servers: McpServer[] }>()
           <span class="mcp-server__name">{{ s.name }}</span>
           <span class="mcp-server__status">{{ s.status }}</span>
         </div>
-        <ul class="mcp-tools">
+        <template v-if="anyGrouped">
+          <div v-for="g in groupTools(s.tools)" :key="g.title" class="mcp-tools__group">
+            <div class="mcp-tools__group-title">{{ g.title }}（{{ g.tools.length }}）</div>
+            <ul class="mcp-tools">
+              <li v-for="t in g.tools" :key="t.name">
+                <code>{{ t.name }}</code><span v-if="t.description"> — {{ t.description }}</span>
+              </li>
+            </ul>
+          </div>
+        </template>
+        <ul v-else class="mcp-tools">
           <li v-for="t in s.tools" :key="t.name">
             <code>{{ t.name }}</code><span v-if="t.description"> — {{ t.description }}</span>
           </li>
@@ -48,4 +73,10 @@ defineProps<{ servers: McpServer[] }>()
 .mcp-tools li { line-height: 1.7; }
 .mcp-tools code { font-family: var(--el-font-family-mono, monospace); }
 .mcp-tools__empty { color: var(--el-text-color-secondary); list-style: none; }
+.mcp-tools__group { margin-top: 4px; }
+.mcp-tools__group-title {
+  font-weight: 600; font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 6px;
+}
 </style>

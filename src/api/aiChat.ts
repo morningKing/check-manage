@@ -120,7 +120,13 @@ export interface FileDiff {
   truncated: boolean
 }
 
-export interface McpTool { name: string; description: string }
+export interface McpTool {
+  name: string
+  description: string
+  /** mcp-server /tools 扩展的分组元数据（旧快照/外部源缺省时无此二字段） */
+  group?: string
+  group_name?: string
+}
 export interface McpServer { name: string; status: string; tools: McpTool[] }
 
 /** OpenCode 按工作区文件类型惰性启动的 LSP 服务（字段随版本可能有差异，宽松解析） */

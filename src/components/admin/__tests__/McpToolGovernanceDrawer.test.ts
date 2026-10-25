@@ -36,13 +36,13 @@ const stubs = {
 const FIXTURE = {
   groups: [
     { id: 'data-query', name: '数据查询', order: 1, tools: [
-      { name: 'query_collection', description: '按条件查询集合', access: 'read',
+      { name: 'query_collection', description: '按条件查询集合', access: 'read' as const,
         rules: { admin: true, developer: true, guest: false, 'kefu-guest': true } },
-      { name: 'export_collection_excel', description: '导出 Excel', access: 'read',
+      { name: 'export_collection_excel', description: '导出 Excel', access: 'read' as const,
         rules: { admin: true, developer: true, guest: false, 'kefu-guest': false } },
     ] },
     { id: 'exec', name: '通用执行与产物', order: 7, tools: [
-      { name: 'run_python', description: '执行 Python', access: 'write',
+      { name: 'run_python', description: '执行 Python', access: 'write' as const,
         rules: { admin: true, developer: true, guest: false, 'kefu-guest': false } },
     ] },
   ],

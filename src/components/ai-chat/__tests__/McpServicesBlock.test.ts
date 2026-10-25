@@ -25,4 +25,23 @@ describe('McpServicesBlock', () => {
     const w = mount(McpServicesBlock, { props: { servers: [] } })
     expect(w.text()).toContain('无法获取')
   })
+
+  it('按 group_name 分组渲染，缺失归「其他」', () => {
+    const w = mount(McpServicesBlock, {
+      props: {
+        servers: [
+          { name: 'check-manage', status: 'connected', tools: [
+            { name: 'query_collection', description: '查', group: 'data-query', group_name: '数据查询' },
+            { name: 'run_python', description: '跑', group: 'exec', group_name: '通用执行与产物' },
+            { name: 'mystery_tool', description: '无组' },
+          ] },
+        ],
+      },
+    })
+    const text = w.text()
+    expect(text).toContain('数据查询')
+    expect(text).toContain('通用执行与产物')
+    expect(text).toContain('其他')            // 无 group_name 的工具归「其他」
+    expect(text).toContain('mystery_tool')
+  })
 })
