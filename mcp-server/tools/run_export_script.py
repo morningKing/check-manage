@@ -1,6 +1,7 @@
 """Tool: run_export_script — 运行一个【已绑定】导出脚本，结果写入会话 outputs/ 并返回摘要。
 目标由脚本绑定推导（专项专用），调用方只给 script_id。"""
 import os
+from pathlib import Path
 from datetime import datetime
 
 import mcp.types as types
@@ -94,8 +95,7 @@ def handle(input: dict, ctx: ToolContext) -> dict:
         if not safe or safe in ('.', '..'):
             safe = f"{script_id}-{ts}{_EXT.get(row[3], '.dat')}"
         path = os.path.join(out_dir, safe)
-        with open(path, 'wb') as f:
-            f.write(result_bytes)
+        Path(path).write_bytes(result_bytes)
         preview = ''
         if (content_type or '').startswith(('text/', 'application/json')):
             preview = result_bytes[:1000].decode('utf-8', errors='replace')

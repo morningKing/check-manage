@@ -32,9 +32,10 @@ def test_runs_code_and_captures_stdout(tmp_path):
 
 def test_reports_files_written_to_outputs(tmp_path):
     code = (
+        "from pathlib import Path\n"
         "import os\n"
         "os.makedirs('outputs', exist_ok=True)\n"
-        "open('outputs/result.txt','w').write('done')\n"
+        "Path('outputs/result.txt').write_text('done', encoding='utf-8')\n"
         "print('wrote file')\n"
     )
     with patch('tools.run_python.get_db', _fake_db(str(tmp_path))):

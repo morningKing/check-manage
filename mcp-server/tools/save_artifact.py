@@ -3,6 +3,7 @@ so the user can download it. Lets the agent explicitly produce files instead of
 only emitting code blocks."""
 
 import os
+from pathlib import Path
 import mcp.types as types
 from db import get_db
 from context import ToolContext
@@ -72,7 +73,6 @@ def handle(input: dict, ctx: ToolContext) -> dict:
         raise SaveArtifactError("path escapes outputs/")
 
     text = content if isinstance(content, str) else str(content)
-    with open(dest, "w", encoding="utf-8") as f:
-        f.write(text)
+    Path(dest).write_text(text, encoding="utf-8")
 
     return {"saved": True, "path": f"outputs/{name}", "bytes": len(text.encode("utf-8"))}
