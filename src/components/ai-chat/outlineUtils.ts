@@ -14,6 +14,16 @@ export function nearestUserTurnSeq(messages: AiMessage[], upToIdx: number): numb
   return null
 }
 
+/** 最后一条已落库用户回合的 seq（scroll-spy 贴底特例：视口顶仍在倒数
+ *  第二轮内时，用户实际在读最后一轮 → 底部高亮最后一轮；无用户回合返回 null）。 */
+export function lastUserTurnSeq(messages: AiMessage[]): number | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m && m.role === 'user' && m.seq != null) return m.seq
+  }
+  return null
+}
+
 /** 用户消息 parts 的单行预览（≤160 字符）。 */
 export function previewOfParts(parts: AiContentPart[]): string {
   for (const p of parts) {

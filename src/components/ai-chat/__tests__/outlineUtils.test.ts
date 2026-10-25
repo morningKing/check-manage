@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nearestUserTurnSeq, previewOfParts } from '../outlineUtils'
+import { nearestUserTurnSeq, previewOfParts, lastUserTurnSeq } from '../outlineUtils'
 import type { AiMessage, AiContentPart } from '@/api/aiChat'
 
 const m = (id: string, role: AiMessage['role'], seq?: number): AiMessage =>
@@ -22,6 +22,25 @@ describe('nearestUserTurnSeq', () => {
   it('skips local user messages without seq', () => {
     const withLocal: AiMessage[] = [...msgs, { ...m('local_1', 'user'), seq: undefined }]
     expect(nearestUserTurnSeq(withLocal, 4)).toBe(8)
+  })
+})
+
+describe('lastUserTurnSeq', () => {
+  // 贴底特例（scroll-spy 尾节问题）：视口顶仍在倒数第二轮内时，用户实际
+  // 在读最后一轮 → 底部高亮最后一轮（TC-OUTLINE-03 语义）。
+  const msgs: AiMessage[] = [
+    m('u1', 'user', 2), m('a1', 'assistant', 3), m('u2', 'user', 6), m('a2', 'assistant', 7),
+  ]
+  it('returns the last persisted user turn regardless of trailing assistant messages', () => {
+    expect(lastUserTurnSeq(msgs)).toBe(6)
+  })
+  it('skips trailing local (no-seq) user messages', () => {
+    const withLocal: AiMessage[] = [...msgs, { ...m('local_9', 'user'), seq: undefined }]
+    expect(lastUserTurnSeq(withLocal)).toBe(6)
+  })
+  it('returns null when no persisted user turn exists', () => {
+    expect(lastUserTurnSeq([m('a0', 'assistant', 1)])).toBe(null)
+    expect(lastUserTurnSeq([])).toBe(null)
   })
 })
 

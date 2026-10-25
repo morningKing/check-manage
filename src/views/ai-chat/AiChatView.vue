@@ -52,11 +52,11 @@ import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vu
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
 import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, getBatchOfSession, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile, type SessionTurn } from '@/api/aiChat'
 import SessionOutlinePanel from '@/components/ai-chat/SessionOutlinePanel.vue'
-import { nearestUserTurnSeq, previewOfParts } from '@/components/ai-chat/outlineUtils'
+import { nearestUserTurnSeq, previewOfParts, lastUserTurnSeq } from '@/components/ai-chat/outlineUtils'
 import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
 import type { AiChatPromptTemplate } from '@/types/aiChatBatch'
-import { useChatScroll } from '@/composables/useChatScroll'
+import { useChatScroll, distanceFromBottom, SCROLL_BOTTOM_THRESHOLD } from '@/composables/useChatScroll'
 import { useTurnNotify } from '@/composables/useTurnNotify'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
@@ -664,6 +664,12 @@ function updateActiveTurn() {
   const id = activeId.value
   if (!el || !id) return
   const msgs = store.messages[id] ?? []
+  // 贴底特例（TOC scroll-spy 尾节问题）：滚到底时视口顶仍在倒数第二轮内，
+  // 但用户在读最后一轮 → 高亮最后一轮（TC-OUTLINE-03）。
+  if (distanceFromBottom(el) <= SCROLL_BOTTOM_THRESHOLD) {
+    activeTurnSeq.value = lastUserTurnSeq(msgs)
+    return
+  }
   const top = el.getBoundingClientRect().top + 8
   let mi = 0
   el.querySelectorAll<HTMLElement>('[data-msg-idx]').forEach((n) => {
