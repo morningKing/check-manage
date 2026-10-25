@@ -1154,6 +1154,57 @@ def get_messages(sid):
     })
 
 
+@ai_chat_bp.route('/sessions/<sid>/turns', methods=['GET'])
+@login_required
+def get_turns(sid):
+    """会话大纲（spec 2026-10-25-session-outline §4.1）：用户输入回合投影。
+
+    用户消息在会话内稀疏，不分页一次全量（兜底 LIMIT 500）；preview 为
+    单行摘要（text 优先，纯文件给文件名列表），空壳用户消息跳过。
+    """
+    user = flask_g.current_user
+    if not _load_session_for_user(sid, user['userId']):
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, seq, created_at, content FROM ai_chat_messages "
+            "WHERE session_id = %s AND role = 'user' ORDER BY seq LIMIT 500",
+            (sid,),
+        )
+        rows = cur.fetchall()
+    turns = []
+    for r in rows:
+        preview = _turn_preview(r[3])
+        if preview is None:
+            continue
+        turns.append({'id': r[0], 'seq': r[1],
+                      'createdAt': r[2].isoformat() if r[2] else None,
+                      'preview': preview})
+    return jsonify({'turns': turns})
+
+
+def _turn_preview(content, limit=160):
+    """从用户消息 content parts 提炼单行预览：text 优先，纯文件给文件名摘要。
+
+    返回 None 表示无任何可展示内容（调用方跳过该消息）。
+    """
+    parts = content if isinstance(content, list) else []
+    for p in parts:
+        if isinstance(p, dict) and p.get('type') == 'text':
+            text = ' '.join(str(p.get('text') or '').split()).strip()
+            if text:
+                return text[:limit]
+    names = [str(p.get('name') or '') for p in parts
+             if isinstance(p, dict) and p.get('type') == 'file' and p.get('name')]
+    if names:
+        shown = '、'.join(names[:3])
+        if len(names) > 3:
+            shown += f' 等 {len(names)} 个'
+        return ('📎 ' + shown)[:limit]
+    return None
+
+
 @ai_chat_bp.route('/sessions/<sid>/subtasks/<subtask_id>/messages', methods=['GET'])
 @login_required
 def get_subtask_messages_route(sid, subtask_id):
