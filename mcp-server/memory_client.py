@@ -1,9 +1,12 @@
-"""Thin urllib client for Flask's internal memory endpoints. Stdlib only (the
-MCP server's venv has no `requests`)."""
+"""Thin HTTP client for Flask's internal memory endpoints.
+
+Requests is available in the venv (pinned in pyproject for ai_create_data_page);
+the internal URL/token come from env, and `_check_url` clamps the target to
+loopback unless MCP_ALLOW_REMOTE_INTERNAL=1 (SSRF hardening, 6029266a).
+"""
 import os
-import json
-import urllib.request
-import urllib.error
+
+import requests
 
 FLASK_INTERNAL_URL = os.getenv('FLASK_INTERNAL_URL', 'http://127.0.0.1:3002')
 MCP_INTERNAL_TOKEN = os.getenv('MCP_INTERNAL_TOKEN', '')
@@ -27,18 +30,16 @@ _check_url(FLASK_INTERNAL_URL)
 
 
 def _post(path: str, payload: dict) -> dict:
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        FLASK_INTERNAL_URL + path, data=data, method='POST',
-        headers={'Content-Type': 'application/json', 'X-Internal-Token': MCP_INTERNAL_TOKEN},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f'memory endpoint {path} failed ({e.code})')
-    except urllib.error.URLError as e:
-        raise RuntimeError(f'memory endpoint {path} unreachable: {e.reason}')
+        resp = requests.post(
+            FLASK_INTERNAL_URL + path, json=payload, timeout=10,
+            headers={'X-Internal-Token': MCP_INTERNAL_TOKEN},
+        )
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f'memory endpoint {path} unreachable: {e}')
+    if resp.status_code >= 400:
+        raise RuntimeError(f'memory endpoint {path} failed ({resp.status_code})')
+    return resp.json()
 
 
 def search(user_id: str, query: str, limit: int = 5) -> list:
