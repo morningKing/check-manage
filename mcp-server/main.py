@@ -42,7 +42,7 @@ def _resolve_context() -> ToolContext:
 
 
 # Defer tool registration so /health is reachable even if a tool module errors
-from tools import register_all, tool_specs
+from tools import register_all
 register_all(mcp_server)
 
 # 元数据快照 + 矩阵默认行播种（spec §5.1/§4.3）；失败不阻断——执法走
