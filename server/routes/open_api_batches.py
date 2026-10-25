@@ -737,8 +737,10 @@ def create_takeover_link(batch_id, child_id):
     if resolve_err:
         return resolve_err
     body = request.get_json(silent=True) or {}
+    raw_ttl = body.get('ttlHours')
     try:
-        ttl_hours = int(body.get('ttlHours') or 24)
+        # 未传 → None 透传：默认值由仓储按部署级配置（TAKEOVER_TTL_DEFAULT_HOURS）应用
+        ttl_hours = None if raw_ttl is None else int(raw_ttl)
     except (TypeError, ValueError):
         return err('ttlHours 不合法', 'INVALID_TTL', 400)
     token, expires_at = takeover_repo.create_takeover_token(

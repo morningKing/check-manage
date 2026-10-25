@@ -150,3 +150,20 @@ def test_issue_link_passes_ttl_through_unclamped(client, mock_conn, mock_cursor)
                            json={'ttlHours': 9999})
     assert resp.status_code == 201
     assert mk.call_args.kwargs['ttl_hours'] == 9999
+
+
+def test_issue_link_absent_ttl_passes_none(client, mock_conn, mock_cursor):
+    """未传 ttlHours → 仓储收到 None（由仓储应用部署级默认
+    TAKEOVER_TTL_DEFAULT_HOURS），路由层不再自带 `or 24` 硬编码默认。"""
+    _auth_passes(mock_cursor)
+    fake_exp = datetime.now(timezone.utc) + timedelta(hours=24)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key()), \
+         patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}), \
+         patch('routes.open_api_batches._resolve_child',
+               return_value=({'id': 's1', 'batch_seq': 1}, None)), \
+         patch('utils.takeover_repo.create_takeover_token',
+               return_value=('tk_none', fake_exp)) as mk:
+        resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR, json={})
+    assert resp.status_code == 201
+    assert mk.call_args.kwargs['ttl_hours'] is None

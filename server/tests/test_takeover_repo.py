@@ -82,3 +82,41 @@ def test_ttl_clamped(db_conn, takeover_ids):
     _, exp = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=9999)
     assert exp - datetime.now(timezone.utc) <= timedelta(days=7, minutes=1)
+
+
+def test_ttl_deployment_configurable(db_conn, takeover_ids, monkeypatch):
+    """TTL 部署级可配置（2026-10-25 需求）：TAKEOVER_TTL_MAX_HOURS /
+    TAKEOVER_TTL_DEFAULT_HOURS 调用时读 env——部署改 env 重启生效，测试
+    monkeypatch 免重启。硬下限 1h 防误配 0/负值；非法 env 回落内置默认。"""
+    now = datetime.now(timezone.utc)
+
+    # 上限可配：显式 100h 请求被钳到配置上限 48h
+    monkeypatch.setenv('TAKEOVER_TTL_MAX_HOURS', '48')
+    _, exp = takeover_repo.create_takeover_token(
+        takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=100)
+    assert timedelta(hours=47, minutes=55) < exp - now <= timedelta(hours=48, minutes=5)
+
+    # 默认可配：不传 ttlHours → TAKEOVER_TTL_DEFAULT_HOURS=3
+    monkeypatch.setenv('TAKEOVER_TTL_DEFAULT_HOURS', '3')
+    _, exp2 = takeover_repo.create_takeover_token(
+        takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1')
+    assert timedelta(hours=2, minutes=55) < exp2 - now <= timedelta(hours=3, minutes=5)
+
+    # 默认超上限时钳入 [1, max]：default=72 且 max=48 → 48h
+    monkeypatch.setenv('TAKEOVER_TTL_DEFAULT_HOURS', '72')
+    _, exp3 = takeover_repo.create_takeover_token(
+        takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1')
+    assert timedelta(hours=47, minutes=55) < exp3 - now <= timedelta(hours=48, minutes=5)
+
+    # 非法 env 回落内置上限 168；显式 9999 仍被钳
+    monkeypatch.delenv('TAKEOVER_TTL_DEFAULT_HOURS')
+    monkeypatch.setenv('TAKEOVER_TTL_MAX_HOURS', 'abc')
+    _, exp4 = takeover_repo.create_takeover_token(
+        takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=9999)
+    assert exp4 - now <= timedelta(days=7, minutes=5)
+
+    # 上限误配 0 → 钉到 1h 硬下限（显式 50h 请求也只给 1h）
+    monkeypatch.setenv('TAKEOVER_TTL_MAX_HOURS', '0')
+    _, exp5 = takeover_repo.create_takeover_token(
+        takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=50)
+    assert exp5 - now <= timedelta(hours=1, minutes=5)

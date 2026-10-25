@@ -29,7 +29,7 @@
  */
 import { test, expect } from '@playwright/test'
 import {
-  api, openApi, createApiKey, deleteApiKey, screenshot,
+  api, openApi, createApiKey, deleteApiKey, screenshot, restartBackend,
 } from './ai-full/helpers'
 import { newId, cleanupSessionsByPrefix } from './ai-full/db-helpers'
 import { dbSeed } from './ai-full/batch/toolbox'
@@ -170,4 +170,28 @@ test('负例：伪造令牌错误卡；新签发→吊销→原链接刷新失�
   await expect(card2).toBeVisible()
   await expect(card2).toContainText('链接无效或已过期')
   await screenshot(page, 'external-takeover-error')
+})
+
+test('TTL 部署级可配置：TAKEOVER_TTL_MAX_HOURS / TAKEOVER_TTL_DEFAULT_HOURS 真实重启生效', async ({ request }) => {
+  // 真实链路证明（非单测 monkeypatch）：带 env 覆盖重启后端 → 签发响应的
+  // expiresAt 反映配置——显式 100h 被钳到 max=48h；未传 ttlHours 用
+  // default=3h（两值不同才能区分「默认生效」与「上限钳制」两条路径）。
+  const hoursFromNow = (iso: unknown) =>
+    (new Date(String(iso)).getTime() - Date.now()) / 3_600_000
+  try {
+    await restartBackend({ TAKEOVER_TTL_MAX_HOURS: '48', TAKEOVER_TTL_DEFAULT_HOURS: '3' })
+    const clamped = await openApi(request, KEY, 'POST',
+      `/v1/ai-batches/${BATCH_ID}/sessions/${SID}/takeover-link`, { ttlHours: 100 })
+    expect(clamped.status, JSON.stringify(clamped.json)).toBe(201)
+    expect(hoursFromNow(clamped.json.expiresAt)).toBeGreaterThan(47.9)
+    expect(hoursFromNow(clamped.json.expiresAt)).toBeLessThanOrEqual(48.1)
+
+    const byDefault = await openApi(request, KEY, 'POST',
+      `/v1/ai-batches/${BATCH_ID}/sessions/${SID}/takeover-link`, {})
+    expect(byDefault.status, JSON.stringify(byDefault.json)).toBe(201)
+    expect(hoursFromNow(byDefault.json.expiresAt)).toBeGreaterThan(2.9)
+    expect(hoursFromNow(byDefault.json.expiresAt)).toBeLessThanOrEqual(3.1)
+  } finally {
+    await restartBackend()   // 无参恢复默认 env（不留下 48/3 的本机覆盖）
+  }
 })
