@@ -102,8 +102,11 @@
     参数等内部字段，口径对齐既有对外子会话 messages 端点的裁剪）；
   - `POST /external/takeover/session/messages?t=`——发消息（D3 状态校验 +
     continue 语义；prompt ≤ 20000 字符，与开放 API 一致）；
-  - `GET /external/takeover/session/events?t=`——SSE 实时流（令牌走查询参数，
-    对齐 `?access_token=` 先例）。
+  - ~~`GET /external/takeover/session/events?t=`（2026-10-25 修订取消）~~：
+    批子会话由 worker 独家写入、回合结束才整体落库
+    （`batch_engine._persist_conversation`），流式传输对该数据流无增益；内部
+    会话 SSE 与 OpenCode 事件代理/持久化归属深度耦合（`ai_chat.py:1447`），
+    不值得为新鉴权面复制。实时性改为前端 3s 轮询 messages+status。
 - **新表** `batch_takeover_tokens`：`id, api_key_id, batch_id, session_id,
   owner_user_id, token_hash, expires_at, revoked_at, created_at, last_used_at`。
   迁移按项目规约**双注册**（`migrations/` + `app.py` 显式注册表块）。
@@ -125,7 +128,8 @@
   - 消息列表：assistant 内容复用 `MarkdownView`（mermaid/katex/echarts/svg/
     plantuml 渲染全部继承，零额外工作）；用户消息简单气泡；
   - 输入框：Enter 发送；running 态给出「请外部系统先暂停」的结构化错误提示；
-  - 实时性：SSE 增量追加 + 断线降级轮询兜底。
+  - 实时性：3s 轮询 messages+childStatus（页面隐藏时暂停，visibilitychange）；
+    发送后立即触发一次拉取。（2026-10-25 修订：弃 SSE，理由见 §5）
 - 不引入主布局、菜单、登录 store；令牌只存在于 URL 与内存，**不写
   localStorage**（共享电脑风险）。
 
