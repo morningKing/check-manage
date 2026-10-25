@@ -69,6 +69,30 @@ OPENCODE_LOG = os.path.join(os.path.dirname(__file__), 'oc-serve.log')
 SE_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'suggest-editor-server'))
 SE_WS_PORT = int(os.environ.get('SE_WS_PORT', '1234'))
 SE_LOG = os.path.join(os.path.dirname(__file__), 'proxy-se.log')
+# se 进程 reconcile 轮询间隔（开关经 plugin_registry 的 3s TTL 缓存，最坏
+# ~13s 生效——管理员关插件不需要亚秒级，别把 DB 查询频率打太高）。
+SE_RECONCILE_INTERVAL_S = 10.0
+
+
+def se_plugin_enabled() -> bool:
+    """智能写作插件开关（隧道门与进程停启共用）。直查库（经 plugin_registry
+    TTL 缓存）。库不可达 fail-open：开关面故障不应立刻掐断在线协作，
+    进程轮询下一轮自愈。"""
+    try:
+        from utils.plugin_registry import plugin_enabled
+        return plugin_enabled('smart-writing')
+    except Exception:
+        return True
+
+
+def _se_process_action(enabled: bool, running: bool) -> str:
+    """纯决策函数（可单测）：'start' / 'stop' / 'noop'。"""
+    if enabled and not running:
+        return 'start'
+    if not enabled and running:
+        return 'stop'
+    return 'noop'
+
 
 # Ensure mimetypes are correct on Windows
 mimetypes.add_type('application/javascript', '.js')
@@ -317,6 +341,22 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         打开 / 上游不可达 / 非 101 响应 / 关闭（含上下行字节数）——排障时与
         proxy-se.log 的 [ws] 行按时间对齐即可还原一个连接的全生命周期。
         """
+        if not se_plugin_enabled():
+            # 生产插件门（plugin-architecture spec §5）：禁用即拒连，且在
+            # 建上游连接**之前**——se 进程此刻多半已被 reconcile 线程停掉，
+            # 去连只会白等 10s 超时。响应写法对齐下方 502 分支（JSON +
+            # Content-Length），不用静态文件的 send_error：这是 WS/API 端点，
+            # 浏览器端 JS 要读 error body；错误码与蓝图门（404
+            # PLUGIN_DISABLED）同形，只是隧道层用 403 表"拒连"。
+            msg = b'{"error":{"code":"PLUGIN_DISABLED","plugin":"smart-writing"}}'
+            print(f'  [WS] 隧道拒连 {self.path.split("?", 1)[0]}'
+                  f'（smart-writing 插件已禁用）', flush=True)
+            self.send_response(403)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', len(msg))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
         path = _safe_upstream_path(self.path)
         # 只留路径与调试用查询片段（去掉可能存在的 token）
         path_display = path.split('?', 1)[0]
@@ -644,6 +684,47 @@ def wait_for_se(timeout=15):
     return False
 
 
+def _se_reconcile_loop(se_state, procs, interval=SE_RECONCILE_INTERVAL_S):
+    """suggest-editor 进程 reconcile 守护线程（daemon）：每 interval 秒按
+    插件开关与进程存活状态拉起/停止 se——决策走 _se_process_action（纯函数，
+    可单测），开关变更因此**无需重启 proxy**。
+
+    se_state 是主循环与本线程共享的可变容器（{'proc': Popen | None}）。
+    procs 只追加不摘除：shutdown 路径按 poll() 跳过已退出的进程，死进程
+    留在表里无害，也免去跨线程的列表摘除。
+
+    fail-open：循环里任何异常只记日志、绝不退出——这个线程一死，开关变更
+    就再也无人执行。拉起失败（依赖缺失）设 60s 退避，防 10s 一条 WARN 刷屏。
+    """
+    retry_after = 0.0
+    while True:
+        try:
+            proc = se_state.get('proc')
+            running = proc is not None and proc.poll() is None
+            action = _se_process_action(se_plugin_enabled(), running)
+            if action == 'start' and time.time() >= retry_after:
+                new_proc = start_se()   # 依赖缺失时它自己会打 WARN
+                if new_proc is not None:
+                    se_state['proc'] = new_proc
+                    procs.append(new_proc)
+                    retry_after = 0.0
+                    print(f'[SE] 插件已启用 → 拉起 suggest-editor '
+                          f'(pid {new_proc.pid})', flush=True)
+                else:
+                    retry_after = time.time() + 60.0
+            elif action == 'stop':
+                try:
+                    _kill_tree(proc)   # terminate 的树杀形态（POSIX 即 terminate）
+                    proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001 —— 已死/杀失败都不阻塞置 None
+                    pass
+                se_state['proc'] = None
+                print('[SE] 插件已禁用 → 停止 suggest-editor', flush=True)
+        except Exception as e:  # noqa: BLE001 —— fail-open：任何异常不停轮
+            print(f'[SE] reconcile 异常（忽略，下一轮重试）：{e}', flush=True)
+        time.sleep(interval)
+
+
 def check_opencode(base_url, timeout=3):
     """Probe whether OpenCode is reachable."""
     try:
@@ -820,8 +901,15 @@ def main():
                   f'see {OPENCODE_LOG}', flush=True)
 
     # 智能写作（suggest-editor）Node 服务：Yjs 协作 WebSocket。失败只降级写作功能。
+    # 插件禁用时启动即不拉起（reconcile 线程待开关打开后自动补启）。
     print('[4/5] Starting suggest-editor (Yjs collaboration) ...', flush=True)
-    se_proc = start_se()
+    se_state = {'proc': None}   # 主循环与 reconcile 线程共享的 se 进程容器
+    if se_plugin_enabled():
+        se_proc = start_se()
+        se_state['proc'] = se_proc
+    else:
+        se_proc = None
+        print('       smart-writing 插件已禁用：suggest-editor 不启动', flush=True)
     if se_proc is not None:
         procs.append(se_proc)
         if wait_for_se():
@@ -832,6 +920,11 @@ def main():
         else:
             print('       [WARN] suggest-editor slow to respond but still running; '
                   f'see {SE_LOG}', flush=True)
+
+    # se 进程 reconcile 守护线程（daemon）：开关变更无需重启 proxy——每 10s
+    # 按开关与进程存活状态拉起/停止（决策见 _se_process_action）。
+    threading.Thread(target=_se_reconcile_loop, args=(se_state, procs),
+                     daemon=True, name='se-reconcile').start()
 
     # Start reverse proxy (threaded so long-lived SSE streams don't block others)
     print('[5/5] Starting reverse proxy ...', flush=True)
