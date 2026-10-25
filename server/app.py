@@ -68,6 +68,7 @@ from routes.import_runs import import_runs_bp
 from routes.kefu_admin import kefu_admin_bp
 from routes.kefu_public import kefu_public_bp
 from routes.suggest_editor import suggest_editor_bp
+from routes.plugins_admin import plugins_bp
 from utils.logging_setup import setup_logging
 
 # Configure logging (console + rotating file) before anything logs. Skip the
@@ -651,6 +652,8 @@ app.register_blueprint(kefu_admin_bp)
 app.register_blueprint(kefu_public_bp)
 # 智能写作（suggest-editor）必须在 catch-all dynamic_bp 之前注册
 app.register_blueprint(suggest_editor_bp)
+# 第一方插件管理 API（plugin-architecture spec §4）——同样先于 catch-all
+app.register_blueprint(plugins_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start).
