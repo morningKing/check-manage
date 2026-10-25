@@ -5,6 +5,7 @@
 batch_engine.get_worker / operation_log._write_log_row 打桩做行为隔离；
 限速走真 RateLimiter——每测换新实例 + 调低阈值，确定性无睡眠。
 """
+import logging
 import os
 import sys
 from contextlib import contextmanager
@@ -251,6 +252,41 @@ def test_send_rate_limited_second_hit_429(client, mock_conn, mock_cursor,
     assert second.status_code == 429
     assert second.get_json() == {'error': '请求过于频繁，请稍后再试'}
     assert second.headers['Cache-Control'] == 'no-store'
+
+
+@pytest.mark.parametrize('bad', [123, ['接着做'], {'k': 1}, True])
+def test_send_prompt_non_string_400(client, mock_conn, mock_cursor, bad):
+    """公开输入不做假设：非字符串 prompt 类型门 400，不得到达 strip/500。"""
+    p_tok, p_db, p_cc, p_gw, p_wl = _send_patches(
+        mock_conn, _tok(), 'completed')
+    with p_tok, p_db, p_cc as cc, p_gw, p_wl:
+        resp = client.post(f'{BASE}/session/messages?t={VALID_T}',
+                           json={'prompt': bad})
+    assert resp.status_code == 400
+    cc.assert_not_called()
+
+
+@pytest.mark.parametrize('break_what', ['owner_select', 'log_writer'])
+def test_send_oplog_failure_never_breaks_202(client, mock_conn, mock_cursor,
+                                             caplog, break_what):
+    """oplog 链路任何一环炸掉都只留日志：continue_child 已提交、notify 已触发
+    之后，users SELECT 或 _write_log_row 抛异常不得把发送变成 500。"""
+    p_tok, p_db, p_cc, p_gw, p_wl = _send_patches(mock_conn, _tok(), 'paused')
+    with p_tok, p_db, p_cc as cc, p_gw as gw, p_wl as wl:
+        if break_what == 'owner_select':
+            mock_cursor.fetchone.side_effect = [('paused',),
+                                                RuntimeError('users boom')]
+        else:
+            wl.side_effect = RuntimeError('writer boom')
+        with caplog.at_level(logging.ERROR):
+            resp = client.post(f'{BASE}/session/messages?t={VALID_T}',
+                               json={'prompt': '接着做'})
+    assert resp.status_code == 202
+    assert resp.get_json() == {'queued': True}
+    assert cc.call_args.kwargs == {'repark': True}
+    gw.return_value.notify.assert_called_once_with()
+    assert any('takeover oplog failed' in rec.getMessage()
+               for rec in caplog.records)
 
 
 def test_log_takeover_writes_with_owner_identity(client, mock_conn,

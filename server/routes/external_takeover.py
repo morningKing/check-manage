@@ -36,19 +36,24 @@ def _no_store(resp):
 def _log_takeover(action: str, target_id: str, target_name: str, description: str):
     """公开蓝图无 g.current_user / g.api_key_info——以令牌属主身份落 oplog
     （operation_log._write_log_row 是显式身份入口；发消息路径频控 10/min，
-    一次 users 查询可忽略）。"""
-    r = getattr(g, 'takeover', None)
-    if not r:
-        return
-    from utils.operation_log import _write_log_row
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT username, role FROM users WHERE id = %s",
-                        (r['owner_user_id'],))
-            row = cur.fetchone()
-    _write_log_row(r['owner_user_id'], row[0] if row else '',
-                   (row[1] if row else '') or 'external-takeover',
-                   action, 'ai_chat_session', target_id, target_name, description)
+    一次 users 查询可忽略）。整段 try/except：调用点位于 continue_child
+    已提交、worker 已被唤醒之后，oplog 任何一环失败（含前置 users SELECT）
+    只留日志，绝不把已成功的接管发送变成 500。"""
+    try:
+        r = getattr(g, 'takeover', None)
+        if not r:
+            return
+        from utils.operation_log import _write_log_row
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT username, role FROM users WHERE id = %s",
+                            (r['owner_user_id'],))
+                row = cur.fetchone()
+        _write_log_row(r['owner_user_id'], row[0] if row else '',
+                       (row[1] if row else '') or 'external-takeover',
+                       action, 'ai_chat_session', target_id, target_name, description)
+    except Exception:
+        logger.exception('takeover oplog failed')
 
 
 def _guard():
@@ -110,7 +115,11 @@ def takeover_send():
     if denied:
         return denied
     body = request.get_json(silent=True) or {}
-    prompt = (body.get('prompt') or '').strip()
+    prompt = body.get('prompt')
+    if not isinstance(prompt, str):
+        # 公开输入不假设类型：int/list/dict 走类型门 400，而不是 strip() 500
+        return {'error': 'prompt required'}, 400
+    prompt = prompt.strip()
     if not prompt:
         return {'error': 'prompt required'}, 400
     if len(prompt) > MAX_PROMPT_CHARS:
