@@ -625,6 +625,19 @@ try:
 except Exception as _e:
     logging.warning('platform plugins migration on boot failed: %s', _e)
 
+# 内置 MCP 工具治理两表（2026-10-25 工具治理 spec）。幂等建表；矩阵默认行
+# 由 mcp-server 启动同步播种（工具清单真相源在 mcp-server manifest）。
+try:
+    import importlib.util as _ilu_mtg
+    _mp_mtg = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'migrations', '2026_10_25c_mcp_tool_governance.py')
+    _spec_mtg = _ilu_mtg.spec_from_file_location('_mcp_tool_governance_boot', _mp_mtg)
+    _m_mtg = _ilu_mtg.module_from_spec(_spec_mtg)
+    _spec_mtg.loader.exec_module(_m_mtg)
+    _m_mtg.run()
+except Exception as _e:
+    logging.warning('mcp tool governance migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
