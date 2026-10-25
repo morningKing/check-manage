@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from db import get_db
 from auth import login_required, require_permission
 from utils.operation_log import log_operation
+from utils import plugin_registry
 import json
 import psycopg2.errors
 
@@ -121,7 +122,7 @@ def list_menus():
                 if script_row:
                     menu_dict['exportScriptName'] = script_row[0]
             result.append(menu_dict)
-    return jsonify(result)
+    return jsonify(plugin_registry.filter_menu_items(result))
 
 
 @menus_bp.route('/menus/<menu_id>', methods=['GET'])
