@@ -354,11 +354,13 @@ async function selectSearchHit(h: AiSessionSearchHit) {
       await batches.ensureBatchInList(h.batchId)
       await batches.selectBatch(h.batchId)
       await selectBatchChild(h.id)
+      if (h.messageId) await jumpToMessage(h.id, h.messageId, h.seq ?? null)
     } catch { ElMessage.error('打开批任务子会话失败') }
     return
   }
   clearSessionSearch()
   await selectSession(h.id)
+  if (h.messageId) await jumpToMessage(h.id, h.messageId, h.seq ?? null)
 }
 
 // 关键词高亮（先转义再包 <mark>，XSS 安全）
