@@ -12,7 +12,10 @@ from utils.rate_limit import RateLimiter
 logger = logging.getLogger(__name__)
 
 MAX_PROMPT_CHARS = 20000
-SEND_PER_MINUTE, SEND_PER_DAY = 10, 200        # 令牌桶
+READ_PER_MINUTE, READ_PER_DAY = 60, 2000       # 读桶：GET /session 轮询安全
+# （前端 3s 轮询 → 20/min；终审 I-1：读/发共桶会让轮询 ~27s 后撞墙、
+# ~20 分钟烧光日桶冻结发送）
+SEND_PER_MINUTE, SEND_PER_DAY = 10, 200        # 发送桶
 IP_PER_MINUTE, IP_PER_DAY = 60, 1000           # IP 桶（固定地板，对齐 kefu）
 
 external_takeover_bp = Blueprint('external_takeover', __name__,
@@ -56,13 +59,21 @@ def _log_takeover(action: str, target_id: str, target_name: str, description: st
         logger.exception('takeover oplog failed')
 
 
-def _guard():
-    """令牌校验 + 限速。失败时直接返回 (body, status)，成功返回 None 并写 g.takeover。"""
+def _guard(kind: str):
+    """令牌校验 + 限速。失败时直接返回 (body, status)，成功返回 None 并写 g.takeover。
+    kind='read'|'send' 分桶（终审 I-1）：GET /session* 走读桶（tkr:），只有
+    POST /session/messages 消耗发送预算（tks:）；IP 桶两者共用。"""
     row = takeover_repo.resolve_takeover_token(request.args.get('t'))
     if not row:
         return _INVALID
-    key = f"tk:{row['token_id']}:{_client_ip()}"
-    if not _limiter.allow(key, SEND_PER_MINUTE, SEND_PER_DAY):
+    if kind == 'send':
+        per_minute, per_day = SEND_PER_MINUTE, SEND_PER_DAY
+        prefix = 'tks'
+    else:
+        per_minute, per_day = READ_PER_MINUTE, READ_PER_DAY
+        prefix = 'tkr'
+    key = f"{prefix}:{row['token_id']}:{_client_ip()}"
+    if not _limiter.allow(key, per_minute, per_day):
         return {'error': '请求过于频繁，请稍后再试'}, 429
     if not _limiter.allow(f"tkip:{_client_ip()}", IP_PER_MINUTE, IP_PER_DAY):
         return {'error': '请求过于频繁，请稍后再试'}, 429
@@ -82,7 +93,7 @@ def _child_status_fresh() -> str:
 
 @external_takeover_bp.get('/session')
 def takeover_session_info():
-    denied = _guard()
+    denied = _guard('read')
     if denied:
         return denied
     r = g.takeover
@@ -94,7 +105,7 @@ def takeover_session_info():
 
 @external_takeover_bp.get('/session/messages')
 def takeover_messages():
-    denied = _guard()
+    denied = _guard('read')
     if denied:
         return denied
     r = g.takeover
@@ -111,7 +122,7 @@ def takeover_messages():
 
 @external_takeover_bp.post('/session/messages')
 def takeover_send():
-    denied = _guard()
+    denied = _guard('send')
     if denied:
         return denied
     body = request.get_json(silent=True) or {}

@@ -327,6 +327,39 @@ def test_send_oplog_failure_never_breaks_202(client, mock_conn, mock_cursor,
                for rec in caplog.records)
 
 
+def test_read_bucket_independent_of_send_bucket(client, mock_conn, mock_cursor,
+                                                monkeypatch):
+    """终审 I-1：读/发分桶——轮询连续 GET 撞读桶 429 时不得殃及发送桶
+    （前端 3s 轮询 20/min 若共桶会烧光 10/min 发送预算与 200/日桶）。"""
+    monkeypatch.setattr(ext, 'READ_PER_MINUTE', 3)
+    tok = _tok()
+    with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+               return_value=tok), \
+         patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)):
+        codes = [client.get(f'{BASE}/session?t={VALID_T}').status_code
+                 for _ in range(4)]
+        assert codes == [200, 200, 200, 429]
+        # 429 后读桶不再放行（固定窗口语义自证）
+        assert client.get(f'{BASE}/session?t={VALID_T}').status_code == 429
+    # 同窗口内发送不受读桶影响：发送桶独立计数
+    p_tok, p_db, p_cc, p_gw, p_wl = _send_patches(mock_conn, tok, 'completed')
+    with p_tok, p_db, p_cc, p_gw, p_wl:
+        resp = client.post(f'{BASE}/session/messages?t={VALID_T}',
+                           json={'prompt': '接着做'})
+    assert resp.status_code == 202
+
+
+def test_default_read_budget_safe_for_polling(client, mock_conn, monkeypatch):
+    """默认 60/min 读预算下连续 20 次读全 200——钉住轮询安全余量
+    （3s 间隔 → 20/min），防止未来把读桶又收窄到轮询预算以下。无 sleep。"""
+    with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+               return_value=_tok()), \
+         patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)):
+        for _ in range(20):
+            resp = client.get(f'{BASE}/session?t={VALID_T}')
+            assert resp.status_code == 200, f'unexpected {resp.status_code}'
+
+
 def test_log_takeover_writes_with_owner_identity(client, mock_conn,
                                                  mock_cursor):
     """发消息以令牌属主身份落 oplog：_write_log_row 收到
