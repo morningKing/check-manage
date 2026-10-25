@@ -45,6 +45,14 @@ def _resolve_context() -> ToolContext:
 from tools import register_all, tool_specs
 register_all(mcp_server)
 
+# 元数据快照 + 矩阵默认行播种（spec §5.1/§4.3）；失败不阻断——执法走
+# rbac 代码默认语义，管理页可能显示旧快照。
+try:
+    from sync_metadata import sync_metadata_to_db
+    print("mcp tool metadata synced:", sync_metadata_to_db())
+except Exception as _e:
+    print(f"WARNING: mcp tool metadata sync failed: {_e}")
+
 session_manager = StreamableHTTPSessionManager(app=mcp_server, stateless=True)
 
 
@@ -85,7 +93,8 @@ def health():
 
 @app.get("/tools")
 def tools():
-    return [{"name": n, "description": d} for n, d in tool_specs()]
+    from tools import tool_meta
+    return tool_meta()
 
 
 # Mount MCP at /mcp as an ASGI handler
