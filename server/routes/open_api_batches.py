@@ -26,7 +26,7 @@ from utils.batch_repo import (append_to_batch, cancel_batch,
                               get_session_usage, list_batches,
                               reset_failed_to_pending)
 from utils.filename import safe_filename
-from utils.operation_log import log_api_operation
+from utils.operation_log import log_api_operation, log_operation
 # 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
 # rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
 from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
@@ -721,6 +721,59 @@ def session_messages(batch_id, child_id):
         'total': messages['total'],
         'truncated': messages['truncated'],
     })
+
+
+@open_api_batches_bp.post('/<batch_id>/sessions/<child_id>/takeover-link')
+@api_key_required
+@require_bound_key
+def create_takeover_link(batch_id, child_id):
+    """签发人工接管链接（spec D1）：短时令牌，仅存哈希，可吊销。"""
+    from utils import takeover_repo
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
+    body = request.get_json(silent=True) or {}
+    try:
+        ttl_hours = int(body.get('ttlHours') or 24)
+    except (TypeError, ValueError):
+        return err('ttlHours 不合法', 'INVALID_TTL', 400)
+    token, expires_at = takeover_repo.create_takeover_token(
+        key['ownerUserId'], batch_id, child['id'], key['id'], ttl_hours=ttl_hours)
+    log_operation('ai.batch_takeover_link_created', 'ai_batch', batch_id,
+                  d.get('name') or batch_id, f'签发子任务接管链接 seq={child.get("batch_seq")}')
+    return jsonify({'token': token,
+                    'path': f'/takeover/session?t={token}',
+                    'expiresAt': expires_at.isoformat()}), 201
+
+
+@open_api_batches_bp.post('/<batch_id>/sessions/<child_id>/takeover-link/revoke')
+@api_key_required
+@require_bound_key
+def revoke_takeover_link(batch_id, child_id):
+    """吊销接管令牌：三元组全匹配才生效（他人/他批令牌一律 404）。"""
+    from utils import takeover_repo
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
+    body = request.get_json(silent=True) or {}
+    token_id = (body.get('tokenId') or '').strip()
+    if not token_id:
+        return err('tokenId required', 'INVALID_TOKEN_ID', 400)
+    ok = takeover_repo.revoke_takeover_token(
+        key['ownerUserId'], batch_id, child['id'], token_id)
+    if not ok:
+        return err('令牌不存在', NOT_FOUND, 404)
+    log_operation('ai.batch_takeover_link_revoked', 'ai_batch', batch_id,
+                  d.get('name') or batch_id, f'吊销接管令牌 {token_id}')
+    return jsonify({'revoked': True})
 
 
 @open_api_batches_bp.get('/<batch_id>/sessions/<child_id>/files')
