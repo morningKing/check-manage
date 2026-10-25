@@ -11,10 +11,52 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 BASE = '/v1/ai-batches'
 HDR = {'X-API-Key': 'cm_x'}
+
+
+# ---------------------------------------------------------------------------
+# 合跑隔离（回归修复）：conftest 的 `app` 夹具是「先 patch db.get_db/db.pool，
+# 再 `from app import app`」——进程内第一次用到它时，整个 app 导入图都在
+# patch 窗口内首次加载，所有顶层 `from db import get_db` 的模块（auth /
+# utils.ai_query / utils.memory / utils.gate_policy_repo / utils.agent_ledger /
+# routes.* …）从此永久绑住那个 yield 一次性 mock_conn 的 lambda；patch 退出
+# 只还原 db.get_db 本身，from-import 副本不回头。同进程后续的真库用例
+# （batch_execution_safety_p0 的门禁四例）就会读到假连接：
+# merged_action_checks 查无批次 → applicable=0 → 门禁被误判 'skipped'
+# （应为 'inconclusive'）。conftest 的 _rebind_module_get_db_to_real 只 Heal
+# 4 个模块、test_batch_execution_safety_p0._rebind_real_db 不认别名
+# （_default/_default_get_db），所以在本套件的每个用例前后把已导入模块上
+# 泄漏的 get_db 绑定统一指回真实 db.get_db。
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _heal_leaked_get_db_bindings():
+    import db as _db
+
+    def _heal():
+        real = _db.get_db
+        for name, mod in list(sys.modules.items()):
+            if mod is None or not (name.startswith(('routes.', 'utils.'))
+                                   or name in ('auth', 'app')):
+                continue
+            for attr in ('get_db', '_default', '_default_get_db'):
+                cur = getattr(mod, attr, None)
+                if cur is not None and cur is not real and callable(cur):
+                    try:
+                        setattr(mod, attr, real)
+                    except (AttributeError, TypeError):
+                        pass
+        # app 夹具留下的 MagicMock 池：下次 get_db() 需重建真池
+        if hasattr(_db.pool, '_mock_name'):
+            _db.pool = None
+
+    _heal()
+    yield
+    _heal()
 
 
 @contextmanager
