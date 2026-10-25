@@ -597,6 +597,18 @@ try:
 except Exception as _e:
     logging.warning('suggest editor attachments migration on boot failed: %s', _e)
 
+# 批任务接管令牌表 + continue_repark 列（对外接管页，2026-10-25 spec）
+try:
+    import importlib.util as _ilu_bt
+    _mp_bt = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'migrations', '2026_10_25_batch_takeover.py')
+    _spec_bt = _ilu_bt.spec_from_file_location('_batch_takeover_boot', _mp_bt)
+    _m_bt = _ilu_bt.module_from_spec(_spec_bt)
+    _spec_bt.loader.exec_module(_m_bt)
+    _m_bt.run()
+except Exception as _e:
+    logging.warning('batch takeover migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
