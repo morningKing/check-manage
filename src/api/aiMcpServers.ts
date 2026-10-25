@@ -56,3 +56,36 @@ export async function setInternalMcpEnabled(enabled: boolean): Promise<InternalM
   const { data } = await service.put('/ai/mcp-servers/internal', { enabled })
   return data
 }
+
+/** 工具治理（内置 MCP 工具的角色×矩阵）。 */
+export interface McpToolRuleInput { role: string; tool_name: string; allowed: boolean }
+
+export interface McpGovernanceTool {
+  name: string
+  description: string
+  access: 'read' | 'write'
+  rules: Record<string, boolean>
+}
+
+export interface McpGovernanceGroup {
+  id: string
+  name: string
+  order: number
+  tools: McpGovernanceTool[]
+}
+
+export interface McpGovernance {
+  groups: McpGovernanceGroup[]
+  roles: { role: string; label: string }[]
+}
+
+export function getMcpTools(): Promise<McpGovernance> {
+  return get<McpGovernance>('/ai/mcp-tools')
+}
+
+export async function putMcpToolRules(
+  rules: McpToolRuleInput[],
+): Promise<{ updated: number; diff: string }> {
+  const { data } = await service.put('/ai/mcp-tool-rules', { rules })
+  return data
+}
