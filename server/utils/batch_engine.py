@@ -3116,6 +3116,17 @@ class BatchWorker:
         计数与批次状态重算；未命中按控制标志重定向或忽略，**不**重复计数。"""
         _require_fencing(fencing_token)
         from utils import batch_repo
+        reparked = batch_repo.try_repark_transition(
+            session_id, generation=self._resolve_generation(session_id, generation),
+            fencing_token=fencing_token)
+        if reparked is not None:
+            # 接管轮收口（spec D3）：回 paused 交还外部系统，不进终态不计数。
+            from utils import execution_audit
+            execution_audit.finish_latest_running(session_id, 'stopped',
+                                                  error_code='TAKEOVER_REPARK')
+            from utils import skill_fit as _sfit
+            _sfit.compute_for_session(session_id)
+            return
         res = batch_repo.transition_child(
             session_id, 'completed',
             generation=self._resolve_generation(session_id, generation),
@@ -3143,6 +3154,17 @@ class BatchWorker:
                      fencing_token: int | None = None):
         _require_fencing(fencing_token)
         from utils import batch_repo, execution_audit
+        reparked = batch_repo.try_repark_transition(
+            session_id, generation=self._resolve_generation(session_id, generation),
+            fencing_token=fencing_token)
+        if reparked is not None:
+            # 接管轮收口（spec D3）：回 paused 交还外部系统，不进终态不计数。
+            # 必须在 failed 审计之前判定——接管轮按 stopped 收口，绝不记 failed。
+            execution_audit.finish_latest_running(session_id, 'stopped',
+                                                  error_code='TAKEOVER_REPARK')
+            from utils import skill_fit as _sfit
+            _sfit.compute_for_session(session_id)
+            return
         # 本 attempt 确实跑完并失败：无论会话行 CAS 是否命中都收口审计，
         # 不留悬挂 running attempt（F9 的终态侧）。
         execution_audit.finish_latest_running(
