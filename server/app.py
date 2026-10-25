@@ -651,6 +651,12 @@ app.register_blueprint(workflows_bp)
 app.register_blueprint(kefu_admin_bp)
 app.register_blueprint(kefu_public_bp)
 # 智能写作（suggest-editor）必须在 catch-all dynamic_bp 之前注册
+# 第一方插件门（plugin-architecture spec §5）：必须在 register 之前挂——
+# Flask 蓝图首次注册后 setup 锁定，之后再 before_request 会 AssertionError。
+# smart-writing 禁用即全蓝图 41 端点 404 PLUGIN_DISABLED（gate 内含
+# url_prefix 一致性启动校验）。
+from utils.plugin_registry import gate_plugin  # noqa: E402
+gate_plugin(suggest_editor_bp, 'smart-writing')
 app.register_blueprint(suggest_editor_bp)
 # 第一方插件管理 API（plugin-architecture spec §4）——同样先于 catch-all
 app.register_blueprint(plugins_bp)
