@@ -2,6 +2,20 @@ import pytest
 from context import ToolContext
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_matrix(monkeypatch):
+    """矩阵是全局 DB 状态：固定 kefu 白名单行为，隔离真库矩阵的不确定性。"""
+    import rbac
+    rbac._reset_cache()
+    monkeypatch.setattr(rbac, "_fetch_rules", lambda: {
+        ("kefu-guest", "query_collection"): True,
+        ("kefu-guest", "list_collections"): True,
+        ("kefu-guest", "read_upload"): True,
+    })
+    yield
+    rbac._reset_cache()
+
+
 def test_dispatch_blocks_public_kefu_run_python():
     from tools import _dispatch_tool
     ctx = ToolContext(session_id="s1", user_id="kefu-bot", role="kefu-guest")

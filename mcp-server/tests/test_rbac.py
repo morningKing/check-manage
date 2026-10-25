@@ -1,26 +1,62 @@
-from rbac import is_readonly, is_public_kefu, tool_allowed, KEFU_TOOL_ALLOWLIST
+# -*- coding: utf-8 -*-
+"""rbac 矩阵语义：行命中/行缺失默认/DB失败分层回落/TTL 缓存。"""
+import pytest
+
+import rbac
 
 
-def test_is_readonly():
-    assert is_readonly("guest") and is_readonly("kefu-guest")
-    assert not is_readonly("developer") and not is_readonly("admin")
+@pytest.fixture(autouse=True)
+def _fresh_cache():
+    rbac._reset_cache()
+    yield
+    rbac._reset_cache()
 
 
-def test_is_public_kefu():
-    assert is_public_kefu("kefu-guest")
-    assert not is_public_kefu("guest") and not is_public_kefu("admin")
+def test_legacy_predicates():
+    assert rbac.is_readonly("guest") and rbac.is_readonly("kefu-guest")
+    assert not rbac.is_readonly("developer")
+    assert rbac.is_public_kefu("kefu-guest") and not rbac.is_public_kefu("guest")
 
 
-def test_tool_allowed_public_kefu_restricted():
-    assert tool_allowed("query_collection", "kefu-guest")
-    assert tool_allowed("read_upload", "kefu-guest")
-    assert tool_allowed("list_collections", "kefu-guest")
-    assert not tool_allowed("run_python", "kefu-guest")
-    assert not tool_allowed("save_artifact", "kefu-guest")
-    assert not tool_allowed("read_data_file", "kefu-guest")
-    assert not tool_allowed("memory_add", "kefu-guest")
+def test_matrix_row_hit(monkeypatch):
+    monkeypatch.setattr(rbac, "_fetch_rules", lambda: {
+        ("developer", "run_python"): False,
+        ("kefu-guest", "query_collection"): True,
+    })
+    assert rbac.tool_allowed("run_python", "developer") is False
+    assert rbac.tool_allowed("query_collection", "kefu-guest") is True
+    # 未播种行 → 代码默认
+    assert rbac.tool_allowed("run_python", "admin") is True
 
 
-def test_tool_allowed_others_unrestricted():
-    for role in ("developer", "admin", "guest"):
-        assert tool_allowed("run_python", role)
+def test_missing_row_defaults(monkeypatch):
+    monkeypatch.setattr(rbac, "_fetch_rules", lambda: {})
+    assert rbac.tool_allowed("run_python", "admin") is True
+    assert rbac.tool_allowed("run_python", "developer") is True
+    assert rbac.tool_allowed("run_python", "guest") is False        # spec §8 Q1 收紧
+    assert rbac.tool_allowed("anything", "kefu-guest") is False
+    assert rbac.tool_allowed("whatever", "custom-role") is False    # spec §8 Q2
+
+
+def test_db_failure_layered_fallback(monkeypatch):
+    def _boom():
+        raise RuntimeError("db down")
+    monkeypatch.setattr(rbac, "_fetch_rules", _boom)
+    assert rbac.tool_allowed("query_collection", "kefu-guest") is True   # 白名单兜底
+    assert rbac.tool_allowed("run_python", "kefu-guest") is False
+    assert rbac.tool_allowed("query_collection", "guest") is True        # manifest read 工具
+    assert rbac.tool_allowed("run_python", "guest") is False             # write 工具拒绝
+    assert rbac.tool_allowed("run_python", "admin") is True              # fail-open
+    assert rbac.tool_allowed("run_python", "custom-role") is True        # fail-open
+
+
+def test_ttl_cache_reuse(monkeypatch):
+    calls = {"n": 0}
+
+    def _counting():
+        calls["n"] += 1
+        return {}
+    monkeypatch.setattr(rbac, "_fetch_rules", _counting)
+    rbac.tool_allowed("run_python", "admin")
+    rbac.tool_allowed("run_python", "admin")
+    assert calls["n"] == 1                # TTL 内不重读
