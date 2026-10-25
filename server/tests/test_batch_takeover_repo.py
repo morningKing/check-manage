@@ -172,3 +172,31 @@ def test_resume_child_clears_repark_flag(db_conn, seeded_paused_child):
     batch_repo.resume_child(seeded_paused_child['uid'], seeded_paused_child['bid'],
                             seeded_paused_child['sid'])
     assert _fetch_status_flag(db_conn, seeded_paused_child['sid']) == ('pending', False)
+
+
+def test_mark_cancelled_wins_over_repark_flag(db_conn, seeded_paused_child, monkeypatch):
+    """取消优先于接管标志（spec §4.2 精神）：running + continue_repark=true 的
+    人工接管轮运行期间，worker 取消收口（_mark_cancelled）必须立即生效——
+    expect_repark 不得挡取消（否则 CAS 0 行 → miss 被丢弃 → 任务继续跑到
+    repark，取消静默失效）。命中后标志随 SET 恒清，cancelled 记 failed 聚合。"""
+    from utils.batch_engine import BatchWorker
+    # 播种接管轮中间态：running + 标志 + cancel_requested + 已知 gen/token
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running', continue_repark=true, "
+                    "cancel_requested=true, execution_generation=3, fencing_token=7 "
+                    "WHERE id=%s", (seeded_paused_child['sid'],))
+    db_conn.commit()
+    # 轻量实例（绕过 __init__ 的线程/租约）+ generation 直通 + 收口旁路桩
+    w = BatchWorker.__new__(BatchWorker)
+    monkeypatch.setattr(BatchWorker, '_resolve_generation',
+                        lambda self, sid, gen: gen)
+    import utils.execution_audit as _audit
+    import utils.skill_fit as _sfit
+    monkeypatch.setattr(_audit, 'finish_latest_running', lambda *a, **k: None)
+    monkeypatch.setattr(_sfit, 'compute_for_session', lambda *a, **k: None)
+    w._mark_cancelled(seeded_paused_child['sid'], seeded_paused_child['bid'],
+                      generation=3, fencing_token=7)
+    status, repark = _fetch_status_flag(db_conn, seeded_paused_child['sid'])
+    assert (status, repark) == ('cancelled', False)
+    # cancelled 记入 failed 聚合（既有语义），done 不动
+    assert _fetch_counters(db_conn, seeded_paused_child['bid']) == (0, 1)

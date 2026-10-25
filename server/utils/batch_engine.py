@@ -3186,8 +3186,11 @@ class BatchWorker:
             session_id, 'cancelled',
             generation=self._resolve_generation(session_id, generation),
             error_message='已被调用方取消', expect_cancel=True,
-            # cancel 优先（spec §4.2）：并存 pause 标志不再挡取消收口
-            expect_pause=None, fencing_token=fencing_token,
+            # cancel 优先（spec §4.2）：并存 pause 标志不再挡取消收口；
+            # expect_repark=None 同理——人工接管轮（continue_repark=true）
+            # 运行期间取消必须立即生效，不得等 repark 落 paused 再取消。
+            expect_pause=None, expect_repark=None,
+            fencing_token=fencing_token,
             count='failed', turn_status='cancelled')
         if res is None:
             self._on_transition_miss(session_id, batch_id, generation,
