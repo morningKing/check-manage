@@ -50,7 +50,9 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, getBatchOfSession, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, getBatchOfSession, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile, type SessionTurn } from '@/api/aiChat'
+import SessionOutlinePanel from '@/components/ai-chat/SessionOutlinePanel.vue'
+import { nearestUserTurnSeq, previewOfParts } from '@/components/ai-chat/outlineUtils'
 import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
 import type { AiChatPromptTemplate } from '@/types/aiChatBatch'
@@ -607,6 +609,74 @@ function locateTodoStep(msgIdx: number) {
     locatedTimer = setTimeout(() => { locatedMsgIdx.value = null }, 2400)
   })
 }
+
+// ---- 会话大纲（右侧面板，spec 2026-10-25-session-outline §6）：
+// 用户输入导航 + 跨分页精准定位 + 滚动跟随 ----
+const outlineCollapsed = ref<boolean>(getStorage(STORAGE_KEYS.AI_CHAT_OUTLINE_COLLAPSED, false))
+function toggleOutline() {
+  outlineCollapsed.value = !outlineCollapsed.value
+  setStorage(STORAGE_KEYS.AI_CHAT_OUTLINE_COLLAPSED, outlineCollapsed.value)
+}
+// 大纲 = 后端 turns + 内存里仍为 local_* 的在途用户消息（发送成功后气泡 id
+// 被就地改写成服务端 id，改写后自然只从 turns 来，不存在重复）
+const outlineTurns = computed<SessionTurn[]>(() => {
+  const id = activeId.value
+  if (!id) return []
+  const serverTurns = store.turnsBySession[id] ?? []
+  const local = (store.messages[id] ?? [])
+    .filter(m => m.role === 'user' && m.id.startsWith('local_'))
+    .map(m => ({ id: m.id, seq: m.seq, createdAt: m.createdAt, preview: previewOfParts(m.content), local: true }))
+  return [...serverTurns, ...local]
+})
+const activeTurnSeq = ref<number | null>(null)
+// 点击脉冲：id 版（todo 面板 locatedMsgIdx 是下标版，两者并存；历史前插不打歪 id 锚点）
+const locatedMsgId = ref<string | null>(null)
+let locatedIdTimer: ReturnType<typeof setTimeout> | null = null
+function locateMessageById(mid: string) {
+  locatedMsgId.value = null
+  void nextTick(() => {
+    document.querySelector(`[data-msg-id="${CSS.escape(mid)}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    locatedMsgId.value = mid
+    if (locatedIdTimer) clearTimeout(locatedIdTimer)
+    locatedIdTimer = setTimeout(() => { locatedMsgId.value = null }, 2400)
+  })
+}
+async function jumpToMessage(sid: string, messageId: string, seq: number | null) {
+  if (seq == null || !(await store.ensureLoadedUntil(sid, seq))) {
+    void store.loadTurns(sid)
+    ElMessage.warning('该消息可能已被删除')
+    return
+  }
+  locateMessageById(messageId)
+}
+async function locateTurn(t: SessionTurn) {
+  const id = activeId.value
+  if (!id) return
+  if (t.seq == null) { locateMessageById(t.id); return }  // 本地在途消息必在窗口内
+  await jumpToMessage(id, t.id, t.seq)
+}
+// scroll-spy：视口顶部覆盖到哪条消息 → 大纲跟随高亮其所属回合
+function updateActiveTurn() {
+  const el = getScrollEl()
+  const id = activeId.value
+  if (!el || !id) return
+  const msgs = store.messages[id] ?? []
+  const top = el.getBoundingClientRect().top + 8
+  let mi = 0
+  el.querySelectorAll<HTMLElement>('[data-msg-idx]').forEach((n) => {
+    const idx = Number(n.dataset.msgIdx)
+    if (!Number.isNaN(idx) && n.getBoundingClientRect().top <= top) mi = Math.max(mi, idx)
+  })
+  activeTurnSeq.value = nearestUserTurnSeq(msgs, mi)
+}
+let outlineSpyTimer: ReturnType<typeof setTimeout> | null = null
+function onChatScrollAll() {
+  onChatScroll()  // 既有贴底/未读逻辑（useChatScroll）
+  if (outlineSpyTimer) return
+  outlineSpyTimer = setTimeout(() => { outlineSpyTimer = null; updateActiveTurn() }, 200)
+}
+watch(() => messages.value.length, () => { void nextTick(updateActiveTurn) })
 // 产出文件按目录分组，每个目录一个可折叠分组（默认展开）。
 const groupedOutputs = computed(() => groupFilesByDir(outputs.value))
 const outputsCollapsed = reactive<Record<string, boolean>>({})
@@ -1523,7 +1593,7 @@ function onKey(e: Event) {
         <ElIcon class="spin"><Loading /></ElIcon> 与服务端连接断开，正在重连…
       </div>
       <div class="ai-chat__messages-wrap">
-      <ElScrollbar ref="scroller" class="ai-chat__messages" @scroll="onChatScroll">
+      <ElScrollbar ref="scroller" class="ai-chat__messages" @scroll="onChatScrollAll">
         <div v-if="!activeId" class="ai-chat__welcome">
           <ElEmpty description="开启一个会话，向 AI 助手提问或上传文件">
             <ElButton type="primary" :icon="Plus" @click="newSession">开启新会话</ElButton>
@@ -1539,8 +1609,9 @@ function onKey(e: Event) {
           <div class="ai-thread">
             <div
               v-for="(m, mi) in messages" :key="m.id"
-              class="msg" :class="[`msg--${m.role}`, { 'msg--located': locatedMsgIdx === mi }]"
+              class="msg" :class="[`msg--${m.role}`, { 'msg--located': locatedMsgIdx === mi || locatedMsgId === m.id }]"
               :data-msg-idx="mi"
+              :data-msg-id="m.id"
             >
               <div class="msg__role" v-if="m.role !== 'user' && !isRunResultOnly(m)">AI 助手</div>
               <Bubble
@@ -1823,6 +1894,11 @@ function onKey(e: Event) {
           </div>
         </template>
       </ElScrollbar>
+        <button
+          v-if="activeId && outlineCollapsed" type="button" class="ai-chat__outline-open"
+          title="展开会话大纲" aria-label="展开会话大纲" data-test="outline-open"
+          @click="toggleOutline"
+        >☰</button>
         <!-- 流式自动滚动（F4）：用户上滑后出现，显示未读数；点击回到底部并恢复跟随 -->
         <transition name="jump-fade">
           <button
@@ -2006,6 +2082,19 @@ function onKey(e: Event) {
       </div>
     </section>
 
+    <!-- 会话大纲右栏：全部用户输入，点击精准定位（spec 2026-10-25-session-outline） -->
+    <aside v-if="activeId && !outlineCollapsed" class="ai-chat__outline" data-test="session-outline-panel">
+      <SessionOutlinePanel
+        :turns="outlineTurns"
+        :active-seq="activeTurnSeq"
+        :located-id="locatedMsgId"
+        :error="!!store.turnsError[activeId]"
+        @locate="locateTurn"
+        @retry="activeId && store.loadTurns(activeId)"
+        @collapse="toggleOutline"
+      />
+    </aside>
+
     <!-- 制品预览面板（Claude 风格，含版本切换） -->
     <ElDrawer v-model="previewOpen" :title="preview?.filename || '预览'" direction="rtl" size="52%">
       <div class="preview-body">
@@ -2121,6 +2210,21 @@ function onKey(e: Event) {
   cursor: col-resize;
   background: transparent;
   transition: background 0.15s;
+}
+.ai-chat__outline {
+  flex-shrink: 0;
+  width: 260px;
+  border-left: 1px solid var(--el-border-color-lighter);
+  background: var(--el-bg-color);
+  overflow: hidden;
+}
+.ai-chat__outline-open {
+  position: absolute; top: 10px; right: 12px; z-index: 5;
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--el-border-color-lighter);
+  background: var(--el-bg-color-overlay); color: var(--el-text-color-secondary);
+  cursor: pointer; font-size: 14px; line-height: 1;
+  &:hover { color: var(--el-color-primary); border-color: var(--el-color-primary-light-5); }
 }
 .ai-chat__sidebar-resizer:hover,
 .ai-chat__sidebar-resizer:active { background: var(--el-color-primary-light-5); }

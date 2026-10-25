@@ -30,6 +30,8 @@ export const STORAGE_KEYS = {
   /** AI 助手侧边栏三个分区（会话/批任务/AI定时任务）的折叠状态 */
   AI_CHAT_SIDEBAR_SECTIONS: 'check-manage:aiChatSidebarSections',
   AI_CHAT_SIDEBAR_WIDTH: 'check-manage:aiChatSidebarWidth',
+  /** AI 对话页会话大纲右栏折叠状态 */
+  AI_CHAT_OUTLINE_COLLAPSED: 'check-manage:aiChatOutlineCollapsed',
   /** AI 会话 PlantUML 渲染服务器（自建服务覆盖；未设置时用默认公共服务） */
   AI_CHAT_PLANTUML_SERVER: 'check-manage:ai-chat:plantumlServer',
 } as const
