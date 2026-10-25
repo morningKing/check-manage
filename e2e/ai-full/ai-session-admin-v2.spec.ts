@@ -132,7 +132,10 @@ test('TC-SESS-03 详情抽屉：基本信息/对话历史/文件列表 + 下载�
 test('TC-SESS-04 v2 归档：UI 归档 active 会话 + oplog 留痕；批控会话 409', async ({ page, request }) => {
   const key = newId('arch-')
   const sid = await seedPlainSession({ key, status: 'active' })
-  const running = await seedRunningChild({})
+  // lease:'future' 必带：NULL 租约的 running 行会被 _reconcile_stale_running
+  // 当孤儿重排（无 oc 会话→pending），真 worker 认领 e2e-no-such-agent 秒级
+  // failed → 归档检查放行 200，用例时序型假失败（worker 扫描节奏敏感）
+  const running = await seedRunningChild({ lease: 'future' })
   try {
     await gotoWithAuth(page, '/admin/ai-execution?tab=sessions')
     const row = page.locator('.el-table__row', { hasText: `AITEST-SESSV2-${key}` }).first()
