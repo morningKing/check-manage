@@ -5,6 +5,9 @@ from context import ToolContext
 
 NAME = "list_export_scripts"
 
+from tools.registry import register_meta
+register_meta(NAME, group='exec', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

@@ -17,6 +17,9 @@ from tools._graph_common import (
 
 NAME = "graph_neighbors"
 
+from tools.registry import register_meta
+register_meta(NAME, group='graph', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

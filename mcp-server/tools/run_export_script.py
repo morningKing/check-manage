@@ -13,6 +13,9 @@ from utils.export_runner import (
 
 NAME = "run_export_script"
 
+from tools.registry import register_meta
+register_meta(NAME, group='exec', access='write')
+
 _EXT = {'json': '.json', 'csv': '.csv', 'xml': '.xml', 'txt': '.txt', 'html': '.html'}
 
 TOOL = types.Tool(

@@ -26,6 +26,9 @@ from rbac import is_readonly
 
 NAME = "run_python"
 
+from tools.registry import register_meta
+register_meta(NAME, group='exec', access='write')
+
 _TIMEOUT = 30          # seconds
 _MAX_OUT = 8000        # chars of stdout/stderr returned
 

@@ -11,6 +11,9 @@ from rbac import is_readonly
 
 NAME = "save_artifact"
 
+from tools.registry import register_meta
+register_meta(NAME, group='exec', access='write')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

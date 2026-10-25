@@ -17,6 +17,9 @@ from tools._graph_common import (
 
 NAME = "graph_traverse"
 
+from tools.registry import register_meta
+register_meta(NAME, group='graph', access='read')
+
 MAX_DEPTH = 5
 DEFAULT_DEPTH = 2
 DEFAULT_MAX_NODES = 200

@@ -15,6 +15,9 @@ from context import ToolContext
 
 NAME = "batch_children_status"
 
+from tools.registry import register_meta
+register_meta(NAME, group='batch', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

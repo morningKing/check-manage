@@ -32,6 +32,9 @@ from context import ToolContext
 
 NAME = "ai_create_data_page"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-write', access='write')
+
 # 仓库内 server/ 目录(mcp-server 的同级目录,app_config 已依赖该约定)
 _SERVER_DIR = Path(__file__).resolve().parents[2] / 'server'
 if str(_SERVER_DIR) not in sys.path:

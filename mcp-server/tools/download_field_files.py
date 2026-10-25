@@ -33,6 +33,9 @@ from query_engine import _order_clause, _build_label_map
 
 NAME = "download_field_files"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-query', access='read')
+
 FILE_CONTROL_TYPES = ("file", "image")
 DEFAULT_MAX_FILES = 100
 MAX_FILES = 500

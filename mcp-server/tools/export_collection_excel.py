@@ -16,6 +16,9 @@ from collection_resolve import resolve_collection
 
 NAME = "export_collection_excel"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-query', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

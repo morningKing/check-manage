@@ -13,6 +13,9 @@ from context import ToolContext
 
 NAME = "analyze_trace"
 
+from tools.registry import register_meta
+register_meta(NAME, group='trace', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

@@ -24,6 +24,9 @@ from tools._data_api import DataApiError, ensure_writable, execute
 
 NAME = "data_create_records"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-write', access='write')
+
 MAX_RECORDS = 50
 
 TOOL = types.Tool(

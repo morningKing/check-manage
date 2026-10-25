@@ -14,6 +14,9 @@ from tools._data_api import DataApiError, ensure_writable, execute
 
 NAME = "data_update_record"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-write', access='write')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

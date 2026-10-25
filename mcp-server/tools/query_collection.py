@@ -18,6 +18,9 @@ from collection_resolve import resolve_collection
 
 NAME = "query_collection"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-query', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description=(

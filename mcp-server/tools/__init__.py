@@ -47,6 +47,9 @@ _TOOLS = {
     batch_children_search.NAME: (batch_children_search.TOOL, batch_children_search.handle),
 }
 
+from .registry import validate_registry
+validate_registry(set(_TOOLS))
+
 
 def tool_specs() -> list[tuple[str, str]]:
     """(name, description) for every registered tool — used by GET /tools."""
@@ -88,3 +91,20 @@ def register_all(server: Server) -> None:
         from main import _resolve_context  # lazy import to avoid cycle
         ctx = _resolve_context()
         return _dispatch_tool(name, arguments or {}, ctx)
+
+
+def tool_meta() -> list:
+    """名称+描述（TOOL spec）+分组/读写元数据（registry）——/tools 端点与
+    启动快照同步共用，按 (group_order, name) 排序。"""
+    from .registry import GROUPS, meta_of
+    out = []
+    for spec, _ in _TOOLS.values():
+        m = meta_of(spec.name)
+        if m is None:
+            continue  # validate_registry 已确保不会发生
+        g = GROUPS[m[0]]
+        out.append({'name': spec.name, 'description': spec.description or '',
+                    'group': g.id, 'group_name': g.name,
+                    'group_order': g.order, 'access': m[1]})
+    out.sort(key=lambda d: (d['group_order'], d['name']))
+    return out

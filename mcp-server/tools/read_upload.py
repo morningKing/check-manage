@@ -11,6 +11,9 @@ from context import ToolContext
 
 NAME = "read_upload"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-query', access='read')
+
 _MAX_BYTES = 200_000
 
 TOOL = types.Tool(

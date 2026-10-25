@@ -26,6 +26,9 @@ from tools.batch_children_status import _STATUS_ZH
 
 NAME = "batch_children_search"
 
+from tools.registry import register_meta
+register_meta(NAME, group='batch', access='read')
+
 _STATUSES = sorted(_STATUS_ZH)
 _GATE_STATUSES = ('passed', 'failed', 'skipped', 'inconclusive', 'unchecked')
 _MAX_LIMIT = 500

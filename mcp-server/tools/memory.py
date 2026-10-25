@@ -22,6 +22,11 @@ DELETE = types.Tool(
     inputSchema={"type": "object", "properties": {"memoryId": {"type": "string"}}, "required": ["memoryId"]},
 )
 
+from tools.registry import register_meta
+register_meta("memory_search", group='memory', access='read')
+register_meta("memory_add", group='memory', access='write')
+register_meta("memory_delete", group='memory', access='write')
+
 
 def handle_search(args: dict, ctx: ToolContext) -> str:
     if is_public_kefu(ctx.role):

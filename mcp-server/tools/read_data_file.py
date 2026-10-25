@@ -26,6 +26,9 @@ from collection_resolve import resolve_collection
 
 
 NAME = "read_data_file"
+
+from tools.registry import register_meta
+register_meta(NAME, group='data-query', access='read')
 _MAX_BYTES = 200_000  # 200 KB inline cap, same as read_upload
 
 TOOL = types.Tool(

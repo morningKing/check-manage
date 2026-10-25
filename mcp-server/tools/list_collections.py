@@ -7,6 +7,9 @@ from context import ToolContext
 
 NAME = "list_collections"
 
+from tools.registry import register_meta
+register_meta(NAME, group='data-query', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description="List business data collections visible to the caller.",

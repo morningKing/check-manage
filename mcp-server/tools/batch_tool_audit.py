@@ -20,6 +20,9 @@ from context import ToolContext
 
 NAME = "batch_tool_audit"
 
+from tools.registry import register_meta
+register_meta(NAME, group='batch', access='read')
+
 _MAX_TEXT = 600
 _MAX_CLAIM = 400
 

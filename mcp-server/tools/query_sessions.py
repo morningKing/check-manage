@@ -12,6 +12,9 @@ from context import ToolContext
 
 NAME = "query_sessions"
 
+from tools.registry import register_meta
+register_meta(NAME, group='trace', access='read')
+
 TOOL = types.Tool(
     name=NAME,
     description=(
