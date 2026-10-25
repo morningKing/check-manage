@@ -9,6 +9,9 @@ def test_catalog_has_expected_keys():
     assert 'admin.users' in keys
     assert 'admin.roles' in keys
     assert 'admin.backup' in keys
+    # 功能插件开关权限（plugin-architecture spec §4；角色管理 UI 按
+    # 本目录渲染，缺键即对自定义角色不可见不可授——Task 2 review 发现）
+    assert 'admin.plugins' in keys
     # every entry has key + label + group
     for entry in PERMISSION_CATALOG:
         assert entry['key'] and entry['label'] and entry['group']

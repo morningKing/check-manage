@@ -126,6 +126,9 @@
           @save="handleSaveWidget"
         />
       </el-tab-pane>
+      <el-tab-pane label="功能插件" name="plugins">
+        <PluginToggleTable />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -145,6 +148,7 @@ import { useSystemConfigStore } from '@/stores'
 import WidgetEditDialog from './components/WidgetEditDialog.vue'
 import HomeLayoutEditor from '@/components/admin/HomeLayoutEditor.vue'
 import HomeBlockPalette from '@/components/admin/HomeBlockPalette.vue'
+import PluginToggleTable from '@/components/admin/PluginToggleTable.vue'
 import type { WidgetConfig, WidgetType, WidgetLayout, WidgetLayoutUpdateItem, CreatableWidgetType } from '@/types'
 
 // ==================== Store ====================

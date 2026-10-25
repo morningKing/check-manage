@@ -28,6 +28,7 @@ PERMISSION_CATALOG = [
     {'key': 'admin.ai_runtime_restart', 'label': 'OpenCode 运行时重启', 'group': '平台管理'},
     {'key': 'admin.ai_runtime_force',   'label': 'OpenCode 强制重启',   'group': '平台管理'},
     {'key': 'admin.workflows',          'label': '工作流',     'group': '平台管理'},
+    {'key': 'admin.plugins',            'label': '功能插件',   'group': '平台管理'},
     {'key': 'admin.export_scripts',     'label': '导出脚本',   'group': '数据工具'},
     {'key': 'admin.validation_scripts', 'label': '校验脚本',   'group': '数据工具'},
     {'key': 'admin.etl_tasks',          'label': 'ETL 管理',  'group': '数据工具'},
