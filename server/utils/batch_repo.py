@@ -89,21 +89,25 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                      gate_error: str | None = None,
                      expect_cancel: bool | None = False,
                      expect_pause: bool | None = False,
+                     expect_repark: bool | None = False,
                      count: str | None = None,
                      turn_status: str | None = None,
                      fencing_token: int) -> dict | None:
     """P0 CAS 终态转移（ai-harness-p0 spec §6.1）——终态写入的唯一入口。
 
-    WHERE 带 status='running' + execution_generation + cancel/pause 标志期望；
-    rowcount=0 即写回过期（stale worker / 已被并发收口），返回 None，调用方
-    不得改状态、计数或消息。rowcount=1 时在同一事务内完成三件事再提交：
-    批次计数 +1（count='done'/'failed'）→ 批次状态重算 → active turn 收口，
-    消灭「计数已加、状态未写」的中间态。
+    WHERE 带 status='running' + execution_generation + cancel/pause/repark
+    标志期望；rowcount=0 即写回过期（stale worker / 已被并发收口），返回
+    None，调用方不得改状态、计数或消息。rowcount=1 时在同一事务内完成三件
+    事再提交：批次计数 +1（count='done'/'failed'）→ 批次状态重算 → active
+    turn 收口，消灭「计数已加、状态未写」的中间态。
 
     `generation` 是 claim 时捕获的 execution_generation；不匹配即 0 行。
-    expect_cancel/expect_pause 三态：False=要求未置位（done/failed/paused）、
-    True=要求已置位（cancelled）、None=不关心（cancel 优先语义下，取消收口
-    不应再被并存的 pause 标志挡住）。
+    expect_cancel/expect_pause/expect_repark 三态：False=要求未置位
+    （done/failed/paused）、True=要求已置位（cancelled / 接管轮 repark）、
+    None=不关心（cancel 优先语义下，取消收口不应再被并存的 pause 标志
+    挡住；expect_repark=None 供不想被接管标志影响的常规路径显式表态）。
+    SET 恒清 continue_repark=false：接管收口（try_repark_transition）在此
+    消费掉标志，其余路径本就不该带标志——防御性默认清除，对既有路径无害。
     `fencing_token` **必填**（M6，10 号 §3.3）：worker 路径传 claim 时捕获
     的 token（旧 token 写 0 行）；对账/重定向等"无 claim 权威"路径传决策
     查询里刚读出的当前值（自洽）。不再提供"未传则现读自比"的恒真兜底。
@@ -118,6 +122,7 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                 """
                 UPDATE ai_chat_sessions
                    SET status = %s,
+                       continue_repark = false,
                        active_turn_id = NULL,
                        error_message = %s,
                        last_message_preview = COALESCE(%s, last_message_preview),
@@ -130,6 +135,7 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                    AND execution_generation = %s
                    AND (%s IS NULL OR cancel_requested = %s)
                    AND (%s IS NULL OR pause_requested = %s)
+                   AND (%s IS NULL OR continue_repark = %s)
                    AND fencing_token = %s
                 RETURNING id, batch_id
                 """,
@@ -137,6 +143,7 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                  gate_status, session_id, generation,
                  expect_cancel, bool(expect_cancel),
                  expect_pause, bool(expect_pause),
+                 expect_repark, bool(expect_repark),
                  int(fencing_token)),
             )
             row = cur.fetchone()
@@ -829,16 +836,23 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
 
 
 def continue_child(user_id: str, batch_id: str, session_id: str,
-                   prompt: str) -> dict | None:
+                   prompt: str, repark: bool = False) -> dict | None:
     """Continue a TERMINAL (completed/failed) batch child with a new prompt,
     preserving conversation history and reusing the existing OpenCode session.
+
+    `repark=True` 开启接管通道（spec D3）：PAUSED 子任务也准入——置
+    continue_prompt 与 continue_repark=true 回 pending，不占 done/failed
+    计数（paused 从未计入）；worker 完成后经 try_repark_transition 把控制
+    权交还外部系统。repark=False 时 paused 子任务被拒绝：接管中的会话只能
+    经接管通道续跑。
 
     Unlike reexecute_child: does NOT delete messages, does NOT null out
     opencode_session_id. Sets continue_prompt so the worker can pick it up
     and send the new prompt to the existing OpenCode session.
 
     Returns updated detail, or None if child not found / not owned.
-    Raises ValueError if child is not in a terminal state.
+    Raises ValueError if child is not in a terminal state (or paused without
+    repark=True).
     """
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -860,23 +874,41 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
             # 之间状态若被并发改变，UPDATE 0 行 → 回滚报 409，计数绝不
             # 拿错状态回滚。
             prev_status = row[0]
-            if prev_status not in ('completed', 'failed', 'cancelled', 'needs_review'):
-                raise ValueError('only completed/failed/cancelled/needs_review children can be continued')
-            cur.execute(
-                "UPDATE ai_chat_sessions SET status='pending', "
-                "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
-                "  pause_requested=false, execution_generation = execution_generation + 1 "
-                "WHERE id = %s AND status = %s",
-                (prompt, session_id, prev_status),
-            )
-            if cur.rowcount != 1:
-                conn.rollback()
-                raise ValueError('子任务状态已变化，请刷新后重试')
-            if prev_status == 'completed':
-                cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
+            if prev_status == 'paused':
+                # 接管通道（spec D3）：仅 repark=True 准入。paused 不占
+                # done/failed 计数——无需回滚。置 continue_repark=true 让
+                # worker 据此在完成时把控制权交还外部系统。
+                if not repark:
+                    raise ValueError('paused 子任务须经接管通道（repark）续跑')
+                cur.execute(
+                    "UPDATE ai_chat_sessions SET status='pending', "
+                    "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
+                    "  pause_requested=false, continue_repark=true, "
+                    "  execution_generation = execution_generation + 1 "
+                    "WHERE id = %s AND status = 'paused'",
+                    (prompt, session_id))
+                if cur.rowcount != 1:
+                    conn.rollback()
+                    raise ValueError('子任务状态已变化，请刷新后重试')
             else:
-                # 'failed' 与 'cancelled' 都记在 failed 计数里。
-                cur.execute("UPDATE ai_chat_batches SET failed = failed - 1 WHERE id = %s", (batch_id,))
+                if prev_status not in ('completed', 'failed', 'cancelled', 'needs_review'):
+                    raise ValueError('only completed/failed/cancelled/needs_review children can be continued')
+                cur.execute(
+                    "UPDATE ai_chat_sessions SET status='pending', "
+                    "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
+                    "  pause_requested=false, continue_repark=false, "
+                    "  execution_generation = execution_generation + 1 "
+                    "WHERE id = %s AND status = %s",
+                    (prompt, session_id, prev_status),
+                )
+                if cur.rowcount != 1:
+                    conn.rollback()
+                    raise ValueError('子任务状态已变化，请刷新后重试')
+                if prev_status == 'completed':
+                    cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
+                else:
+                    # 'failed' 与 'cancelled' 都记在 failed 计数里。
+                    cur.execute("UPDATE ai_chat_batches SET failed = failed - 1 WHERE id = %s", (batch_id,))
         conn.commit()
     _recompute_batch_status_for(batch_id)
     return get_batch_detail(user_id, batch_id)
@@ -891,6 +923,9 @@ def resume_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
     Other paused/cancelled children stay parked — unlike resume_batch, this
     never touches them. Paused children occupy no done/failed counter, so no
     counter rollback is needed. Raises ValueError if the child isn't paused.
+
+    SET 恒清 continue_repark（spec D3）：接管轮可能被协作暂停回 paused 且带
+    残留标志——不清的话 worker 会在完成后误走接管收口重停。
     """
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -908,7 +943,7 @@ def resume_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
                 raise ValueError('只有已暂停的子任务可以单独继续')
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', error_message=NULL, "
-                "  cancel_requested=false, pause_requested=false, "
+                "  cancel_requested=false, pause_requested=false, continue_repark=false, "
                 "  execution_generation = execution_generation + 1, "
                 "  continue_prompt = CASE WHEN opencode_session_id IS NOT NULL "
                 "                        THEN %s ELSE NULL END "
@@ -921,6 +956,17 @@ def resume_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
         conn.commit()
     _recompute_batch_status_for(batch_id)
     return get_batch_detail(user_id, batch_id)
+
+
+def try_repark_transition(session_id: str, *, generation: int,
+                          fencing_token: int) -> dict | None:
+    """接管续跑收口（spec D3）：continue_repark=true 的 running 子会话回
+    paused，不动 done/failed 计数，把控制权交还外部系统。CAS 未命中返回
+    None——含「本就不是接管轮」，调用方（batch_engine）据此回落常规终态
+    路径，无需预读标志（check-then-act 免除）。"""
+    return transition_child(session_id, 'paused', generation=generation,
+                            expect_pause=None, expect_repark=True,
+                            turn_status='paused', fencing_token=fencing_token)
 
 
 _UNSET = object()
