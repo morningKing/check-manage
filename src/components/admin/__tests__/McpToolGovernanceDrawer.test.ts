@@ -54,7 +54,8 @@ const FIXTURE = {
 
 describe('McpToolGovernanceDrawer', () => {
   beforeEach(() => {
-    vi.mocked(getMcpTools).mockResolvedValue(FIXTURE)
+    // 组件对返回对象原地改（无深拷贝），共享 FIXTURE 必须逐测试克隆隔离
+    vi.mocked(getMcpTools).mockResolvedValue(structuredClone(FIXTURE))
     vi.mocked(putMcpToolRules).mockResolvedValue({ updated: 1, diff: 'x' })
   })
 
