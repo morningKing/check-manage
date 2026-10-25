@@ -46,6 +46,13 @@ const staticRoutes: RouteRecordRaw[] = [
     props: true,
     meta: { title: '在线客服', public: true },
   },
+  // 外部任务会话接管页（公开，免登录；token 走链接参数 ?t=…，不落本地存储）
+  {
+    path: '/takeover/session',
+    name: 'ExternalTakeover',
+    component: () => import('@/views/external/TakeoverSessionPage.vue'),
+    meta: { title: '任务会话接管', public: true },
+  },
   {
     path: '/',
     name: 'Layout',
