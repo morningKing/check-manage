@@ -25,6 +25,7 @@ from routes.open_api_prompt_templates import open_api_prompt_templates_bp
 from routes.open_api_memories import open_api_memories_bp
 from routes.open_api_orchestrations import open_api_orchestrations_bp
 from routes.open_api_ai_sessions import open_api_ai_sessions_bp
+from routes.external_takeover import external_takeover_bp
 from routes.validation_scripts import validation_scripts_bp
 from routes.etl_tasks import etl_tasks_bp
 from routes.relation_graph import relation_graph_bp
@@ -107,6 +108,7 @@ app.register_blueprint(open_api_prompt_templates_bp)
 app.register_blueprint(open_api_memories_bp)
 app.register_blueprint(open_api_orchestrations_bp)
 app.register_blueprint(open_api_ai_sessions_bp)
+app.register_blueprint(external_takeover_bp)
 app.register_blueprint(validation_scripts_bp)
 app.register_blueprint(etl_tasks_bp)
 app.register_blueprint(relation_graph_bp)
