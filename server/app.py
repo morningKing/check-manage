@@ -611,6 +611,19 @@ try:
 except Exception as _e:
     logging.warning('batch takeover migration on boot failed: %s', _e)
 
+# 第一方插件开关表 + 注册表种子（2026-10-25 插件架构）。幂等；种子 ON
+# CONFLICT DO NOTHING 不覆盖管理员选择；同样必须显式注册（护栏测试）。
+try:
+    import importlib.util as _ilu_pp
+    _mp_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'migrations', '2026_10_25b_platform_plugins.py')
+    _spec_pp = _ilu_pp.spec_from_file_location('_platform_plugins_boot', _mp_pp)
+    _m_pp = _ilu_pp.module_from_spec(_spec_pp)
+    _spec_pp.loader.exec_module(_m_pp)
+    _m_pp.run()
+except Exception as _e:
+    logging.warning('platform plugins migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
