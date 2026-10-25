@@ -86,10 +86,12 @@ ai_chat_messages（既有表，无 schema 变更）
 
 ### 4.2 搜索命中附带消息锚点
 
-`search_sessions`（`ai_chat.py:598`）：`matchField ∈ {'content','file','preview'}`
-的命中行本就在 `ai_chat_messages` 上，hit 对象新增 `messageId` + `seq`
-（`matchField='title'` 时为 null）。前端类型 `AiSessionSearchHit`
-（`src/api/aiChat.ts:20` 附近）同步补字段。
+`search_sessions`（`ai_chat.py:598`）：hit 对象新增 `messageId` + `seq`，
+**仅 `matchField='content'` 的命中携带**（其命中子查询本就落在 `ai_chat_messages`
+行上，顺带返回该行的 id/seq）；`title`/`file`/`preview` 命中的匹配目标是
+会话行字段（标题/批输入文件名/last_message_preview），没有对应消息锚点，
+置 null。前端类型 `AiSessionSearchHit`（`src/api/aiChat.ts:20` 附近）同步补
+可选字段。
 
 ## 5. 前端：store（`src/stores/aiChat.ts`）
 
@@ -164,7 +166,8 @@ ai_chat_messages（既有表，无 schema 变更）
 - 后端 pytest（`server/tests/` 既有套件）：
   - `/turns`：纯文本会话、纯文件消息（`📎` 摘要）、空文本过滤、空会话、
     权限（他人会话 404 口径同 `/messages`）；
-  - `search_sessions`：content/file 命中带 `messageId/seq`，title 命中为 null。
+  - `search_sessions`：content 命中带 `messageId/seq`，title/file/preview
+    命中为 null（匹配目标是会话行字段，无消息锚点）。
 - 前端 vitest：
   - store：`ensureLoadedUntil` 单页命中/多页循环/hasMore 耗尽返回 false、
     turns 本地 `local_*` 补尾与服务端去重；
