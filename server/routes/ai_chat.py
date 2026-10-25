@@ -615,6 +615,10 @@ def search_sessions():
     Hits carry `matchField` — 'title' | 'file' | 'preview' | 'content' — and a
     one-line `snippet` centred on the keyword (content hits; preview hits show
     the preview itself; title/file hits skip the snippet per Spec §7.3).
+    Content hits additionally carry the matched message's anchor — `messageId`
+    + `seq`（spec 2026-10-25-session-outline §4.2）— so the client can jump to
+    the exact turn; title/file/preview hits match session-row fields and get
+    null anchors.
     """
     user = flask_g.current_user
     q = (request.args.get('q') or '').strip()
@@ -637,14 +641,15 @@ def search_sessions():
                 "       COALESCE(s.title ILIKE %(pat)s ESCAPE '\\', false) AS title_match, "
                 "       COALESCE(s.batch_input_file ILIKE %(pat)s ESCAPE '\\', false) AS file_match, "
                 "       COALESCE(s.last_message_preview ILIKE %(pat)s ESCAPE '\\', false) AS preview_match, "
-                "       ( "
-                "         SELECT m.content FROM ai_chat_messages m "
-                "         WHERE m.session_id = s.id "
-                "           AND m.search_text ILIKE %(pat)s ESCAPE '\\' "
-                "         ORDER BY m.created_at DESC LIMIT 1 "
-                "       ) AS hit_content "
+                "       cm.content AS hit_content, cm.id AS hit_msg_id, cm.seq AS hit_seq "
                 "FROM ai_chat_sessions s "
                 "JOIN ai_chat_batches b ON b.id = s.batch_id AND b.user_id = %(uid)s "
+                "LEFT JOIN LATERAL ( "
+                "  SELECT m.content, m.id, m.seq FROM ai_chat_messages m "
+                "  WHERE m.session_id = s.id "
+                "    AND m.search_text ILIKE %(pat)s ESCAPE '\\' "
+                "  ORDER BY m.created_at DESC, m.seq DESC LIMIT 1 "
+                ") cm ON true "
                 "WHERE s.user_id = %(uid)s AND COALESCE(s.kind, 'chat') <> 'trace_analysis' "
                 "  AND s.batch_id = %(bid)s "
                 "  AND s.status IN %(statuses)s "
@@ -673,13 +678,14 @@ def search_sessions():
                 "SELECT s.id, s.title, s.last_active_at, s.status, "
                 "       s.batch_id, s.batch_input_file, "
                 "       COALESCE(s.title ILIKE %s ESCAPE '\\', false) AS title_match, "
-                "       ( "
-                "         SELECT m.content FROM ai_chat_messages m "
-                "         WHERE m.session_id = s.id "
-                "           AND m.search_text ILIKE %s ESCAPE '\\' "
-                "         ORDER BY m.created_at DESC LIMIT 1 "
-                "       ) AS hit_content "
+                "       cm.content AS hit_content, cm.id AS hit_msg_id, cm.seq AS hit_seq "
                 "FROM ai_chat_sessions s "
+                "LEFT JOIN LATERAL ( "
+                "  SELECT m.content, m.id, m.seq FROM ai_chat_messages m "
+                "  WHERE m.session_id = s.id "
+                "    AND m.search_text ILIKE %s ESCAPE '\\' "
+                "  ORDER BY m.created_at DESC, m.seq DESC LIMIT 1 "
+                ") cm ON true "
                 "WHERE s.user_id = %s "
                 "  AND s.status IN ('active', 'closed') "
                 "  AND ( "
@@ -700,7 +706,8 @@ def search_sessions():
     for r in rows:
         if batch_id:
             (sid, title, ts, status, _bid, input_file, batch_seq, batch_name,
-             preview, title_match, file_match, preview_match, hit_content) = r
+             preview, title_match, file_match, preview_match,
+             hit_content, hit_msg_id, hit_seq) = r
             # 命中字段优先级（Spec §7.2）：标题 > 文件名 > 预览 > 消息内容。
             # 标题/文件名命中不展示消息摘要（Spec §7.3）；预览命中直接以预览
             # 文本为摘要（它本身就是命中内容）；内容命中围绕关键词截取。
@@ -724,9 +731,13 @@ def search_sessions():
                 'batchSeq': batch_seq,
                 'inputFileName': (input_file or '').rsplit('/', 1)[-1] or None,
                 'isBatchChild': True,
+                # 消息锚点只有 content 命中有（title/file/preview 匹配的是会话行字段）
+                'messageId': hit_msg_id if match_field == 'content' else None,
+                'seq': hit_seq if match_field == 'content' else None,
             })
         else:
-            (sid, title, ts, status, _bid, input_file, title_match, hit_content) = r
+            (sid, title, ts, status, _bid, input_file, title_match,
+             hit_content, hit_msg_id, hit_seq) = r
             sessions.append({
                 'id': sid,
                 'title': _session_title(title, _bid, input_file),
@@ -734,6 +745,8 @@ def search_sessions():
                 'status': status,
                 'matchField': 'title' if title_match else 'content',
                 'snippet': '' if title_match else _content_snippet(hit_content, q),
+                'messageId': None if title_match else hit_msg_id,
+                'seq': None if title_match else hit_seq,
             })
 
     return jsonify({'sessions': sessions})

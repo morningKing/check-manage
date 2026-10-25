@@ -39,22 +39,28 @@ def _db(fetchall_rows):
     return fake, cur
 
 
-# Row shape returned by the regular-search query:
-# (id, title, last_active_at, status, batch_id, batch_input_file, title_match, hit_content)
+# Row shape returned by the regular-search query (10 cols):
+# (id, title, last_active_at, status, batch_id, batch_input_file, title_match,
+#  hit_content, hit_msg_id, hit_seq)
 def _row(sid='s1', title='会话标题', status='active', title_match=False,
-         hit_content=None, ts=None, batch_id=None, batch_input_file=None):
-    return (sid, title, ts, status, batch_id, batch_input_file, title_match, hit_content)
+         hit_content=None, ts=None, batch_id=None, batch_input_file=None,
+         hit_msg_id=None, hit_seq=None):
+    return (sid, title, ts, status, batch_id, batch_input_file, title_match,
+            hit_content, hit_msg_id, hit_seq)
 
 
-# Row shape returned by the batch-scoped query (13 cols):
+# Row shape returned by the batch-scoped query (15 cols):
 # (id, title, last_active_at, status, batch_id, batch_input_file, batch_seq,
-#  batch_name, last_message_preview, title_match, file_match, preview_match, hit_content)
+#  batch_name, last_message_preview, title_match, file_match, preview_match,
+#  hit_content, hit_msg_id, hit_seq)
 def _batch_row(sid='b1', title=None, status='completed', batch_seq=1,
                batch_name='季度报告分析', input_file='uploads/report-001.pdf',
                preview=None, title_match=False, file_match=False,
-               preview_match=False, hit_content=None, ts=None):
+               preview_match=False, hit_content=None, ts=None,
+               hit_msg_id=None, hit_seq=None):
     return (sid, title, ts, status, 'batch-123', input_file, batch_seq,
-            batch_name, preview, title_match, file_match, preview_match, hit_content)
+            batch_name, preview, title_match, file_match, preview_match,
+            hit_content, hit_msg_id, hit_seq)
 
 
 # ---------------------------------------------------------------------------
@@ -326,3 +332,45 @@ def test_batch_search_limit_capped_at_50():
                       headers=_h())
     params = cur.execute.call_args.args[1]
     assert params['limit'] <= 50
+
+
+# ---------------------------------------------------------------------------
+# 消息锚点（spec 2026-10-25-session-outline §4.2）：仅 content 命中携带
+# ---------------------------------------------------------------------------
+
+def test_content_hit_carries_message_anchor():
+    row = _row(sid='s1', title_match=False,
+               hit_content='[{"type":"text","text":"部门汇总结果"}]',
+               hit_msg_id='msg_hit1', hit_seq=17)
+    fake, _ = _db([row])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=汇总', headers=_h())
+    hit = r.get_json()['sessions'][0]
+    assert hit['matchField'] == 'content'
+    assert hit['messageId'] == 'msg_hit1'
+    assert hit['seq'] == 17
+
+
+def test_title_hit_has_no_message_anchor():
+    row = _row(sid='s1', title_match=True)
+    fake, _ = _db([row])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=标题', headers=_h())
+    hit = r.get_json()['sessions'][0]
+    assert hit['matchField'] == 'title'
+    assert hit['messageId'] is None
+    assert hit['seq'] is None
+
+
+def test_batch_content_hit_carries_message_anchor():
+    row = _batch_row(title_match=False, file_match=False, preview_match=False,
+                     hit_content='[{"type":"text","text":"批内命中"}]',
+                     hit_msg_id='msg_b1', hit_seq=9)
+    fake, _ = _db([row])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=命中&batchId=batch-123',
+                          headers=_h())
+    hit = r.get_json()['sessions'][0]
+    assert hit['matchField'] == 'content'
+    assert hit['messageId'] == 'msg_b1'
+    assert hit['seq'] == 9
