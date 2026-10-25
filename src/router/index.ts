@@ -21,6 +21,7 @@ import { ElMessage } from 'element-plus'
 import { generateRoutesFromMenus, addDynamicRoutes } from './dynamicRoutes'
 import { useAuthStore } from '@/stores/auth'
 import { buildSettingsRoutes, buildSettingsRedirects } from './settingsRoutes'
+import { pluginRouteAllowed } from './pluginGuard'
 
 /**
  * 静态路由配置
@@ -85,9 +86,10 @@ const staticRoutes: RouteRecordRaw[] = [
       { path: 'workflow/new', name: 'WorkflowEditorNew', component: () => import('@/views/workflow/WorkflowEditor.vue'), meta: { title: '新建工作流' } },
       { path: 'workflow/:id', name: 'WorkflowEditor', component: () => import('@/views/workflow/WorkflowEditor.vue'), meta: { title: '编辑工作流' } },
       // 智能写作（suggest-editor）：文档列表 + 全屏编辑页（WS 走 /suggest-ws）
-      { path: 'suggest-editor', name: 'SuggestEditorList', component: () => import('@/views/suggest/SuggestEditorListView.vue'), meta: { title: '智能写作' } },
+      // meta.plugin：路由门归属 smart-writing 插件（plugin-architecture spec §5）
+      { path: 'suggest-editor', name: 'SuggestEditorList', component: () => import('@/views/suggest/SuggestEditorListView.vue'), meta: { title: '智能写作', plugin: 'smart-writing' } },
       // 编辑页默认隐藏 ContentArea 页签栏（hideTabBar），把纵向空间还给正文
-      { path: 'suggest-editor/:docId', name: 'SuggestEditorDoc', component: () => import('@/views/suggest/SuggestEditorDocView.vue'), meta: { title: '智能写作', hideTabBar: true } },
+      { path: 'suggest-editor/:docId', name: 'SuggestEditorDoc', component: () => import('@/views/suggest/SuggestEditorDocView.vue'), meta: { title: '智能写作', hideTabBar: true, plugin: 'smart-writing' } },
       // 通用动态数据页面（通过 pageId 参数匹配）
       {
         path: 'page/:pageId',
@@ -196,6 +198,11 @@ router.beforeEach(async (to) => {
     dynamicRoutesReady = true
     // 重新导航，让新注册的路由生效
     return to.fullPath
+  }
+
+  // 4.5 插件门：meta.plugin 所属插件被禁用 → NotFound（后端蓝图门兜底硬墙）
+  if (!(await pluginRouteAllowed(to))) {
+    return { name: 'NotFound' }
   }
 
   // 5. 权限检查
