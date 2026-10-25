@@ -19,13 +19,12 @@ export async function listMcpServers(): Promise<{ servers: McpServer[]; internal
 }
 
 export async function createMcpServer(body: McpServerInput): Promise<McpServer> {
-  const { data } = await service.post('/ai/mcp-servers', body)
-  return data
+  // request.ts 响应拦截器已解包 response.data —— 直接返回，勿再解构 .data
+  return await service.post('/ai/mcp-servers', body)
 }
 
 export async function updateMcpServer(id: string, body: McpServerInput): Promise<McpServer> {
-  const { data } = await service.put(`/ai/mcp-servers/${id}`, body)
-  return data
+  return await service.put(`/ai/mcp-servers/${id}`, body)
 }
 
 export async function deleteMcpServer(id: string): Promise<void> {
@@ -53,8 +52,7 @@ export function getInternalMcpHealth(): Promise<InternalMcpHealth> {
 
 /** 切换内置 MCP 开关：仅影响之后新建/清空的会话工作区。 */
 export async function setInternalMcpEnabled(enabled: boolean): Promise<InternalMcp> {
-  const { data } = await service.put('/ai/mcp-servers/internal', { enabled })
-  return data
+  return await service.put('/ai/mcp-servers/internal', { enabled })
 }
 
 /** 工具治理（内置 MCP 工具的角色×矩阵）。 */
