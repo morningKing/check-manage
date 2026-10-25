@@ -15,17 +15,18 @@ const loading = ref(false)
 const saving = ref(false)
 /** 本地可编辑副本：groups → tools[i].rules[role]（直接改，保存时扁平化） */
 const editable = ref<McpGovernance | null>(null)
-let baseline = ''
+/** 基线快照须为响应式：保存后赋值要触发 dirty 重算（普通变量不会）。 */
+const baseline = ref('')
 
 const dirty = computed(() =>
-  !!editable.value && JSON.stringify(editable.value.groups) !== baseline)
+  !!editable.value && JSON.stringify(editable.value.groups) !== baseline.value)
 
 watch(() => props.modelValue, async (open) => {
   if (!open || editable.value) return
   loading.value = true
   try {
     editable.value = await getMcpTools()
-    baseline = JSON.stringify(editable.value.groups)
+    baseline.value = JSON.stringify(editable.value.groups)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.error || '加载工具清单失败')
   } finally { loading.value = false }
@@ -60,7 +61,7 @@ async function save() {
   try {
     const res = await putMcpToolRules(flatten())
     ElMessage.success(`已保存（${res.updated} 项变更，≤3s 内对新调用生效）`)
-    baseline = JSON.stringify(editable.value.groups)
+    baseline.value = JSON.stringify(editable.value.groups)
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.error || '保存失败')
   } finally { saving.value = false }

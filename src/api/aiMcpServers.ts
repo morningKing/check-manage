@@ -86,6 +86,6 @@ export function getMcpTools(): Promise<McpGovernance> {
 export async function putMcpToolRules(
   rules: McpToolRuleInput[],
 ): Promise<{ updated: number; diff: string }> {
-  const { data } = await service.put('/ai/mcp-tool-rules', { rules })
-  return data
+  // request.ts 响应拦截器已解包 response.data —— 直接返回，勿再解构 .data
+  return await service.put('/ai/mcp-tool-rules', { rules })
 }
