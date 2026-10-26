@@ -1,12 +1,15 @@
 /**
  * 内置 MCP 工具治理 E2E（2026-10-25 spec，真实栈 3002+3003+前端）。
  * 覆盖：矩阵 API roundtrip（PUT→GET 反映/非法 400/恢复原矩阵）、管理抽屉 UI
- * （分组渲染+开关+保存）、会话侧 /sessions/:id/mcp 工具带分组字段。
- * 不做「禁用后真调用被拒」的重链路断言——dispatch 拒绝语义归 mcp-server 单测
- * （test_rbac/test_tool_dispatch_allowlist），真调用链路已由 ai-mcp-tools.spec.ts 覆盖。
+ * （分组渲染+开关+保存）、会话侧 /sessions/:id/mcp 工具带分组字段、
+ * 执法层即时生效（禁用工具 → MCP tools/call 拒绝 + tools/list 隐藏 → 恢复成功，
+ * 直连 3003 stateless MCP，不经 LLM）。
  */
 import { test, expect } from '@playwright/test'
-import { api, gotoWithAuth, screenshot } from './helpers'
+import crypto from 'node:crypto'
+import { api, gotoWithAuth, screenshot, waitFor } from './helpers'
+import { dbSeed } from './batch/toolbox'
+import { seedPlainSession } from './db-helpers'
 
 test.setTimeout(180_000)
 
@@ -94,4 +97,79 @@ test('管理抽屉 UI：分组渲染 + 开关 + 保存', async ({ page, request 
     .find(t => t.name === 'run_python')
   expect(rp.rules.developer).toBe(!cur)
   await api(request, 'PUT', '/ai/mcp-tool-rules', { rules: orig })
+})
+
+test('执法层即时生效：禁用工具 → MCP call 拒绝 + list 隐藏 → 恢复成功',
+     async ({ request }) => {
+  // 种 admin 会话 + 有效 MCP session token（种子会话无 workspace，探测工具
+  // 须不依赖工作区——list_collections 只读查菜单，合适）
+  const sid = await seedPlainSession({ key: 'mtgv-call', status: 'active' })
+  const token = `e2e-mtgv-${crypto.randomBytes(12).toString('hex')}`
+  dbSeed(`UPDATE ai_chat_sessions SET session_token='${token}', ` +
+         `token_expires_at=NOW()+interval '900 seconds' WHERE id='${sid}'`)
+
+  // stateless streamable HTTP：单发 JSON-RPC，响应为 SSE 帧取末帧
+  const mcpUrl = `http://127.0.0.1:3003/mcp?token=${token}`
+  const rpc = async (method: string, params: Record<string, unknown>) => {
+    const res = await request.fetch(mcpUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+                 'Accept': 'application/json, text/event-stream' },
+      data: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    })
+    expect(res.status()).toBe(200)
+    const text = await res.text()
+    const frames = text.split('\n').filter(l => l.startsWith('data:'))
+    expect(frames.length, `SSE 帧存在: ${text.slice(0, 200)}`).toBeGreaterThan(0)
+    return JSON.parse(frames[frames.length - 1].slice(5).trim())
+  }
+  const callListCollections = () =>
+    rpc('tools/call', { name: 'list_collections', arguments: {} })
+
+  // 基线：禁用前调用成功（result.content 文本非错误）
+  const baseline = await callListCollections()
+  const isDenied = (r: any) =>
+    !!r?.error || r?.result?.isError === true ||
+    JSON.stringify(r).includes('not available for this session')
+  expect(isDenied(baseline), `基线应成功: ${JSON.stringify(baseline).slice(0, 300)}`).toBeFalsy()
+
+  // 禁用 list_collections×admin（取反，对当前状态稳健）
+  const before = await api(request, 'GET', '/ai/mcp-tools')
+  const orig = flatRules(before.json as Gov)
+  try {
+    const cur = orig.find(r => r.tool_name === 'list_collections' && r.role === 'admin')!.allowed
+    const mutated = orig.map(r =>
+      r.tool_name === 'list_collections' && r.role === 'admin'
+        ? { ...r, allowed: !cur } : r)
+    const put = await api(request, 'PUT', '/ai/mcp-tool-rules', { rules: mutated })
+    expect(put.status).toBe(200)
+    // 写生效先行确认（与 mcp-server 的读传播解耦——轮询期间若后端被并行用例
+    // 重启，这里会立刻暴露而不是耗尽 20s 超时）
+    await waitFor(async () => {
+      const g = await api(request, 'GET', '/ai/mcp-tools')
+      const t = (g.json as Gov).groups.flatMap(x => x.tools)
+        .find(x => x.name === 'list_collections')
+      return t && t.rules.admin === !cur ? true : null
+    }, { timeoutMs: 10_000, intervalMs: 500 })
+
+    // TTL 3s 内传播：轮询 call 直到被拒（fail-closed 语义，spec §5.2）
+    await waitFor(async () => isDenied(await callListCollections()) || null,
+                  { timeoutMs: 20_000, intervalMs: 1000 })
+
+    // list_tools 过滤：禁用后不再返回该工具
+    const list = await rpc('tools/list', {})
+    const names = (list.result?.tools ?? []).map((t: any) => t.name)
+    expect(names).not.toContain('list_collections')
+
+    // 恢复 → TTL 内调用重新成功
+    await api(request, 'PUT', '/ai/mcp-tool-rules', { rules: orig })
+    await waitFor(async () => {
+      const r = await callListCollections()
+      return !isDenied(r) ? true : null
+    }, { timeoutMs: 20_000, intervalMs: 1000 })
+  } finally {
+    // 保险恢复（断言中途失败也不把禁用留在真库）
+    await api(request, 'PUT', '/ai/mcp-tool-rules', { rules: orig })
+    dbSeed(`DELETE FROM ai_chat_sessions WHERE id='${sid}'`)
+  }
 })
