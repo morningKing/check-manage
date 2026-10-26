@@ -63,21 +63,28 @@ async function gotoAiChat(page: import('@playwright/test').Page) {
 
 
 /** hover 显出的操作图标点击：行节点会因列表重排被替换、hover 丢失导致
- *  单击永远等不到可见，这里 hover+短超时点击重试。 */
+ *  单击永远等不到可见，这里 hover+短超时点击重试。传 verify 时以「期望的
+ *  状态变化是否发生」为准——点击可能落在被替换进同一位置的错误行上
+ *  （坐标命中但目标已换），且行消失可能只是渲染中转，复查后再判重试。 */
 async function hoverClick(
   page: import('@playwright/test').Page,
   row: import('@playwright/test').Locator,
   icon: import('@playwright/test').Locator,
+  verify?: () => Promise<boolean>,
 ) {
   for (let i = 0; i < 6; i++) {
-    await row.hover()
+    if (verify && await verify()) return
+    try {
+      await row.hover()
+    } catch { await page.waitForTimeout(800); continue }
     try {
       await icon.click({ timeout: 2500 })
-      return
-    } catch { /* rerender race: re-hover and retry */ }
+    } catch { await page.waitForTimeout(800); continue }
+    if (!verify || await verify()) return
     await page.waitForTimeout(800)
   }
   await icon.click({ timeout: 5_000 })
+  if (verify && !(await verify())) throw new Error('hoverClick: verify failed after final click')
 }
 
 /** 新建会话并重命名为唯一标题，返回标题。 */
@@ -96,18 +103,47 @@ async function newNamedSession(page: import('@playwright/test').Page, name: stri
   return name
 }
 
+/** 清空当前用户置顶区：历史运行遗留的置顶会话占据置顶区行位，
+ *  会放大行重排点击竞态（误点相邻行的置顶/取消置顶）。 */
+async function unpinAllSessions(page: import('@playwright/test').Page) {
+  const raw = await page.evaluate(() => localStorage.getItem('check-manage:token'))
+  const token = raw ? JSON.parse(raw) as string : ''
+  if (!token) return
+  const headers = { Authorization: `Bearer ${token}` }
+  const res = await page.request.get('/api/ai/chat/sessions', { headers })
+  const body = await res.json().catch(() => null) as
+    { sessions?: { id: string; pinnedAt?: string | null }[] } | null
+  for (const s of body?.sessions ?? []) {
+    if (!s.pinnedAt) continue
+    await page.request.post(`/api/ai/chat/sessions/${s.id}/pin`,
+      { headers, data: { pinned: false } })
+  }
+}
+
 test('置顶：未分组置顶 → 刷新保持 → 取消回收', async ({ page }) => {
   test.setTimeout(240_000)
   await gotoAiChat(page)
+  await unpinAllSessions(page)
   const name = await newNamedSession(page, `置顶测试${Date.now() % 100000}`)
 
   // ① 置顶：行内「置顶」→ 出现在置顶区，从未分组消失
   const ungroupedRow = page.locator('.session-item:not(.pinned-item)', { hasText: name }).first()
-  await hoverClick(page, ungroupedRow, ungroupedRow.locator('[title="置顶"]'))
+  const pinnedAppeared = () => page.locator('.session-item.pinned-item', { hasText: name }).first()
+    .waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false)
+  await hoverClick(page, ungroupedRow, ungroupedRow.locator('[title="置顶"]'), pinnedAppeared)
   await expect(page.locator('[data-test="pinned-group-head"]')).toBeVisible({ timeout: 10_000 })
   await expect(page.locator('.session-item.pinned-item', { hasText: name })).toBeVisible()
   await expect(page.locator('.session-item:not(.pinned-item)', { hasText: name }))
     .toHaveCount(0, { timeout: 10_000 })
+
+  // ①b UI 对齐：置顶行标题须靠左（行首 ↑ 图标之后），不被 space-between 摊到行尾居中/靠右
+  const pinnedRowNow = page.locator('.session-item.pinned-item', { hasText: name }).first()
+  const rowBox = await pinnedRowNow.boundingBox()
+  const titleBox = await pinnedRowNow.locator('.session-item__title').boundingBox()
+  expect(rowBox && titleBox).toBeTruthy()
+  // 行内左边距 10px + ↑ 图标约 18px + 间距 8px ≈ 36px；被摊开时会远大于此
+  expect(titleBox!.x - rowBox!.x).toBeLessThan(48)
+  expect(titleBox!.x).toBeLessThan(rowBox!.x + rowBox!.width / 2)
 
   // ② 刷新后置顶保持
   await page.reload()
@@ -119,15 +155,20 @@ test('置顶：未分组置顶 → 刷新保持 → 取消回收', async ({ page
 
   // ③ 取消置顶：置顶区消失，会话回未分组
   const pinnedRow = page.locator('.session-item.pinned-item', { hasText: name }).first()
-  await hoverClick(page, pinnedRow, pinnedRow.locator('[title="取消置顶"]'))
+  const pinGone = () => page.locator('.session-item.pinned-item', { hasText: name })
+    .waitFor({ state: 'detached', timeout: 2000 }).then(() => true).catch(() => false)
+  await hoverClick(page, pinnedRow, pinnedRow.locator('[title="取消置顶"]'), pinGone)
   await expect(page.locator('[data-test="pinned-group-head"]')).toHaveCount(0, { timeout: 10_000 })
   await expect(page.locator('.session-item:not(.pinned-item)', { hasText: name }).first())
     .toBeVisible({ timeout: 10_000 })
+  // 收尾自愈：误点可能把别的会话留在了置顶区，清空以免污染后续运行
+  await unpinAllSessions(page)
 })
 
 test('置顶与分组：分组会话置顶进置顶区，取消后回分组', async ({ page }) => {
   test.setTimeout(240_000)
   await gotoAiChat(page)
+  await unpinAllSessions(page)
   const name = await newNamedSession(page, `置顶分组${Date.now() % 100000}`)
 
   // ① 新建分组并移入
@@ -148,14 +189,18 @@ test('置顶与分组：分组会话置顶进置顶区，取消后回分组', as
 
   // ② 分组内会话置顶 → 进置顶区，分组计数归零（组内行消失）
   const inGroup = page.locator('.cgroup__item', { hasText: name }).first()
-  await hoverClick(page, inGroup, inGroup.locator('[title="置顶"]'))
+  const pinnedAppeared2 = () => page.locator('.session-item.pinned-item', { hasText: name }).first()
+    .waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false)
+  await hoverClick(page, inGroup, inGroup.locator('[title="置顶"]'), pinnedAppeared2)
   await expect(page.locator('.session-item.pinned-item', { hasText: name }))
     .toBeVisible({ timeout: 10_000 })
   await expect(page.locator('.cgroup__item', { hasText: name })).toHaveCount(0)
 
   // ③ 取消置顶 → 回到原分组
   const pinnedRow = page.locator('.session-item.pinned-item', { hasText: name }).first()
-  await hoverClick(page, pinnedRow, pinnedRow.locator('[title="取消置顶"]'))
+  const backInGroup = () => page.locator('.cgroup__item', { hasText: name }).first()
+    .waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false)
+  await hoverClick(page, pinnedRow, pinnedRow.locator('[title="取消置顶"]'), backInGroup)
   await expect(page.locator('.cgroup__item', { hasText: name }).first())
     .toBeVisible({ timeout: 10_000 })
   await expect(page.locator('.session-item.pinned-item', { hasText: name })).toHaveCount(0)
@@ -164,4 +209,6 @@ test('置顶与分组：分组会话置顶进置顶区，取消后回分组', as
   await hoverClick(page, groupHead, groupHead.locator('[title^="删除分组"]'))
   await page.locator('.el-message-box__btns .el-button--primary').click()
   await expect(groupHead).toHaveCount(0, { timeout: 10_000 })
+  // 收尾自愈：清空置顶区，避免误点遗留污染后续运行
+  await unpinAllSessions(page)
 })

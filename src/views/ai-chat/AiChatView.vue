@@ -2284,7 +2284,9 @@ function onKey(e: Event) {
   color: var(--el-text-color-regular);
   &:hover { background: var(--el-fill-color-light); }
   &.active { background: var(--el-color-primary-light-9); color: var(--el-color-primary); }
-  &__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  // 标题占满剩余空间保持靠左：space-between 下若行首多出常驻图标（置顶 ↑），
+  // 标题会被摊到中间偏右；flex:1 + min-width:0 同时保证省略号在 hover 出操作区时仍生效
+  &__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   &__actions { display: none; gap: 6px; .el-icon { &:hover { color: var(--el-color-primary); } } }
   &:hover &__actions { display: flex; }
   &.is-closed { opacity: 0.55; }
