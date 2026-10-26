@@ -76,7 +76,12 @@ watch(() => props.modelValue, async (open) => {
     editable.value = await getMcpTools()
     baseline.value = snapshot(editable.value)
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.error || '加载工具清单失败')
+    // 404 = 后端进程仍在服务旧版本（迁移/端点都在新代码里）——把根因说破，
+    // 避免生产上「功能坏了」的误判（须整套重启让 Flask+mcp-server 一起更新）。
+    const status = e?.response?.status
+    ElMessage.error(status === 404
+      ? '后端未提供 /ai/mcp-tools（生产后端仍为旧版本）——请重新部署并整套重启后刷新重试'
+      : e?.response?.data?.error || '加载工具清单失败')
   } finally { loading.value = false }
 }, { immediate: true })
 
