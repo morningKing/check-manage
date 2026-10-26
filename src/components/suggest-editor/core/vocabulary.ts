@@ -117,6 +117,25 @@ export function shouldTrigger(prefix: string): boolean {
   return prefix.length >= minPrefixLength(prefix) && prefix.length > 0
 }
 
+/** 句读字符（句尾判定用）：句号/问叹/分号/省略号/冒号（中英文）；逗号是句中停顿不算 */
+const SENTENCE_ENDERS = new Set(["。", "！", "？", "；", "…", "：", "!", "?", ";", ":"])
+
+/**
+ * IDE 式触发判定——光标是否在「词尾」：光标后第一个字符不再是词字符才算
+ * （后随空白/标点/段尾都算词尾）。词中/句中（光标后紧跟汉字、字母等）返回 false，
+ * 候选列表不应弹出。参数是光标之后的文本，只需看第一个字符；空串（段尾）即词尾。
+ */
+export function isWordEndAhead(afterCursor: string): boolean {
+  const first = [...afterCursor][0]
+  return !first || !WORD_CHAR.test(first)
+}
+
+/** 光标前一个字符是否句读——续写类提示（文档续写 / LLM）在「句尾」给出 */
+export function isSentenceEndBehind(beforeCursor: string): boolean {
+  const chars = [...beforeCursor]
+  return SENTENCE_ENDERS.has(chars[chars.length - 1] ?? "")
+}
+
 /* ------------------------------- 片段占位符 ------------------------------- */
 
 /** VS Code 风格：`${1:主题}` / `${2}`；用于词表里的「片段」条目 */

@@ -6,6 +6,8 @@ import { requestCompletion } from "./commands"
 import {
   DocumentVocabulary,
   gatherCandidates,
+  isSentenceEndBehind,
+  isWordEndAhead,
   minPrefixLength,
   readVocabulary,
   shouldTrigger,
@@ -66,6 +68,8 @@ const LLM_COMPLETION_ENABLED = (import.meta.env.VITE_LLM_COMPLETION ?? "on") !==
  *   命中字符高亮；列表左侧是来源 chip，右侧是详情，底部是快捷键提示，右侧浮动详情面板；
  *   ↑↓ 选择、Tab/Enter 接受、Esc 关闭、点击某行接受、**Ctrl/Cmd+Space 显示全部**；
  * - **幽灵文本**：把当前选中候选的「剩余部分」灰色预览在光标后（Tab 一步完成）；
+ * - **触发时机（IDE 行为）**：候选列表只在「词尾」弹出——光标后紧跟词字符（词中/句中）不弹，
+ *   Ctrl+Space 仍可强制显示；续写类提示（文档续写 / LLM 兜底）只在「句尾/段尾」出现；
  * - **降级顺序**：词表 → 文档词 → 文档续写（n-gram）→ LLM 兜底；本地命中时不调用 LLM。
  */
 export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor | null }) {
@@ -112,6 +116,29 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
     )
   }
 
+  /** 光标后紧跟的文本（≤2 字符够判断词边界；要求无选区且在文本块内，否则空串） */
+  const textAfterCursor = (state: EditorState): string => {
+    const selection = state.selection
+    if (!selection.empty) return ""
+    const $from = selection.$from
+    if (!$from.parent.isTextblock) return ""
+    return $from.parent.textBetween($from.parentOffset, Math.min($from.parentOffset + 2, $from.parent.content.size))
+  }
+
+  /** 词尾判定：候选列表只在词尾弹出（词中/句中不弹，Ctrl+Space 可强制） */
+  const atWordEnd = (state: EditorState): boolean => isWordEndAhead(textAfterCursor(state))
+
+  /** 句尾判定：段尾，或光标前刚落下句读（。！？；…：）——续写类提示在句尾给出 */
+  const atSentenceEnd = (state: EditorState): boolean => {
+    if (atParagraphEnd(state)) return true
+    const selection = state.selection
+    if (!selection.empty) return false
+    const $from = selection.$from
+    if (!$from.parent.isTextblock || $from.parentOffset < MIN_CONTEXT_CHARS) return false
+    const before = $from.parent.textBetween(Math.max(0, $from.parentOffset - 2), $from.parentOffset)
+    return isSentenceEndBehind(before)
+  }
+
   const ghostFromCandidate = (candidate: CompletionCandidate, pos: number): GhostState => ({
     id: `candidate:${candidate.matchKind}:${candidate.label}`,
     pos,
@@ -136,7 +163,8 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
     }
 
     const context = tailAt(state)
-    if (context) {
+    // IDE 行为：只在词尾弹候选——光标后紧跟词字符说明仍在词/句中（Ctrl+Space 强制时放开）
+    if (context && (forced || atWordEnd(state))) {
       const run = tokenPrefix(context.tail)
       const chars = [...run]
       const minLength = minPrefixLength(run)
@@ -192,13 +220,13 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
     ghost = null
   }
 
-  /** LLM 兜底：列表为空且光标在段尾时才请求 */
+  /** LLM 兜底：列表为空且光标在段尾/句尾时才请求 */
   const requestLlm = (): void => {
     if (!LLM_COMPLETION_ENABLED || list || ghost) return
     const editor = getEditor()
     if (!editor) return
     const state = editor.state
-    if (!atParagraphEnd(state)) return
+    if (!atSentenceEnd(state)) return
     const context = tailAt(state)
     if (!context || context.tail.trim().length < MIN_CONTEXT_CHARS) return
     pendingId = requestCompletion(ydoc, ydoc.clientID, context.tail.slice(-300))
@@ -287,6 +315,7 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
       if (!editor) continue
       const selection = editor.state.selection
       if (!selection.empty) continue
+      if (!atSentenceEnd(editor.state)) continue // 期间光标已离开句尾 → 提示不再成立
 
       ghost = { id: key, pos: selection.from, insert: value.replacement, replaceLength: 0, source: "AI" }
       refresh()

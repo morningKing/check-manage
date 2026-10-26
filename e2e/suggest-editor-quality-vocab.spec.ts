@@ -1,9 +1,9 @@
 /**
- * 智能写作质量检查 · 词表矩阵（V1–V6）。
+ * 智能写作质量检查 · 词表矩阵（V1–V7）。
  *
  * 真源是服务端文件（全局 词表-全局.txt / 文档 ws/<id>/词表.txt），经 Node 同步进
  * Y.Map("vocabulary")。这里验证别名替换、文档级覆盖、导入/导出/去重、前缀联想、
- * 文档隔离，以及与检查规则并存时互不干扰。
+ * 文档隔离、与检查规则并存时互不干扰，以及 IDE 式触发时机（词尾/句尾才提示）。
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -238,6 +238,40 @@ test.describe('词表', () => {
       await expect(card).toBeVisible()
       await expect(page.locator('.doc-surface')).toContainText('端口类型：10GE。')
       await expect(page.locator('.doc-surface')).toContainText('设备清单')
+    } finally {
+      if (docId) await deleteDocument(api, token, docId)
+    }
+  })
+
+  test('V7 触发时机：词中/句中光标不弹候选，词尾才弹（Ctrl+Space 可强制）', async ({ page }) => {
+    test.setTimeout(180_000)
+    let docId = ''
+    try {
+      await putGlobalVocabulary(api, token, '# e2e 触发时机\n分布式存储系统\n')
+      docId = await createDocument(api, token, `E2E-V7-${Date.now()}`)
+      await openDocById(page, docId)
+
+      const popup = page.locator('.se-completion-popup')
+      // 整句录入（录入时光标始终在词尾，属正常触发）；「核心业务依赖分布式存储系统」共 13 字
+      await page.locator('.doc-surface').click()
+      await page.keyboard.type('核心业务依赖分布式存储系统', { delay: 40 })
+      await expect(popup).toBeVisible({ timeout: 10_000 }) // 段尾 = 词尾，正常弹出
+
+      // 光标移回「分布式存|储系统」之间：光标后紧跟词字符 = 词中 → 不弹（IDE 行为）
+      await page.keyboard.press('Home')
+      for (let step = 0; step < 10; step += 1) await page.keyboard.press('ArrowRight')
+      await expect(popup).toHaveCount(0)
+
+      // 回到段尾（词尾）→ 候选恢复
+      await page.keyboard.press('End')
+      await expect(popup.locator('[data-vocab-term="分布式存储系统"]')).toBeVisible({ timeout: 10_000 })
+
+      // 词中 Ctrl+Space 仍可强制显示全部候选（VS Code 语义）
+      await page.keyboard.press('Home')
+      for (let step = 0; step < 10; step += 1) await page.keyboard.press('ArrowRight')
+      await expect(popup).toHaveCount(0)
+      await page.keyboard.press('Control+Space')
+      await expect(popup.locator('[data-vocab-term="分布式存储系统"]')).toBeVisible({ timeout: 10_000 })
     } finally {
       if (docId) await deleteDocument(api, token, docId)
     }
