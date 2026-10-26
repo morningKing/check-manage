@@ -28,7 +28,9 @@ test('主从布局：左栏列表或空状态 + 子标签切换', async ({ page 
   // vite 冷编译可能触发整页重载——元素迟迟不出现就重试最多 3 次
   const firstDef = page.locator('.fit-def').first()
   const empty = page.getByText('暂无拟合数据')
-  const mask = page.locator('.skillopt__pane .el-loading-mask')
+  // fitLoading 连续两次触发时新旧遮罩会短暂并存（一个 fade-enter 一个
+  // fade-leave）——strict mode 下多元素直接炸 waitFor，取 first 只跟最新一张
+  const mask = page.locator('.skillopt__pane .el-loading-mask').first()
   for (let i = 0; i < 3; i++) {
     if (await firstDef.isVisible().catch(() => false)) break
     // 加载中 definitions 为空,空状态文案会先闪现——须等加载遮罩退场后再判定空库
