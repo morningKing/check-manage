@@ -6,6 +6,7 @@ vi.mock('@/api/takeover', () => ({
   getTakeoverSession: vi.fn(),
   getTakeoverMessages: vi.fn(),
   sendTakeoverMessage: vi.fn(),
+  cancelTakeoverSession: vi.fn(),
 }))
 import * as api from '@/api/takeover'
 import TakeoverSessionPage from '../TakeoverSessionPage.vue'
@@ -58,6 +59,7 @@ beforeEach(() => {
   vi.mocked(api.getTakeoverSession).mockResolvedValue(sessionInfo)
   vi.mocked(api.getTakeoverMessages).mockResolvedValue(messagesPayload())
   vi.mocked(api.sendTakeoverMessage).mockResolvedValue({ queued: true })
+  vi.mocked(api.cancelTakeoverSession).mockResolvedValue({ queued: true, childStatus: 'running' })
 })
 
 afterEach(() => {
@@ -132,6 +134,66 @@ describe('TakeoverSessionPage', () => {
     const textarea = w.find('textarea')
     expect(textarea.attributes('disabled')).toBeDefined()
     expect(w.text()).toContain('任务执行中')
+    w.unmount()
+  })
+
+  it('interrupt: two-step confirm, only second click calls the API', async () => {
+    vi.mocked(api.getTakeoverMessages).mockResolvedValue(messagesPayload('running'))
+    const w = await mountAt()
+    const stop = w.find('[data-test="stop-btn"]')
+    expect(stop.exists()).toBe(true)
+    expect(stop.text()).toBe('中断任务')
+
+    await stop.trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="stop-btn"]').text()).toBe('再点一次确认中断')
+    expect(api.cancelTakeoverSession).not.toHaveBeenCalled()
+
+    await w.find('[data-test="stop-btn"]').trigger('click')
+    await flushPromises()
+    expect(api.cancelTakeoverSession).toHaveBeenCalledWith(TOKEN)
+    expect(w.find('[data-test="cancel-notice"]').exists()).toBe(true)
+    expect(w.find('[data-test="conflict-warning"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('interrupt on terminal child: 409 surfaces inline warning, no notice', async () => {
+    vi.mocked(api.getTakeoverMessages).mockResolvedValue(messagesPayload('running'))
+    vi.mocked(api.cancelTakeoverSession).mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: { error: { code: 'STATE_CONFLICT', message: '子任务已结束（completed），无法取消' } },
+      },
+    })
+    const w = await mountAt()
+    const stop = () => w.find('[data-test="stop-btn"]')
+    await stop().trigger('click')   // 武装
+    await stop().trigger('click')   // 确认
+    await flushPromises()
+
+    const warning = w.find('[data-test="conflict-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.text()).toBe('子任务已结束（completed），无法取消')
+    expect(w.find('[data-test="cancel-notice"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('after cancel lands (status leaves busy): notice cleared, button gone, input unlocked', async () => {
+    vi.mocked(api.getTakeoverMessages).mockResolvedValue(messagesPayload('running'))
+    const w = await mountAt()
+    const stop = () => w.find('[data-test="stop-btn"]')
+    await stop().trigger('click')
+    await stop().trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="cancel-notice"]').exists()).toBe(true)
+
+    // worker 收口后轮询带回 cancelled：中断提示清掉、按钮消失、输入恢复
+    vi.mocked(api.getTakeoverMessages).mockResolvedValue(messagesPayload('cancelled'))
+    document.dispatchEvent(new Event('visibilitychange'))
+    await flushPromises()
+    expect(w.find('[data-test="cancel-notice"]').exists()).toBe(false)
+    expect(stop().exists()).toBe(false)
+    expect(w.find('textarea').attributes('disabled')).toBeUndefined()
     w.unmount()
   })
 

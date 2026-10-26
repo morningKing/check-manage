@@ -153,3 +153,32 @@ def takeover_send():
                   g.takeover['title'] or '接管会话',
                   f'接管对话 {len(prompt)} 字符（prev_status={status}）')
     return jsonify({'queued': True}), 202
+
+
+@external_takeover_bp.post('/session/cancel')
+def takeover_cancel():
+    """接管页中断：执行明显偏差时外部用户可停止当前执行，之后用纠正消息
+    续跑（cancelled 在 takeover_send 的放行列表里，同一 OC 会话保留上下文）。
+    状态机全权交给 batch_repo.cancel_child（pending/running 置协作式标志由
+    worker 收口、paused 同步落 cancelled、终态 ValueError→409），此处不做
+    前置状态读——避免先查后改的 TOCTOU 窗口。限速消耗发送桶（写侧动作，
+    与消息同预算；人类操作 10/min 足够）。"""
+    denied = _guard('send')
+    if denied:
+        return denied
+    r = g.takeover
+    try:
+        landed = batch_repo.cancel_child(r['owner_user_id'], r['batch_id'],
+                                         r['session_id'])
+    except ValueError as e:
+        return {'error': {'code': 'STATE_CONFLICT', 'message': str(e)}}, 409
+    if landed is None:
+        # resolve 与 cancel 之间批次/会话被删——与无效令牌同一 404 体
+        return _INVALID
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    prev = _child_status_fresh()
+    _log_takeover('ai.batch_takeover_cancel', r['session_id'],
+                  r['title'] or '接管会话',
+                  f'接管中断（post_status={prev or "unknown"}）')
+    return jsonify({'queued': True, 'childStatus': prev}), 202

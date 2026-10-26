@@ -375,3 +375,105 @@ def test_log_takeover_writes_with_owner_identity(client, mock_conn,
         'ai_chat_session', 's1', '第3步')
     assert 'prev_status=paused' in wl.call_args.args[7]
     assert '接管对话' in wl.call_args.args[7]
+
+
+# ---------------------------------------------------------------------------
+# 接管页中断 POST /session/cancel：状态机全权交给 cancel_child（打桩断言
+# 转发与收尾），本套件只对蓝图自身的契约负责——guard/限速/notify/oplog/
+# 错误映射。cancel_child 内部语义（pending/running 置标志、paused 同步、
+# 终态 ValueError）由 test_batch_takeover_repo 覆盖。
+# ---------------------------------------------------------------------------
+def _cancel_patches(mock_conn, tok, post_status='running', owner=None):
+    """中断端点的公共打桩：resolve 放行、cancel_child 后的重读读到
+    `post_status`、_log_takeover 的属主查询读到 owner（默认 alice/admin）。"""
+    owner = owner or _owner_row()
+    mock_cursor = mock_conn.cursor.return_value
+    mock_cursor.fetchone.side_effect = [(post_status,), owner]
+    return (
+        patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+              return_value=tok),
+        patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),
+        patch('routes.external_takeover.batch_repo.cancel_child'),
+        patch('utils.batch_engine.get_worker', return_value=MagicMock()),
+        patch('utils.operation_log._write_log_row'),
+    )
+
+
+def test_cancel_running_202_notify_and_oplog(client, mock_conn, mock_cursor):
+    p_tok, p_db, p_cc, p_gw, p_wl = _cancel_patches(
+        mock_conn, _tok(), post_status='running')
+    with p_tok, p_db, p_cc as cc, p_gw as gw, p_wl as wl:
+        resp = client.post(f'{BASE}/session/cancel?t={VALID_T}')
+    assert resp.status_code == 202
+    assert resp.get_json() == {'queued': True, 'childStatus': 'running'}
+    assert cc.call_args.args == ('user-42', 'b1', 's1')
+    gw.assert_called_once_with()
+    gw.return_value.notify.assert_called_once_with()
+    assert wl.call_args.args[3] == 'ai.batch_takeover_cancel'
+    assert '接管中断' in wl.call_args.args[7]
+
+
+def test_cancel_terminal_409_notify_not_called(client, mock_conn, mock_cursor):
+    """终态子任务（cancel_child 抛 ValueError）→ 409 STATE_CONFLICT，
+    worker 不被打扰、oplog 不落（什么都没发生）。"""
+    p_tok, p_db, p_cc, p_gw, p_wl = _cancel_patches(mock_conn, _tok())
+    with p_tok, p_db, p_cc as cc, p_gw as gw, p_wl as wl:
+        cc.side_effect = ValueError('子任务已结束（completed），无法取消')
+        resp = client.post(f'{BASE}/session/cancel?t={VALID_T}')
+    assert resp.status_code == 409
+    assert resp.get_json() == {'error': {
+        'code': 'STATE_CONFLICT', 'message': '子任务已结束（completed），无法取消'}}
+    gw.assert_not_called()
+    wl.assert_not_called()
+
+
+def test_cancel_vanished_404(client, mock_conn, mock_cursor):
+    """resolve 与 cancel 之间批次/会话被删（cancel_child 返回 None）→
+    与无效令牌同一 404 体，不产生存在性预言机。"""
+    p_tok, p_db, p_cc, p_gw, p_wl = _cancel_patches(mock_conn, _tok())
+    with p_tok, p_db, p_cc as cc, p_gw as gw, p_wl:
+        cc.return_value = None
+        resp = client.post(f'{BASE}/session/cancel?t={VALID_T}')
+    assert resp.status_code == 404
+    assert resp.get_json() == {'error': '链接无效或已过期'}
+    gw.assert_not_called()
+
+
+def test_cancel_invalid_token_404(client, mock_cursor):
+    with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+               return_value=None):
+        resp = client.post(f'{BASE}/session/cancel?t={VALID_T}')
+    assert resp.status_code == 404
+    assert resp.get_json() == {'error': '链接无效或已过期'}
+
+
+def test_cancel_oplog_failure_never_breaks_202(client, mock_conn, mock_cursor,
+                                               caplog):
+    """与发送同纪律：oplog 任何一环失败只留日志，中断请求本身 202。"""
+    p_tok, p_db, p_cc, p_gw, p_wl = _cancel_patches(mock_conn, _tok())
+    with p_tok, p_db, p_cc, p_gw as gw, p_wl:
+        mock_cursor.fetchone.side_effect = [('running',),
+                                            RuntimeError('users boom')]
+        with caplog.at_level(logging.ERROR):
+            resp = client.post(f'{BASE}/session/cancel?t={VALID_T}')
+    assert resp.status_code == 202
+    gw.return_value.notify.assert_called_once_with()
+    assert any('takeover oplog failed' in rec.getMessage()
+               for rec in caplog.records)
+
+
+def test_cancel_shares_send_bucket_with_messages(client, mock_conn,
+                                                 mock_cursor, monkeypatch):
+    """中断是写侧动作，消耗发送桶（10/min 与消息同预算）：一次中断后，
+    同窗口内的接管消息被 429 拒——预算共享是文档化行为，钉住防回归。"""
+    monkeypatch.setattr(ext, 'SEND_PER_MINUTE', 1)
+    tok = _tok()
+    p_tok, p_db, p_cc, p_gw, p_wl = _cancel_patches(mock_conn, tok)
+    with p_tok, p_db, p_cc, p_gw, p_wl:
+        first = client.post(f'{BASE}/session/cancel?t={VALID_T}')
+    p_tok2, p_db2, p_cc2, p_gw2, p_wl2 = _send_patches(mock_conn, tok, 'paused')
+    with p_tok2, p_db2, p_cc2, p_gw2, p_wl2:
+        second = client.post(f'{BASE}/session/messages?t={VALID_T}',
+                             json={'prompt': '接着做'})
+    assert first.status_code == 202
+    assert second.status_code == 429

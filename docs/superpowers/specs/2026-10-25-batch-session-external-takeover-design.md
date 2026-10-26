@@ -72,6 +72,13 @@
 - 页面发消息遇到 running 子会话：明确报错「任务执行中，请先通过 API 暂停」，
   **不做隐藏的自动暂停副作用**（可选环境开关 `AI_TAKEOVER_AUTOPAUSE=1` 提供
   自动 pause_child，默认关）。
+- **接管页中断**（2026-10-26 增补）：执行明显偏差时人工可在页面上直接中断，
+  不必回内部控制台或找外部系统调 API。语义 = 既有批子任务取消
+  （`batch_repo.cancel_child`）：running/pending 置协作式取消标志由 worker
+  收口落 cancelled（数秒级），paused 同步落 cancelled，终态 409。cancelled
+  在接管发送的放行列表里——中断后直接发纠正消息，同一 OpenCode 会话保留
+  上下文续跑，「中断→纠正」闭环不离开接管页。前端两段确认（首击武装、
+  4s 内再击才发请求）防公开页误触。
 - 消息落库复用 `continue_prompt` 既有机制，人工消息与回复同现在会话历史，
   内部管理员视图（BatchConversationView）天然可见。
 
@@ -105,6 +112,10 @@
     参数等内部字段，口径对齐既有对外子会话 messages 端点的裁剪）；
   - `POST /external/takeover/session/messages?t=`——发消息（D3 状态校验 +
     continue 语义；prompt ≤ 20000 字符，与开放 API 一致）；
+  - `POST /external/takeover/session/cancel?t=`——**接管页中断**（2026-10-26
+    增补，语义见 D3）：状态机全权委托 `batch_repo.cancel_child`（无前置状态读，
+    避免 TOCTOU），终态 ValueError→409 STATE_CONFLICT；限速消耗发送桶（写侧
+    动作，与消息同预算）；以令牌属主身份落 oplog `ai.batch_takeover_cancel`；
   - ~~`GET /external/takeover/session/events?t=`（2026-10-25 修订取消）~~：
     批子会话由 worker 独家写入、回合结束才整体落库
     （`batch_engine._persist_conversation`），流式传输对该数据流无增益；内部
@@ -131,6 +142,10 @@
   - 消息列表：assistant 内容复用 `MarkdownView`（mermaid/katex/echarts/svg/
     plantuml 渲染全部继承，零额外工作）；用户消息简单气泡；
   - 输入框：Enter 发送；running 态给出「请外部系统先暂停」的结构化错误提示；
+  - 中断按钮（2026-10-26 增补）：pending/running 时输入提示行内出现
+    「中断任务」，两段确认（首击武装为「再点一次确认中断」，4s 未再击自动
+    复位）；请求受理后显示「已请求中断」内联提示，轮询看到 cancelled 后
+    提示清掉、徽标翻「已取消」、输入解锁；
   - 实时性：3s 轮询 messages+childStatus（页面隐藏时暂停，visibilitychange）；
     发送后立即触发一次拉取。（2026-10-25 修订：弃 SSE，理由见 §5）
 - 不引入主布局、菜单、登录 store；令牌只存在于 URL 与内存，**不写

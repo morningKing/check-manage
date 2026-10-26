@@ -5,6 +5,8 @@
  * 通过链接参数 ?t=<token> 免登录访问批量任务的会话：
  * - token 只存在于链接与内存中，绝不写入 localStorage
  * - 顶栏展示批次信息与子任务状态徽标；子任务 pending/running 时输入禁用
+ * - 执行明显偏差时可「中断任务」（两段确认）：协作式取消由 worker 数秒内
+ *   收口落 cancelled，之后可直接发纠正消息在原会话上续跑
  * - 消息区每 3s 轮询刷新，页面不可见（document.hidden）时暂停
  * - 409（子任务执行中拒绝写入）→ 输入区上方内联警告；404/网络错 → 整页错误卡
  */
@@ -12,6 +14,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import {
+  cancelTakeoverSession,
   getTakeoverMessages,
   getTakeoverSession,
   sendTakeoverMessage,
@@ -45,9 +48,13 @@ const childStatus = ref('')
 const draft = ref('')
 const sending = ref(false)
 const conflictMsg = ref('')
+const cancelArmed = ref(false)
+const cancelling = ref(false)
+const cancelNotice = ref('')
 const listEl = ref<HTMLElement | null>(null)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let disarmTimer: ReturnType<typeof setTimeout> | null = null
 
 const status = computed(() => childStatus.value || session.value?.childStatus || '')
 const busy = computed(() => BUSY_STATUSES.includes(status.value))
@@ -179,6 +186,51 @@ async function send() {
 
 function onEnterKey() { void send() }
 
+// ---------------------------------------------------------------------------
+// 中断任务：两段确认（首次点击只武装按钮，4s 内再点才真正发请求），避免
+// 公开页上一次误触就把执行中的任务打断。中断后轮询会把徽标刷成「已取消」，
+// 输入随即恢复——纠正闭环由用户直接继续发消息完成。
+// ---------------------------------------------------------------------------
+const cancelLabel = computed(() =>
+  cancelling.value ? '中断中…' : (cancelArmed.value ? '再点一次确认中断' : '中断任务'))
+
+function disarmCancel() {
+  cancelArmed.value = false
+  if (disarmTimer !== null) {
+    clearTimeout(disarmTimer)
+    disarmTimer = null
+  }
+}
+
+async function onCancelClick() {
+  if (cancelling.value || loading.value || loadError.value) return
+  if (!cancelArmed.value) {
+    cancelArmed.value = true
+    if (disarmTimer !== null) clearTimeout(disarmTimer)
+    disarmTimer = setTimeout(disarmCancel, 4000)
+    return
+  }
+  disarmCancel()
+  cancelling.value = true
+  conflictMsg.value = ''
+  try {
+    await cancelTakeoverSession(token)
+    cancelNotice.value = '已请求中断，正在停止当前执行，稍后可发送纠正消息。'
+  } catch (err) {
+    const { status: code, message } = extractError(err)
+    if (code === 404) handleFatal('链接无效或已过期')
+    else conflictMsg.value = message
+  } finally {
+    cancelling.value = false
+  }
+}
+
+// 状态离开 busy（worker 已收口为 cancelled/completed/…）后清掉中断提示；
+// 又回到 busy（纠正消息触发的下一轮）则不残留旧文案
+watch(busy, (isBusy) => {
+  if (!isBusy) cancelNotice.value = ''
+})
+
 // 新消息到达时把消息区滚到底部
 watch(() => visibleMessages.value.length, async () => {
   await nextTick()
@@ -192,6 +244,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopPolling()
+  if (disarmTimer !== null) clearTimeout(disarmTimer)
   document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
@@ -243,7 +296,19 @@ onUnmounted(() => {
 
       <div class="takeover-composer">
         <p v-if="conflictMsg" class="takeover-composer__warning" data-test="conflict-warning">{{ conflictMsg }}</p>
-        <p v-if="busy" class="takeover-composer__hint" data-test="busy-hint">任务执行中，请等待任务暂停或完成后再发送。</p>
+        <p v-if="cancelNotice" class="takeover-composer__notice" data-test="cancel-notice">{{ cancelNotice }}</p>
+        <div v-if="busy" class="takeover-composer__busy" data-test="busy-hint">
+          <span class="takeover-composer__hint">任务执行中，暂不能发送新消息。</span>
+          <button
+            class="takeover-composer__stop"
+            :class="{ 'is-armed': cancelArmed }"
+            type="button"
+            data-test="stop-btn"
+            aria-label="中断任务"
+            :disabled="cancelling"
+            @click="onCancelClick"
+          >{{ cancelLabel }}</button>
+        </div>
         <div class="takeover-composer__row">
           <textarea
             v-model="draft"
@@ -466,10 +531,52 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.takeover-composer__hint {
+.takeover-composer__notice {
   margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.takeover-composer__busy {
+  margin: 0 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.takeover-composer__hint {
   font-size: 13px;
   color: #b45309;
+}
+
+.takeover-composer__stop {
+  padding: 6px 14px;
+  border: 1px solid #ef4444;
+  border-radius: 8px;
+  background: #fff;
+  color: #dc2626;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.takeover-composer__stop:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.takeover-composer__stop.is-armed {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.takeover-composer__stop:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .takeover-composer__row {

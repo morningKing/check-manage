@@ -26,13 +26,18 @@
  *
  * 清理纪律：AITEST 前缀自造值；tokens/messages/sessions/batch 全显式删除
  * （batch_takeover_tokens 刻意无外键，必须按 session_id 手工清）；API Key 用后即删。
+ *
+ * LLM 预算标记：用例 1-3 为 0 LLM（failFast 构造）；用例 4（接管中断）
+ * 为 @llm-light —— sleepBatch 真实长任务开 running 窗口（1 次 sleep 回合）
+ * + 中断后的纠正续跑（1 次轻量回合），同 e2e/ai-full/batch/control.spec 约定。
  */
 import { test, expect } from '@playwright/test'
 import {
   api, openApi, createApiKey, deleteApiKey, screenshot, restartBackend,
 } from './ai-full/helpers'
 import { newId, cleanupSessionsByPrefix } from './ai-full/db-helpers'
-import { dbSeed } from './ai-full/batch/toolbox'
+import { dbSeed, sleepBatch, adminTokenCached } from './ai-full/batch/toolbox'
+import { cleanupBatch, getDetail } from './ai-full/batch/batch-helpers'
 
 test.setTimeout(180_000)
 
@@ -193,5 +198,75 @@ test('TTL 部署级可配置：TAKEOVER_TTL_MAX_HOURS / TAKEOVER_TTL_DEFAULT_HOU
     expect(hoursFromNow(byDefault.json.expiresAt)).toBeLessThanOrEqual(3.1)
   } finally {
     await restartBackend()   // 无参恢复默认 env（不留下 48/3 的本机覆盖）
+  }
+})
+
+test('接管中断真实链路：执行中两段确认中断→worker 协作式落 cancelled→纠正消息续跑',
+     async ({ page, request }) => {
+  test.setTimeout(600_000)
+  // @llm-light：sleepBatch 真实长任务（bash sleep 120s）构造稳定 running 窗口
+  // ——seeded running 行无人认领，cancel_requested 不会被任何 worker 消费，
+  // 必须让真实 worker 拥有租约才能验证协作式中断全链路。
+  const tk = await adminTokenCached()
+  const bid = await sleepBatch(tk, { children: 1, sleepSec: 120 })
+  let sid = ''
+  try {
+    // takeover-link 签发按 api_key_id 圈批——内部 API 建的批补挂本套件 key
+    dbSeed(`UPDATE ai_chat_batches SET api_key_id='${KEY_ID}' WHERE id='${bid}'`)
+    sid = (await getDetail(tk, bid)).sessions[0].id as string
+
+    // 等真实 worker 认领进入 running（sleep 窗口打开）
+    await expect.poll(async () => {
+      const rows = dbSeed(`SELECT status FROM ai_chat_sessions WHERE id='${sid}'`)
+      return rows[0]?.[0] === 'running' ? 'running' : `waiting:${rows[0]?.[0]}`
+    }, { timeout: 120_000, intervals: [2_000] }).toBe('running')
+
+    const issued = await openApi(request, KEY, 'POST',
+      `/v1/ai-batches/${bid}/sessions/${sid}/takeover-link`, { ttlHours: 1 })
+    expect(issued.status, JSON.stringify(issued.json)).toBe(201)
+
+    // 公开页：执行中徽标 + 中断按钮可见
+    await page.goto(issued.json.path)
+    await expect(page.locator('.takeover-badge')).toHaveText('执行中', { timeout: 60_000 })
+    const stop = page.locator('[data-test="stop-btn"]')
+    await expect(stop).toHaveText('中断任务')
+
+    // 两段确认：第一击只武装，第二击才发请求
+    await stop.click()
+    await expect(stop).toHaveText('再点一次确认中断')
+    await stop.click()
+    await expect(page.locator('[data-test="cancel-notice"]')).toBeVisible()
+
+    // 202 落到真实标志位：cancel_requested 置真或 worker 已收口 cancelled
+    await expect.poll(async () => {
+      const rows = dbSeed(`SELECT status, cancel_requested
+                             FROM ai_chat_sessions WHERE id='${sid}'`)
+      const [st, flag] = rows[0] ?? []
+      return (flag === true || st === 'cancelled') ? 'flagged' : `waiting:${st}/${flag}`
+    }, { timeout: 30_000, intervals: [1_000] }).toBe('flagged')
+
+    // worker 协作式中止 → 落 cancelled → 3s 轮询刷徽标、输入解锁
+    await expect(page.locator('.takeover-badge')).toHaveText('已取消', { timeout: 90_000 })
+    await screenshot(page, 'external-takeover-interrupt')
+
+    // 纠正闭环：cancelled 状态下消息直接可发（repark=false 同会话续跑）——
+    // 真实 agent 路径落用户消息 + 子任务离开 cancelled 重新执行
+    const corrective = 'TK-E2E-CORRECTIVE-MARKER: redo with a summary table.'
+    const input = page.locator('.takeover-composer__input')
+    await input.fill(corrective)
+    await page.locator('.takeover-composer__send').click()
+    await expect(input).toHaveValue('')
+    await expect(page.locator('[data-test="conflict-warning"]')).toHaveCount(0)
+    await expect.poll(async () => {
+      const st = dbSeed(`SELECT status FROM ai_chat_sessions WHERE id='${sid}'`)[0]?.[0]
+      const msg = dbSeed(`SELECT count(*) FROM ai_chat_messages
+                           WHERE session_id='${sid}' AND role='user'
+                             AND content::text LIKE '%TK-E2E-CORRECTIVE-MARKER%'`)[0]?.[0]
+      return (['pending', 'running'].includes(st) && Number(msg) >= 1)
+        ? 'rerun' : `waiting:${st}/${msg}`
+    }, { timeout: 90_000, intervals: [2_000] }).toBe('rerun')
+  } finally {
+    dbSeed(`DELETE FROM batch_takeover_tokens WHERE session_id='${sid}'`)
+    await cleanupBatch(tk, bid)
   }
 })

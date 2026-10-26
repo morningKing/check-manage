@@ -31,3 +31,11 @@ export function getTakeoverMessages(t: string) {
 export function sendTakeoverMessage(t: string, prompt: string) {
   return post<{ queued: boolean }>(`/external/takeover/session/messages${qs(t)}`, { prompt }, { silent: true })
 }
+
+/** 中断执行中的子任务（两段确认在前端）：running/pending 置协作式取消标志由
+ *  worker 收口（轮询窗口数秒），paused 同步落 cancelled；终态 409。消耗与
+ *  发送共享的写侧限速桶。中断后可继续发消息在原 OC 会话上纠正续跑。 */
+export function cancelTakeoverSession(t: string) {
+  return post<{ queued: boolean; childStatus: string }>(
+    `/external/takeover/session/cancel${qs(t)}`, {}, { silent: true })
+}
