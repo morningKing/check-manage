@@ -12,3 +12,12 @@ export function fmtMs(ms: number | null | undefined): string {
 export function pct(r: number | null | undefined): string {
   return r == null ? '-' : `${Math.round(r * 100)}%`
 }
+
+/** 慢因四段元数据（与任务抽屉覆盖占比条同源同色：模型蓝/等待橙/工具绿/间隙灰）。
+ *  key 顺序即堆叠条铺排顺序。 */
+export const SEGMENT_META = {
+  model: { label: '模型推理', color: '#409eff' },
+  wait: { label: '子代理等待', color: '#e6a23c' },
+  tool: { label: '工具', color: '#67c23a' },
+  idle: { label: '引擎间隙', color: '#909399' },
+} as const

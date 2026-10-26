@@ -544,6 +544,123 @@ def definition_overview(db_ctx) -> list:
     return out
 
 
+def definition_cause_distribution(db_ctx, kind: str, name: str,
+                                  limit: int = 200) -> dict:
+    """定义级慢因分布（2026-10-26）：已完结任务的四段覆盖加总（shares）、
+    逐任务主导慢因计数（dominantCounts）与归属清单（taskCauses）。
+
+    列表口径的 modelMs 是毛值（轮内工具未拆出），聚合必须拆准四段——但不
+    逐任务走 detail（每任务 2-3 查询过重）：按 session 集合三条批量查询
+    （消息/子代理/工具调用），Python 侧按各自会话窗口过滤（批量 SQL 无法
+    逐会话给窗），逐任务跑 coverage_split。轮窗锚点/子代理终点截断/工具
+    occurred_at 夹窗均与 _attempt_metrics 同口径。证据口径与下钻/概览一致
+    （skill 只认 runtime 确认调用）。SQL 字面量内联、全部 %s 参数化。"""
+    seg_keys = ('model', 'wait', 'tool', 'idle')
+    zero = {'wallMs': 0, 'modelMs': 0, 'toolMs': 0, 'subagentWaitMs': 0,
+            'idleMs': 0}
+    with _open_conn(db_ctx) as conn:
+        with conn.cursor() as cur:
+            if kind == 'skill':
+                cur.execute((
+                    "SELECT a.id, a.session_id, a.started_at, a.finished_at"
+                    " FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    "   AND a.finished_at IS NOT NULL"
+                    " AND EXISTS (SELECT 1 FROM ai_skill_invocations i"
+                    "   WHERE i.attempt_id = a.id AND i.skill_name = %s"
+                    "   AND i.source = 'runtime')"
+                    " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
+                    (name, limit))
+            elif kind == 'agent':
+                cur.execute((
+                    "SELECT a.id, a.session_id, a.started_at, a.finished_at"
+                    " FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    "   AND a.finished_at IS NOT NULL"
+                    " AND a.effective_agent = %s"
+                    " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
+                    (name, limit))
+            else:
+                cur.execute((
+                    "SELECT a.id, a.session_id, a.started_at, a.finished_at"
+                    " FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    "   AND a.finished_at IS NOT NULL"
+                    " AND EXISTS (SELECT 1 FROM ai_execution_manifests m"
+                    "   WHERE m.attempt_id = a.id AND m.kind = %s"
+                    "   AND m.name = %s)"
+                    " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
+                    (kind, name, limit))
+            rows = cur.fetchall()
+            if not rows:
+                return {'taskCount': 0, 'shares': dict(zero),
+                        'dominantCounts': {k: 0 for k in seg_keys},
+                        'taskCauses': []}
+            sids = [r[1] for r in rows]
+            windows = {r[1]: (_to_ms(r[2]) or 0, _to_ms(r[3]) or _now_ms())
+                       for r in rows}
+            cur.execute(
+                "SELECT session_id, created_at, meta FROM ai_chat_messages"
+                " WHERE session_id = ANY(%s) AND role = 'assistant'"
+                " AND meta ? 'durationMs'", (sids,))
+            model_ivs: dict = {}
+            for msid, m_created, m_meta in cur.fetchall():
+                meta = m_meta or {}
+                lo, hi = windows[msid]
+                cms = _to_ms(m_created)
+                if cms is None or not (lo <= cms <= hi):
+                    continue
+                anchor = _iso_ms(meta['startedAt']) if meta.get('startedAt') else cms
+                dur = int(meta['durationMs'])
+                model_ivs.setdefault(msid, []).append((anchor, anchor + dur))
+            cur.execute(
+                "SELECT root_session_id, created_at, completed_at"
+                " FROM ai_chat_subtasks WHERE root_session_id = ANY(%s)"
+                " ORDER BY created_at", (sids,))
+            sub_ivs: dict = {}
+            for rsid, s_created, s_finished in cur.fetchall():
+                s_ms = _to_ms(s_created)
+                if s_ms is None:
+                    continue
+                e_ms = _to_ms(s_finished)
+                if e_ms is None:
+                    e_ms = windows[rsid][1]   # 中断残留/旧数据按 attempt 终点截断
+                sub_ivs.setdefault(rsid, []).append((s_ms, e_ms))
+            cur.execute(
+                "SELECT root_session_id, tool, started_at, duration_ms, occurred_at"
+                " FROM agent_tool_calls WHERE root_session_id = ANY(%s)"
+                " AND started_at IS NOT NULL AND duration_ms IS NOT NULL", (sids,))
+            tool_ivs: dict = {}
+            task_ivs: dict = {}
+            for rsid, t_tool, t_start, t_dur, t_occ in cur.fetchall():
+                lo, hi = windows[rsid]
+                occ = _to_ms(t_occ)
+                if occ is None or not (lo <= occ <= hi):
+                    continue
+                s_ms = int(_to_ms(t_start))
+                iv = (s_ms, s_ms + int(t_dur))
+                bucket = task_ivs if t_tool == 'task' else tool_ivs
+                bucket.setdefault(rsid, []).append(iv)
+    shares = dict(zero)
+    counts = {k: 0 for k in seg_keys}
+    causes: list = []
+    for aid, sid, _st, _fin in rows:
+        lo, hi = windows[sid]
+        cov = coverage_split(lo, hi, model_ivs.get(sid, []),
+                             sub_ivs.get(sid, []), tool_ivs.get(sid, []),
+                             task_ivs.get(sid, []))
+        for k in shares:
+            shares[k] += cov[k]
+        if cov['wallMs'] > 0:
+            seg_ms = {'model': cov['modelMs'], 'wait': cov['subagentWaitMs'],
+                      'tool': cov['toolMs'], 'idle': cov['idleMs']}
+            dominant = max(seg_ms, key=lambda k: seg_ms[k])
+            counts[dominant] += 1
+            causes.append({'attemptId': aid, 'dominant': dominant})
+    return {'taskCount': len(rows), 'shares': shares,
+            'dominantCounts': counts, 'taskCauses': causes}
+
+
 # ---- 诊断规则（spec §6，阈值常量逐字）----
 SUBAGENT_WAIT_RATIO = 0.5
 SUBAGENT_MIN_WALL_MS = 60_000

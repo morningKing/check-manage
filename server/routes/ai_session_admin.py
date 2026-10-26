@@ -1577,6 +1577,19 @@ def perf_def_tasks(kind, name):
     return jsonify({'tasks': list_definition_tasks(get_db, kind, name, limit)})
 
 
+@ai_execution_admin_bp.get('/perf/defs/<kind>/<name>/cause-distribution')
+@require_permission('admin.ai_chat_admin')
+def perf_def_cause_distribution(kind, name):
+    """定义级慢因分布：四段覆盖加总 + 主导慢因计数 + 逐任务归属（点击筛选）。"""
+    from db import get_db
+    from utils.perf_analysis import definition_cause_distribution
+    try:
+        limit = min(max(int(request.args.get('limit') or 200), 1), 200)
+    except (TypeError, ValueError):
+        limit = 200
+    return jsonify(definition_cause_distribution(get_db, kind, name, limit))
+
+
 @ai_execution_admin_bp.get('/perf/attempts/<aid>')
 @require_permission('admin.ai_chat_admin')
 def perf_attempt(aid):

@@ -12,7 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.perf_analysis import (coverage_split, load_attempt_metrics,
                                  list_definition_tasks, list_slow_tasks,
-                                 definition_overview, diagnose)
+                                 definition_overview, diagnose,
+                                 definition_cause_distribution)
 
 
 class TestCoverageSplit:
@@ -108,7 +109,8 @@ def user_id(db_conn):
         cur.execute("DELETE FROM agent_tool_calls WHERE oc_session_id LIKE 'oc-x-%'"
                     " OR oc_session_id LIKE 'oc-agg-%' OR oc_session_id = 'oc-old'"
                     " OR oc_session_id LIKE 'oc-cap-%' OR oc_session_id LIKE 'oc-ta-%'"
-                    " OR oc_session_id LIKE 'oc-del-%'")
+                    " OR oc_session_id LIKE 'oc-del-%'"
+                    " OR oc_session_id LIKE 'oc-cause-%'")
     db_conn.commit()
 
 
@@ -578,6 +580,81 @@ class TestDefinitionAggregates:
         assert all(t['attemptId'] != a1 for t in list_slow_tasks(db_conn, limit=50))
 
 
+# ---- 定义级慢因分布聚合 ----
+
+
+class TestCauseDistribution:
+    def test_shares_and_dominant_counts(self, db_conn, user_id):
+        """四任务四种主导慢因（等待/工具/间隙/模型），加总与逐任务归属都要对。
+        每任务墙钟 500s（NOW-600 → NOW-100，同一事务内 NOW 恒定 → 精确断言）：
+        - A 等待主导：轮 [0,200]s + 子代理 [50,350]s → wait 300 / model 50 / idle 150
+        - B 工具主导：轮 [0,400]s + bash [100,400]s → tool 300 / model 100 / idle 100
+        - C 间隙主导：无轮次无子代理 → idle 500
+        - D 模型主导：轮 [0,400]s → model 400 / idle 100"""
+        a_wait = _seed_perf(db_conn, user_id,
+                            model_turns=[(200_000, 100, 10, 0)],
+                            subtasks=[('general', 50, 350)])[2]
+        _bb, sid_b, b_tool = _seed_perf(db_conn, user_id,
+                                        model_turns=[(400_000, 100, 10, 0)])
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " part_id, tool, args_text, state, occurred_at, started_at,"
+                " duration_ms) VALUES ('oc-cause-b', %s, 'pc1', 'bash', '{}',"
+                " 'completed', NOW() - interval '500 seconds',"
+                " NOW() - interval '500 seconds', 300000)", (sid_b,))
+        db_conn.commit()
+        c_idle = _seed_perf(db_conn, user_id)[2]
+        d_model = _seed_perf(db_conn, user_id,
+                             model_turns=[(400_000, 100, 10, 0)])[2]
+
+        dist = definition_cause_distribution(db_conn, 'skill', 'stock-analysis')
+        assert dist['taskCount'] == 4
+        assert dist['dominantCounts'] == {'model': 1, 'wait': 1, 'tool': 1, 'idle': 1}
+        causes = {c['attemptId']: c['dominant'] for c in dist['taskCauses']}
+        assert causes[a_wait] == 'wait' and causes[b_tool] == 'tool'
+        assert causes[c_idle] == 'idle' and causes[d_model] == 'model'
+        shares = dist['shares']
+        assert shares['wallMs'] == 4 * 500_000
+        assert shares['subagentWaitMs'] == 300_000
+        assert shares['toolMs'] == 300_000
+        # 模型净 = A 50s + B 100s + D 400s；B 的工具行与种子跨事务取 NOW()，
+        # 有毫秒级取整差（同 test_coverage_delegation 先例，±1s 容差）
+        assert abs(shares['modelMs'] - 550_000) <= 1_000
+        assert abs(shares['idleMs'] - 850_000) <= 2_000
+        assert sum(v for k, v in shares.items() if k != 'wallMs') == shares['wallMs']
+
+    def test_running_attempt_excluded(self, db_conn, user_id):
+        _b, _s, aid = _seed_perf(db_conn, user_id)
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_execution_attempts SET finished_at = NULL,"
+                        " status='running' WHERE id = %s", (aid,))
+        db_conn.commit()
+        dist = definition_cause_distribution(db_conn, 'skill', 'stock-analysis')
+        assert dist['taskCount'] == 0 and dist['taskCauses'] == []
+        assert dist['shares']['wallMs'] == 0
+
+    def test_agent_kind_attribution(self, db_conn, user_id):
+        _b, _s, aid = _seed_perf(db_conn, user_id, invoked=False,
+                                 effective_agent='dev', agents=['dev'])
+        dist = definition_cause_distribution(db_conn, 'agent', 'dev')
+        assert dist['taskCount'] == 1
+        assert dist['taskCauses'][0]['attemptId'] == aid
+
+    def test_kefu_excluded(self, db_conn, user_id):
+        _seed_perf(db_conn, user_id, source_type='kefu')
+        dist = definition_cause_distribution(db_conn, 'skill', 'stock-analysis')
+        assert dist['taskCount'] == 0
+
+    def test_empty_def_returns_zeros(self, db_conn):
+        dist = definition_cause_distribution(db_conn, 'skill', 'no-such-skill')
+        assert dist['taskCount'] == 0
+        assert dist['shares'] == {'wallMs': 0, 'modelMs': 0, 'toolMs': 0,
+                                  'subagentWaitMs': 0, 'idleMs': 0}
+        assert dist['dominantCounts'] == {'model': 0, 'wait': 0, 'tool': 0, 'idle': 0}
+        assert dist['taskCauses'] == []
+
+
 # ---- 诊断规则（纯函数）----
 
 
@@ -796,6 +873,28 @@ class TestPerfEndpoints:
         assert r.status_code == 200
         rules = [d['ruleId'] for d in r.get_json()['diagnoses']]
         assert 'outlier_vs_peers' in rules
+
+    def test_cause_distribution_endpoint(self, db_conn, user_id, pf_client,
+                                         admin_h):
+        _b, _s, aid = _seed_perf(db_conn, user_id,
+                                 model_turns=[(400_000, 100, 10, 0)])
+        r = pf_client.get(
+            '/ai/chat/admin/perf/defs/skill/stock-analysis/cause-distribution',
+            headers=admin_h)
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['taskCount'] == 1
+        assert body['taskCauses'][0] == {'attemptId': aid, 'dominant': 'model'}
+        assert set(body['shares']) == {'wallMs', 'modelMs', 'toolMs',
+                                       'subagentWaitMs', 'idleMs'}
+        assert set(body['dominantCounts']) == {'model', 'wait', 'tool', 'idle'}
+        # 非 admin 403（与其余 /perf 端点同权限口径）
+        from auth import create_token
+        tok = create_token({'id': 'u2', 'username': 'g', 'role': 'guest'})
+        r2 = pf_client.get(
+            '/ai/chat/admin/perf/defs/skill/stock-analysis/cause-distribution',
+            headers={'Authorization': f'Bearer {tok}'})
+        assert r2.status_code == 403
 
     def test_attempt_404_and_limit_clamp(self, db_conn, user_id, pf_client, admin_h):
         assert pf_client.get('/ai/chat/admin/perf/attempts/nope',

@@ -32,15 +32,15 @@ with get_db() as conn:
 // agent_tool_calls 对 sessions 无 FK——会话级联清不掉工具调用行，
 // 而 (oc_session_id, part_id) 唯一索引使复跑必撞，故必须显式先清。
 const PF_CLEANUP = `
-  DELETE FROM ai_skill_invocations WHERE id = 'pf-e2e-inv';
-  DELETE FROM agent_tool_calls WHERE oc_session_id = 'oc-pf-e2e';
-  DELETE FROM ai_chat_sessions WHERE id = 'pf-e2e-sess';
-  DELETE FROM ai_execution_attempts WHERE id = 'pf-e2e-att';
-  DELETE FROM ai_chat_batches WHERE id = 'pf-e2e-batch';
+  DELETE FROM ai_skill_invocations WHERE id IN ('pf-e2e-inv', 'pf-e2e-inv2');
+  DELETE FROM agent_tool_calls WHERE oc_session_id IN ('oc-pf-e2e', 'oc-pf-e2e-2');
+  DELETE FROM ai_chat_sessions WHERE id IN ('pf-e2e-sess', 'pf-e2e-sess2');
+  DELETE FROM ai_execution_attempts WHERE id IN ('pf-e2e-att', 'pf-e2e-att2');
+  DELETE FROM ai_chat_batches WHERE id IN ('pf-e2e-batch', 'pf-e2e-batch2');
   DELETE FROM users WHERE id = 'pf-e2e-user';
 `
 
-test('性能分析：DB 播种任务在视图中渲染（趋势+下钻+诊断）', async ({ page }) => {
+test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下钻+诊断）', async ({ page }) => {
   const mark = tag('perf')
   // 复跑防撞：先清可能的历史残留（上一次中断的 finally 未执行到）
   dbExec(PF_CLEANUP)
@@ -84,6 +84,18 @@ test('性能分析：DB 播种任务在视图中渲染（趋势+下钻+诊断）
      NOW() - interval '350 seconds', NOW() - interval '350 seconds', 150000),
     ('oc-pf-e2e', 'pf-e2e-sess', 'pt2', 'bash', '{}', 'completed',
      NOW() - interval '300 seconds', NOW() - interval '300 seconds', 50000);
+    -- 第二个任务：无轮次/子代理/工具 → 全程引擎间隙（400s idle 主导），
+    -- 与任务一（工具主导 150s）构成两种主导慢因，供分布与筛选断言
+    INSERT INTO ai_chat_batches (id, user_id, name, prompt, total)
+    VALUES ('pf-e2e-batch2', 'pf-e2e-user', '${mark}', 'p', 1);
+    INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, batch_seq, opencode_session_id, workspace_path)
+    VALUES ('pf-e2e-sess2', 'pf-e2e-user', 'completed', 'pf-e2e-batch2', 0, 'oc-pf-e2e-2', 'C:/tmp/pf-e2e-2');
+    INSERT INTO ai_execution_attempts (id, session_id, source_type, source_id, status, started_at, finished_at)
+    VALUES ('pf-e2e-att2', 'pf-e2e-sess2', 'batch', 'pf-e2e-batch2', 'completed',
+            NOW() - interval '500 seconds', NOW() - interval '100 seconds');
+    INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, evidence_refs)
+    VALUES ('pf-e2e-inv2', 'pf-e2e-sess2', 'pf-e2e-att2', 'perf-e2e-skill', '', 'runtime', 'confirmed',
+            NOW() - interval '400 seconds', '[]'::jsonb);
   `)
   try {
     await gotoWithAuth(page, PAGE)
@@ -93,9 +105,22 @@ test('性能分析：DB 播种任务在视图中渲染（趋势+下钻+诊断）
     const defItem = page.locator('.perf-def-item').filter({ hasText: 'perf-e2e-skill' })
     await expect(defItem).toBeVisible({ timeout: 15_000 })
     await defItem.click()
+    // 慢因分布块：两个任务两种主导（工具/引擎间隙），四段堆叠条与芯片可见
+    await expect(page.locator('[data-test="cause-dist-block"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[data-test="cause-bar"]')).toBeVisible()
+    await expect(page.locator('[data-test="cause-chip-tool"]')).toContainText('工具 1 个')
+    await expect(page.locator('[data-test="cause-chip-idle"]')).toContainText('引擎间隙 1 个')
+    // 未筛选：任务表两行；点「引擎间隙」芯片 → 只剩 idle 主导的任务一列不剩、
+    // 任务二独留；再点取消恢复两行
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(2)
+    await page.locator('[data-test="cause-chip-idle"]').click()
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(1)
+    await page.locator('[data-test="cause-chip-idle"]').click()
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(2)
     await expect(page.locator('[data-test="perf-trend"]')).toBeVisible({ timeout: 10_000 })
-    // 任务表首行（ElTable row-click 打开下钻；表列无 sessionId，按行点）
-    await page.locator('.perf-view .el-table__row').first().click()
+    // 任务表首行（ElTable row-click 打开下钻；点「工具」主导行=带 bash 的任务一，
+    // 其下钻才有工具耗时聚合表可断言）
+    await page.locator('.perf-view .el-table__row').filter({ hasText: '工具' }).first().click()
     await expect(page.locator('[data-test="cov-model"]')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('[data-test="diag-list"]')).toBeVisible()
     // 工具耗时聚合表：播种的两条 bash 工具调用带真实时长 → 表可见且含 bash

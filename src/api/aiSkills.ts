@@ -353,12 +353,27 @@ export interface Diagnosis {
   anchor: { type: 'turn' | 'subtask' | 'segment' | 'def'; ref: string }
 }
 
+/** 定义级慢因分布（2026-10-26）：四段覆盖与任务抽屉覆盖占比条同源同口径
+ *  （互斥、之和=墙钟，工具段已从模型活跃拆出）；dominant = 任务内占比最大的段。 */
+export type PerfCauseSegment = 'model' | 'wait' | 'tool' | 'idle'
+export interface PerfCauseDistribution {
+  taskCount: number
+  shares: { wallMs: number; modelMs: number; toolMs: number;
+            subagentWaitMs: number; idleMs: number }
+  dominantCounts: Record<PerfCauseSegment, number>
+  taskCauses: { attemptId: string; dominant: PerfCauseSegment }[]
+}
+
 export function perfOverview() {
   return get<{ defs: PerfDefSummary[] }>(`${ADMIN}/perf/overview`)
 }
 export function perfDefTasks(kind: string, name: string, limit = 50) {
   return get<{ tasks: PerfTaskEntry[] }>(
     `${ADMIN}/perf/defs/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/tasks?limit=${limit}`)
+}
+export function perfDefCauseDistribution(kind: string, name: string, limit = 200) {
+  return get<PerfCauseDistribution>(
+    `${ADMIN}/perf/defs/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/cause-distribution?limit=${limit}`)
 }
 export function perfAttempt(id: string) {
   return get<PerfAttemptDetail>(`${ADMIN}/perf/attempts/${encodeURIComponent(id)}`)
