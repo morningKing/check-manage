@@ -106,16 +106,48 @@
 
         <span class="se-bubble-sep" />
 
-        <!-- 低频/上下文操作收进「⋯」（撤销重做、行内代码、链接、清除格式、表格行列操作） -->
+        <!-- 撤销/重做提为独立按钮（原来藏在「⋯」里，发现成本高）；走 Yjs UndoManager 命令 -->
+        <button
+          type="button"
+          class="se-bubble-btn"
+          aria-label="撤销 (Ctrl+Z)"
+          title="撤销 (Ctrl+Z)"
+          :disabled="!canUndo()"
+          @mousedown.prevent
+          @click="editor.chain().focus().undo().run()"
+        >↶</button>
+        <button
+          type="button"
+          class="se-bubble-btn"
+          aria-label="重做 (Ctrl+Y)"
+          title="重做 (Ctrl+Y)"
+          :disabled="!canRedo()"
+          @mousedown.prevent
+          @click="editor.chain().focus().redo().run()"
+        >↷</button>
+
+        <!-- AI 改写：对选中文字弹出与右键相同的改写菜单（Alt+A 同效） -->
+        <button
+          type="button"
+          class="se-bubble-btn se-ai-btn"
+          aria-label="AI 改写"
+          title="AI 改写选中文字（美化、扩写、精简、纠正语病、翻译…；Alt+A 或右键）"
+          :disabled="!hasSelection()"
+          @mousedown.prevent
+          @click="emit('ai-rewrite')"
+        >AI 改写</button>
+
+        <span class="se-bubble-sep" />
+
+        <!-- 低频/上下文操作收进「⋯」（行内代码、链接、清除格式、快捷键、表格行列操作） -->
         <el-dropdown trigger="click" @command="onMoreCommand">
           <span class="se-bubble-btn" title="更多格式与操作">⋯</span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="undo" :disabled="!canUndo()">撤销</el-dropdown-item>
-              <el-dropdown-item command="redo" :disabled="!canRedo()">重做</el-dropdown-item>
-              <el-dropdown-item command="code" divided>行内代码</el-dropdown-item>
+              <el-dropdown-item command="code">行内代码</el-dropdown-item>
               <el-dropdown-item command="link">链接…</el-dropdown-item>
               <el-dropdown-item command="clear">清除格式</el-dropdown-item>
+              <el-dropdown-item command="shortcuts" divided>快捷键…</el-dropdown-item>
               <template v-if="editor.isActive('table')">
                 <el-dropdown-item command="rowBefore" divided>上方插入行</el-dropdown-item>
                 <el-dropdown-item command="rowAfter">下方插入行</el-dropdown-item>
@@ -139,9 +171,9 @@
 <script setup lang="ts">
 /**
  * 编辑器格式工具段（与顶栏合并为单行，Word / Google Docs 式常驻）：
- * 高频格式控件直接可见，低频/上下文操作（撤销重做、行内代码、链接、清除格式、
- * 表格行列操作）收进「⋯」菜单。撤销/重做走 Collaboration 扩展注册的
- * Yjs UndoManager 命令。所有格式按钮 @mousedown.prevent：点按钮不丢编辑器选区。
+ * 高频格式控件直接可见；撤销/重做是独立图标按钮（Yjs UndoManager 命令）；
+ * 「AI 改写」对选中文字发起改写（菜单与右键一致）；低频/上下文操作收进「⋯」。
+ * 所有格式按钮 @mousedown.prevent：点按钮不丢编辑器选区。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
@@ -154,6 +186,11 @@ const props = defineProps<{
   editor: Editor
   /** 当前文档 id（图片上传需要） */
   docId: string
+}>()
+
+const emit = defineEmits<{
+  (e: 'ai-rewrite'): void
+  (e: 'open-shortcuts'): void
 }>()
 
 const BLOCK_OPTIONS = [
@@ -193,6 +230,11 @@ function canUndo(): boolean {
 function canRedo(): boolean {
   tick.value
   return props.editor.can().redo()
+}
+function hasSelection(): boolean {
+  tick.value
+  const { from, to } = props.editor.state.selection
+  return from !== to
 }
 
 const blockType = computed<BlockValue>(() => {
@@ -277,11 +319,10 @@ function onMoreCommand(command: string): void {
   const editor = props.editor
   const chain = editor.chain().focus()
   switch (command) {
-    case 'undo': chain.undo().run(); break
-    case 'redo': chain.redo().run(); break
     case 'code': chain.toggleCode().run(); break
     case 'link': openLink(); break
     case 'clear': clearFormatting(editor); break
+    case 'shortcuts': emit('open-shortcuts'); break
     case 'rowBefore': TABLE_COMMANDS.addRowBefore(editor); break
     case 'rowAfter': TABLE_COMMANDS.addRowAfter(editor); break
     case 'rowDelete': TABLE_COMMANDS.deleteRow(editor); break

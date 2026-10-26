@@ -7,7 +7,14 @@
       <div class="se-head">
         <header class="se-topbar">
           <slot name="title" />
-          <EditorToolbar v-if="editor" ref="toolbarRef" :editor="editor" :doc-id="docId" />
+          <EditorToolbar
+            v-if="editor"
+            ref="toolbarRef"
+            :editor="editor"
+            :doc-id="docId"
+            @ai-rewrite="openReviseMenuAtSelection"
+            @open-shortcuts="shortcutsOpen = true"
+          />
           <span class="se-status-pill">
             <i class="se-status-dot" :class="`is-${syncState}`" />
             <span class="se-badge" :class="`se-badge-${syncState}`">{{ syncStateLabel }}</span>
@@ -36,6 +43,7 @@
       </div>
       <div class="se-workspace">
         <EditorContent v-if="editor" :editor="editor" class="se-editor-host" />
+        <FindReplacePanel v-model:open="findOpen" :editor="editor ?? null" />
         <SuggestionSidebar
           v-if="sidebarOpen"
           :ai="notes.ai"
@@ -47,6 +55,7 @@
           @hover="onHover"
         />
       </div>
+      <DocHud :editor="editor ?? null" />
       <div
         v-if="menu"
         class="se-revise-menu"
@@ -77,6 +86,16 @@
           </button>
         </div>
       </div>
+      <el-dialog v-model="shortcutsOpen" title="键盘快捷键" width="440px" append-to-body>
+        <table class="se-shortcuts">
+          <tbody>
+            <tr v-for="row in SHORTCUT_ROWS" :key="row.keys">
+              <td>{{ row.keys }}</td>
+              <td>{{ row.desc }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </el-dialog>
     </div>
     <!-- 专注模式下的浮动退出钮（顶栏整体隐藏后唯一常驻出口；Esc 同效） -->
     <button
@@ -107,6 +126,8 @@ import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
 import EditorToolbar from './EditorToolbar.vue'
 import SuggestionSidebar from './SuggestionSidebar.vue'
+import DocHud from './DocHud.vue'
+import FindReplacePanel from './FindReplacePanel.vue'
 import { COMMANDS_MAP, requestRewrite } from './core/commands'
 import { CompletionGhost } from './core/completion'
 import { createSlashMenu } from './core/slash-menu'
@@ -115,6 +136,7 @@ import { compileRules, type CompiledRules } from './core/check-rules'
 import { FORMATTING_EXTENSIONS } from './core/formatting'
 import { TABLE_EXTENSIONS } from './core/table'
 import { FIGURE_EXTENSIONS, insertFigure } from './core/figure'
+import { FindReplaceHighlight } from './core/find-replace'
 import { getRules, getSnippets, uploadAttachment, type LocalCheckRule, type TextSnippet } from '@/api/suggestEditor'
 import { useAppStore } from '@/stores/app'
 
@@ -156,16 +178,84 @@ onMounted(() => {
   if (focusMode.value) window.addEventListener('keydown', onEscKey)
 })
 
+/** 全局快捷键（capture）：Ctrl+F 查找替换 / Ctrl+/ 快捷键帮助 / Alt+A AI 改写选中文字 */
+function onGlobalKeydown(event: KeyboardEvent): void {
+  const key = event.key
+  const target = event.target as Element | null
+  if ((event.ctrlKey || event.metaKey) && (key === 'f' || key === 'F')) {
+    // 对话框里的输入框不劫持（规则/词表管理等面板有自己的输入场景）
+    if (target?.closest?.('.el-dialog')) return
+    event.preventDefault()
+    findOpen.value = true
+    return
+  }
+  if ((event.ctrlKey || event.metaKey) && (key === '/' || key === '?')) {
+    if (target?.closest?.('.el-dialog')) return
+    event.preventDefault()
+    shortcutsOpen.value = !shortcutsOpen.value
+    return
+  }
+  if (event.altKey && (key === 'a' || key === 'A')) {
+    if (!editorRef.value) return
+    const { from, to } = editorRef.value.state.selection
+    if (from === to) return
+    event.preventDefault()
+    openReviseMenuAtSelection()
+    return
+  }
+  if (key === 'Escape') {
+    if (findOpen.value) {
+      findOpen.value = false
+      return
+    }
+    if (shortcutsOpen.value) {
+      shortcutsOpen.value = false
+      return
+    }
+    if (focusMode.value) exitFocus()
+  }
+}
+
+/** 点击改写菜单外部关闭（此前菜单只能提交才能关掉，是既有易用性缺口） */
+function onDocMouseDown(event: MouseEvent): void {
+  if (!menu.value) return
+  if ((event.target as Element | null)?.closest?.('.se-revise-menu')) return
+  menu.value = null
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onGlobalKeydown)
+  document.addEventListener('mousedown', onDocMouseDown)
+})
+
 /** 走同源反向代理（vite dev / proxy.py 均提供 /suggest-ws 的 WS 隧道），免去跨端口/CORS */
 function wsUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://'
   return `${protocol}${window.location.host}/suggest-ws`
 }
 
+/** 改写预设（对齐市面智能写作的划词动作面：润色/篇幅/语气/语病/翻译） */
 const REWRITE_PRESETS = [
   { label: '美化文本', instruction: '在保持原意的前提下，让表达更优雅、流畅、书面化' },
-  { label: '精简表达', instruction: '删掉冗余与空话，用更短的话表达同样的意思' },
   { label: '改得更正式', instruction: '改成正式、专业的书面语，适合对外文档' },
+  { label: '改得口语化', instruction: '改成通俗易懂、口语化的表达，让非专业读者也能读懂' },
+  { label: '精简表达', instruction: '删掉冗余与空话，用更短的话表达同样的意思' },
+  { label: '扩写', instruction: '在保持原意与事实的前提下，把这段内容写得更充实、具体，补充必要的细节与说明' },
+  { label: '纠正语病', instruction: '找出并纠正这段话里的语病、错别字与搭配不当，保持原意，输出修正后的文本' },
+  { label: '翻译成英文', instruction: '把这段话翻译成地道、专业的英文' },
+]
+
+/** 快捷键帮助对话框内容（Ctrl+/ 或「⋯」菜单打开） */
+const SHORTCUT_ROWS = [
+  { keys: 'Ctrl+B / I / U', desc: '加粗 / 斜体 / 下划线' },
+  { keys: 'Ctrl+Z / Ctrl+Y', desc: '撤销 / 重做' },
+  { keys: '/', desc: '句首唤起块菜单（正文、标题、列表、表格…）' },
+  { keys: 'Tab', desc: '接受补全候选或续写联想；Esc 丢弃' },
+  { keys: 'Ctrl+Space', desc: '强制弹出补全候选（词中也可）' },
+  { keys: '右键 / Alt+A', desc: 'AI 改写选中文字（美化、扩写、精简、翻译…）' },
+  { keys: 'Ctrl+F', desc: '查找与替换' },
+  { keys: 'Ctrl+/', desc: '本帮助' },
+  { keys: 'Esc', desc: '关闭弹层 / 退出专注模式' },
 ]
 
 interface AssistantStatus {
@@ -195,6 +285,9 @@ const connectionHint = ref<string | null>(null)
 const menu = ref<ReviseMenu | null>(null)
 const customInstruction = ref('')
 const rewriteHint = ref<string | null>(null)
+/** 查找替换面板 / 快捷键帮助（Ctrl+F / Ctrl+/） */
+const findOpen = ref(false)
+const shortcutsOpen = ref(false)
 const notes = ref<{ ai: SuggestionItem[]; local: SuggestionItem[] }>({ ai: [], local: [] })
 const activeNoteId = ref<string | null>(null)
 const sidebarOpen = ref(true)
@@ -259,6 +352,7 @@ const editor = useEditor({
     ...FIGURE_EXTENSIONS,
     Collaboration.configure({ document: ydoc, field: 'default' }),
     suggestionLayer.extension,
+    FindReplaceHighlight(),
     CompletionGhost({ ydoc, getEditor: () => editorRef.value }),
     createSlashMenu(() => snippets.value),
   ],
@@ -288,14 +382,7 @@ const editor = useEditor({
         if (from === to) return false
         const mouseEvent = event as MouseEvent
         mouseEvent.preventDefault()
-        customInstruction.value = ''
-        menu.value = {
-          x: mouseEvent.clientX,
-          y: mouseEvent.clientY,
-          from,
-          to,
-          quote: view.state.doc.textBetween(from, to, '\n').slice(0, 80),
-        }
+        openReviseMenu(from, to, { x: mouseEvent.clientX, y: mouseEvent.clientY })
         return true
       },
     },
@@ -487,12 +574,55 @@ onBeforeUnmount(() => {
   rulesChannel?.close()
   rulesChannel = null
   window.removeEventListener('keydown', onEscKey)
+  window.removeEventListener('keydown', onGlobalKeydown)
+  document.removeEventListener('mousedown', onDocMouseDown)
   if (appStore.focusMode) appStore.setFocusMode(false)
   suggestionsMap.unobserveDeep(onSuggestionsChanged)
   assistantMap.unobserveDeep(() => readAssistantStatus())
   commandsMap.unobserve(onCommandsChanged)
   ydoc.destroy()
 })
+
+/** 改写菜单定位收拢到视口内（菜单宽约 380px、高最多约 270px） */
+function clampMenuX(x: number): number {
+  return Math.max(8, Math.min(x, window.innerWidth - 388))
+}
+function clampMenuY(y: number): number {
+  return Math.max(8, Math.min(y, window.innerHeight - 280))
+}
+
+/**
+ * 打开改写菜单。有 anchor（右键坐标）时贴锚点；否则锚到选区末尾下方
+ * （顶栏按钮 / Alt+A 发起时用选区坐标，而不是按钮坐标——动作对象是选中的文字）。
+ */
+function openReviseMenu(from: number, to: number, anchor?: { x: number; y: number }): void {
+  const current = editorRef.value
+  if (!current) return
+  customInstruction.value = ''
+  const quote = current.state.doc.textBetween(from, to, '\n').slice(0, 80)
+  if (anchor) {
+    menu.value = { x: clampMenuX(anchor.x), y: clampMenuY(anchor.y), from, to, quote }
+    return
+  }
+  const start = current.view.coordsAtPos(from)
+  const end = current.view.coordsAtPos(to)
+  menu.value = {
+    x: clampMenuX(Math.min(start.left, end.left)),
+    y: clampMenuY(Math.max(start.bottom, end.bottom) + 6),
+    from,
+    to,
+    quote,
+  }
+}
+
+/** 顶栏「AI 改写」按钮 / Alt+A：对当前选区打开改写菜单 */
+function openReviseMenuAtSelection(): void {
+  const current = editorRef.value
+  if (!current) return
+  const { from, to } = current.state.selection
+  if (from === to) return
+  openReviseMenu(from, to)
+}
 
 function submitRewrite(instruction: string): void {
   const current = editorRef.value
