@@ -75,23 +75,25 @@ test('管理抽屉 UI：分组渲染 + 开关 + 保存', async ({ page, request 
   await page.getByRole('button', { name: '工具治理' }).click()
   const drawer = page.locator('.el-drawer')
   await expect(drawer).toBeVisible()
+  // 全局列头唯一 + 分组/工具渲染（矩阵改版：吸顶列头，角色标签不再逐行重复）
+  await expect(drawer.locator('.gov-head')).toHaveCount(1)
   await expect(drawer.getByText('数据查询')).toBeVisible()
   await expect(drawer.getByText('通用执行与产物')).toBeVisible()
   await expect(drawer.getByText('run_python')).toBeVisible()
   await screenshot(page, 'mcp-governance-drawer')
 
-  // 快照矩阵 → 切 run_python×developer → 保存 → 断言落库翻转 → 恢复
+  // 快照矩阵 → 切 run_python×developer（data-attr 定位，弃用脆弱下标）→ 保存 → 断言落库翻转 → 恢复
   const before = await api(request, 'GET', '/ai/mcp-tools')
   const orig = flatRules(before.json as Gov)
   const cur = orig.find(r => r.tool_name === 'run_python' && r.role === 'developer')!.allowed
-  const row = drawer.locator('.tool-row', { hasText: 'run_python' })
-  const switches = row.locator('.el-switch')
+  const devCell = drawer.locator(
+    '[data-test="gov-cell"][data-tool="run_python"][data-role="developer"]')
   // EP switch 坐标点击在真机抽屉里偶发不触发 change——用 DOM click 直击组件根
-  await switches.nth(1).evaluate((el: any) => el.click())
-  await expect(drawer.getByText('有未保存改动')).toBeVisible()
-  await drawer.getByRole('button', { name: /保存/ }).click()
-  // 保存成功 → baseline 刷新 → 脏标记消失（比 3s 自动关闭的 el-message 更本质）
-  await expect(drawer.getByText('有未保存改动')).toBeHidden({ timeout: 10_000 })
+  await devCell.locator('.el-switch').evaluate((el: any) => el.click())
+  await expect(drawer.getByText(/有未保存改动/)).toBeVisible()
+  await drawer.getByRole('button', { name: '保存', exact: true }).click()
+  // 保存成功 → baseline 刷新 → 状态回「与线上一致」（比 3s 自动关闭的 el-message 更本质）
+  await expect(drawer.getByText('与线上一致')).toBeVisible({ timeout: 10_000 })
   const after = await api(request, 'GET', '/ai/mcp-tools')
   const rp = (after.json as Gov).groups.flatMap(g => g.tools)
     .find(t => t.name === 'run_python')
