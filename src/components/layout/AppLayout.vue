@@ -365,6 +365,9 @@ function toggleSidebar(): void {
  * 组件挂载时初始化应用
  */
 onMounted(async () => {
+  // 全局快捷键必须先于下方异步初始化注册——否则 Ctrl+K 在 initialize 完成前是死键
+  window.addEventListener('keydown', handleGlobalKeydown)
+
   // 应用保存的主题设置
   appStore.applyTheme()
 
@@ -372,9 +375,6 @@ onMounted(async () => {
   await systemConfigStore.initialize()
 
   await appStore.initializeApp()
-
-  // 注册全局键盘快捷键
-  window.addEventListener('keydown', handleGlobalKeydown)
 
   // 注册路由后置钩子，自动添加标签页
   router.afterEach((to) => {

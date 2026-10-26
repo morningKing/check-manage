@@ -112,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Close, Clock, Document } from '@element-plus/icons-vue'
 import { useMenuStore, useTabStore } from '@/stores'
@@ -384,18 +384,46 @@ watch([searchQuery, filteredMenus, recentPages], () => {
 })
 
 /**
- * 监听 visible 变化，打开时自动聚焦输入框
+ * 面板打开期间的全局键盘接管（window 捕获阶段）：
+ * - Escape：无论焦点在哪都关闭面板（关闭态下焦点可能已被页面其他输入框抢走，
+ *   面板输入框上的 @keydown 兜不住），并拦断传播避免底层弹窗/页面快捷键同时响应。
+ * - Ctrl/Cmd+K：重新聚焦面板输入框并拦断传播——否则页面级同名快捷键
+ *   （如 AI 会话页聚焦会话搜索框）会把焦点从面板里抢走，且 visible 不变时
+ *   自动聚焦 watcher 不会再触发，面板就「开着但输入不进去」。
+ * 其余按键不拦截，输入框自身的 @keydown（方向键/Enter）正常工作。
+ */
+function onGlobalKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    handleClose()
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    e.stopPropagation()
+    nextTick(() => searchInputRef.value?.focus())
+  }
+}
+
+/**
+ * 监听 visible 变化：打开时挂全局键盘接管并自动聚焦输入框，关闭时摘除
  */
 watch(() => props.visible, (newVal) => {
   if (newVal) {
+    window.addEventListener('keydown', onGlobalKeydown, true)
     // 使用 nextTick 等待 DOM 渲染完成后再聚焦
     nextTick(() => {
       searchInputRef.value?.focus()
     })
+  } else {
+    window.removeEventListener('keydown', onGlobalKeydown, true)
   }
 })
 
 // ==================== Lifecycle ====================
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown, true)
+})
 </script>
 
 <style scoped lang="scss">

@@ -367,14 +367,9 @@ async function selectSearchHit(h: AiSessionSearchHit) {
 function hl(text: string): string {
   return highlightHtml(text || '', sessionQuery.value)
 }
-
-// Ctrl/Cmd+K 聚焦会话搜索框
-function onGlobalKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault()
-    sessionSearchEl.value?.focus()
-  }
-}
+// 注：Ctrl/Cmd+K 归全局命令面板（AppLayout）所有，本页不再监听——
+// 此前的「聚焦会话搜索」监听与面板抢同一个键，弹窗打开时二次按键会把焦点
+// 拽到会话搜索框且 Esc 只绑在面板输入框上，造成弹窗无法输入、无法关闭。
 const palette = computed<PaletteItem[]>(() => {
   const raw = input.value.trimStart()
   if (!raw.startsWith('/')) return []
@@ -1007,11 +1002,9 @@ onMounted(async () => {
   fetchAgents()
   // load batch list for the unified sidebar
   batches.fetchList().then(() => batches.startListPolling()).catch(() => {})
-  window.addEventListener('keydown', onGlobalKeydown)
 })
 onUnmounted(() => {
   batches.stopListPolling()
-  window.removeEventListener('keydown', onGlobalKeydown)
   if (_sessionSearchTimer) clearTimeout(_sessionSearchTimer)
 })
 
