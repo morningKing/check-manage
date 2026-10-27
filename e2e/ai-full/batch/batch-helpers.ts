@@ -48,6 +48,8 @@ export interface CreateBatchBody {
   prompt: string
   agent?: string
   model?: string
+  /** 多模型列表（2026-10-27）：≥2 个时子会话按 batch_seq 轮询分配 */
+  models?: string[]
   provision_repo?: string
   subagent_reuse?: string[]
   gate_retry?: boolean

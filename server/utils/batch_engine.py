@@ -1380,6 +1380,10 @@ class BatchWorker:
                 # no live session get reset to pending).
                 return
             prompt, agent, model, provision_repo, provision_ref = ctx
+            # 多模型批（2026-10-27）：子会话级 model 快照优先——创建/编辑时
+            # 按 batch_seq 轮询分配进 ai_chat_sessions.model（≥2 个模型才
+            # 分配，NULL 回退批级 model，单模型批/旧批行为不变）
+            model = session_row.get('model') or model
             # 入口 A/B(设计 §5.2):派发前把批定义/模板的 action_checks 登记为
             # 期望;重试/续跑重复登记按名字幂等覆盖,不产生重复行。
             # apply_to 条件不匹配的子任务直接跳过登记(定向能力,消除误报)。

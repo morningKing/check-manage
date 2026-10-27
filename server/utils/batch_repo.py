@@ -266,6 +266,51 @@ def validate_max_concurrency(value) -> int | None:
     return value
 
 
+MAX_BATCH_MODELS = 10
+
+
+def validate_models(value) -> list | None:
+    """校验批多模型列表（多模型分配，2026-10-27）：模型名字符串数组，去空/
+    去重保序；空/None 合法（= 单模型批，走既有 model 字段）。≥2 个才轮询
+    分配进子会话 model 列。非法抛 ValueError（路由回 400）。"""
+    if value in (None, []):
+        return None
+    if not isinstance(value, list):
+        raise ValueError('models 必须是模型名数组')
+    names = []
+    for v in value:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError('models 的每项必须是非空模型名')
+        name = v.strip()
+        if len(name) > 200:
+            raise ValueError('models 的模型名过长（>200）')
+        if name not in names:
+            names.append(name)
+    if len(names) > MAX_BATCH_MODELS:
+        raise ValueError(f'models 最多 {MAX_BATCH_MODELS} 个模型')
+    return names
+
+
+def assign_child_models(cur, batch_id: str, models: list | None,
+                        seqs: list[int]) -> None:
+    """多模型轮询分配（写后调用方自行 commit）：对指定 batch_seq 的子会话
+    把 models[seq % len(models)] 写入 ai_chat_sessions.model。models 有效
+    长度 <2 时反向清 NULL——派发按「子会话 model 优先，批级回退」，NULL 即
+    跟随批级。编辑改模型列表时只重写 pending 子会话（seqs 由调用方圈定），
+    运行中/已完成子会话的历史归属不变。"""
+    if models and len(models) >= 2:
+        for seq in seqs:
+            cur.execute(
+                "UPDATE ai_chat_sessions SET model = %s "
+                "WHERE batch_id = %s AND batch_seq = %s",
+                (models[seq % len(models)], batch_id, seq))
+    else:
+        for seq in seqs:
+            cur.execute(
+                "UPDATE ai_chat_sessions SET model = NULL "
+                "WHERE batch_id = %s AND batch_seq = %s", (batch_id, seq))
+
+
 def create_batch(user_id: str, *, name: str, prompt: str,
                  template_id: str | None, files: list[dict],
                  scan_task_id: str | None = None,
@@ -279,7 +324,8 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  api_key_id: str | None = None,
                  callback_url: str | None = None,
                  callback_secret: str | None = None,
-                 subagent_reuse: list | None = None) -> dict:
+                 subagent_reuse: list | None = None,
+                 models: list | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
     `files` is a list of {name, path} dicts where `path` is workspace-relative
@@ -317,21 +363,27 @@ def create_batch(user_id: str, *, name: str, prompt: str,
         raise ValueError(f"max {max_files} files per batch")
 
     batch_id = str(uuid.uuid4())
+    # 多模型分配（2026-10-27）：批行存 models 全量列表，model 列保留首模型
+    # （兼容既有读者）；≥2 个时子会话按 batch_seq 轮询写 model 列
+    if not model and models:
+        model = models[0]
+    effective_models = models if (models and len(models) >= 2) else None
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
                 "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret, "
-                "   scan_task_id, action_checks, gate_policy_id, gate_retry, subagent_reuse) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                "   scan_task_id, action_checks, gate_policy_id, gate_retry, subagent_reuse, models) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
                  provision_repo, provision_ref, api_key_id, callback_url, callback_secret,
                  scan_task_id,
                  Json(action_checks) if action_checks else None,
                  gate_policy_id,
                  gate_retry,
-                 Json(subagent_reuse) if subagent_reuse else None),
+                 Json(subagent_reuse) if subagent_reuse else None,
+                 Json(models) if models else None),
             )
             batch = dict(cur.fetchone())
 
@@ -341,10 +393,11 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                 cur.execute(
                     "INSERT INTO ai_chat_sessions "
                     "  (id, user_id, status, batch_id, batch_seq, batch_input_file, "
-                    "   scan_task_id, source_record_id) "
-                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s) RETURNING *",
+                    "   scan_task_id, source_record_id, model) "
+                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s, %s) RETURNING *",
                     (sid, user_id, batch_id, seq, f['path'],
-                     scan_task_id, f.get('recordId')),
+                     scan_task_id, f.get('recordId'),
+                     effective_models[seq % len(effective_models)] if effective_models else None),
                 )
                 sessions.append(dict(cur.fetchone()))
         conn.commit()
@@ -415,7 +468,7 @@ def get_batch_detail(user_id: str, batch_id: str, *,
                 return None
             cur.execute(
                 "SELECT id, status, batch_seq, batch_input_file, workspace_path, "
-                "       opencode_session_id, error_message, last_message_preview, "
+                "       opencode_session_id, error_message, last_message_preview, model, "
                 "       (SELECT count(*) FROM action_expectations e "
                 "        WHERE e.scope_id = ai_chat_sessions.id "
                 "          AND e.last_status = 'failed') AS gate_failed, "
@@ -744,14 +797,20 @@ def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
             cur.execute("SELECT COALESCE(MAX(batch_seq), -1) AS m "
                         "FROM ai_chat_sessions WHERE batch_id=%s", (batch_id,))
             start = cur.fetchone()['m'] + 1
+            # 多模型批追加的子会话同样轮询分配（序号接续全批 seq，分布不断档）
+            cur.execute("SELECT models FROM ai_chat_batches WHERE id=%s", (batch_id,))
+            _bmodels = cur.fetchone()['models']
+            bmodels = _bmodels if (_bmodels and len(_bmodels) >= 2) else None
             sessions = []
             for i, f in enumerate(files):
                 sid = str(uuid.uuid4())
+                seq = start + i
                 cur.execute(
                     "INSERT INTO ai_chat_sessions "
-                    "  (id, user_id, status, batch_id, batch_seq, batch_input_file) "
-                    "VALUES (%s, %s, 'pending', %s, %s, %s) RETURNING *",
-                    (sid, user_id, batch_id, start + i, f['path']),
+                    "  (id, user_id, status, batch_id, batch_seq, batch_input_file, model) "
+                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s) RETURNING *",
+                    (sid, user_id, batch_id, seq, f['path'],
+                     bmodels[seq % len(bmodels)] if bmodels else None),
                 )
                 sessions.append(dict(cur.fetchone()))
             cur.execute("UPDATE ai_chat_batches SET total = total + %s WHERE id=%s",
@@ -1012,6 +1071,7 @@ def update_batch_config(user_id: str, batch_id: str, *,
                         subagent_reuse= _UNSET,
                         name= _UNSET,
                         prompt= _UNSET,
+                        models= _UNSET,
                         api_key_id: str | None = None,
                         callback_url: str | None = None,
                         callback_secret: str | None = None) -> dict | None:
@@ -1133,6 +1193,33 @@ def update_batch_config(user_id: str, batch_id: str, *,
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
             updated = cur.rowcount > 0
+            # 多模型列表（2026-10-27）：哨兵语义，显式传入才更新。批行写
+            # models 全量 + model=首模型（上面主 UPDATE 的 model 来自调用方，
+            # 放在其后覆盖保证两者一致）。pending 子会话按 batch_seq 轮询
+            # 重分配到新列表；运行中/已完成的子会话历史归属不变；<2 个反向
+            # 清 NULL（派发回退批级 model）。
+            if updated and models is not _UNSET:
+                cur.execute(
+                    "UPDATE ai_chat_batches SET models = %s WHERE id = %s",
+                    (Json(models) if models else None, batch_id))
+                # model 列只在列表非空时对齐首模型；models 清空时保留主
+                # UPDATE 写入的 model（回到单模型语义由调用方的 model 定）
+                if models:
+                    cur.execute(
+                        "UPDATE ai_chat_batches SET model = %s WHERE id = %s",
+                        (models[0], batch_id))
+                if models and len(models) >= 2:
+                    cur.execute(
+                        "SELECT batch_seq FROM ai_chat_sessions "
+                        "WHERE batch_id = %s AND status = 'pending' ORDER BY batch_seq",
+                        (batch_id,))
+                    assign_child_models(cur, batch_id, models,
+                                        [r[0] for r in cur.fetchall()])
+                else:
+                    cur.execute(
+                        "UPDATE ai_chat_sessions SET model = NULL "
+                        "WHERE batch_id = %s AND status = 'pending'",
+                        (batch_id,))
         conn.commit()
     if not updated:
         return None

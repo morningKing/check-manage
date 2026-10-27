@@ -856,3 +856,154 @@ def test_concurrency_budget_blocks_claim_after_ui_set(
         assert bid not in concurrency_blocked_batches()
     finally:
         client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+
+
+# ---------------------------------------------------------------------------
+# 批多模型分配（2026-10-27）：批行 models JSONB 全量 + model 列保留首模型
+# （兼容既有读者）；≥2 个时子会话按 batch_seq 轮询写 model 列，派发子会话
+# 快照优先、批级回退（batch_engine._run_one）
+# ---------------------------------------------------------------------------
+
+def _session_models(db_conn, bid):
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT batch_seq, model FROM ai_chat_sessions "
+                    "WHERE batch_id=%s ORDER BY batch_seq", (bid,))
+        return cur.fetchall()
+
+
+def test_create_batch_multi_model_round_robin(setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    files = [_stage_one(client, admin_headers, name=f'm{i}.txt',
+                        upload_session_id=f'u-mm{i}') for i in range(3)]
+    r = client.post('/ai/chat/batches', json={
+        'name': 'mm', 'prompt': 'p', 'files': files,
+        'models': ['prov/model-a', 'prov/model-b'],
+    }, headers=admin_headers)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    bid = r.get_json()['batch']['id']
+    try:
+        # 子会话按 seq 轮询：a,b,a
+        assert _session_models(db_conn, bid) == [
+            (0, 'prov/model-a'), (1, 'prov/model-b'), (2, 'prov/model-a')]
+        d = client.get(f'/ai/chat/batches/{bid}', headers=admin_headers).get_json()
+        assert d['batch']['models'] == ['prov/model-a', 'prov/model-b']
+        # model 列保留首模型（兼容既有读者），详情子会话回显各自 model
+        assert d['batch']['model'] == 'prov/model-a'
+        assert [s['model'] for s in d['sessions']] == [
+            'prov/model-a', 'prov/model-b', 'prov/model-a']
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+
+
+def test_create_batch_single_model_keeps_legacy_semantics(
+        setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mm1.txt', upload_session_id='u-mm1')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'mm-single', 'prompt': 'p', 'files': [f],
+        'models': ['prov/only'],
+    }, headers=admin_headers)
+    assert r.status_code == 201
+    bid = r.get_json()['batch']['id']
+    try:
+        # 单模型：子会话不分配（NULL→派发走批级），批行记录列表+首模型
+        assert _session_models(db_conn, bid) == [(0, None)]
+        d = client.get(f'/ai/chat/batches/{bid}', headers=admin_headers).get_json()
+        assert d['batch']['models'] == ['prov/only']
+        assert d['batch']['model'] == 'prov/only'
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+    # 旧路径（只传 model 不传 models）不变
+    f2 = _stage_one(client, admin_headers, name='mm2.txt', upload_session_id='u-mm2')
+    r2 = client.post('/ai/chat/batches', json={
+        'name': 'mm-legacy', 'prompt': 'p', 'files': [f2], 'model': 'legacy/m',
+    }, headers=admin_headers)
+    bid2 = r2.get_json()['batch']['id']
+    try:
+        assert _session_models(db_conn, bid2) == [(0, None)]
+        d2 = client.get(f'/ai/chat/batches/{bid2}', headers=admin_headers).get_json()
+        assert d2['batch']['model'] == 'legacy/m'
+        assert d2['batch']['models'] is None
+    finally:
+        client.delete(f'/ai/chat/batches/{bid2}?stop=1', headers=admin_headers)
+
+
+@pytest.mark.parametrize('bad', ['not-a-list', [123], [''], [' ', 'x']])
+def test_create_batch_rejects_invalid_models(setup_app, tmp_path, monkeypatch, bad):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mmb.txt', upload_session_id='u-mmb')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'mm-bad', 'prompt': 'p', 'files': [f], 'models': bad,
+    }, headers=admin_headers)
+    assert r.status_code == 400
+    assert 'models' in r.get_json()['error']
+
+
+def test_update_models_reassigns_pending_only(setup_app, db_conn, tmp_path, monkeypatch):
+    """编辑多模型列表：pending 子会话轮询重分配；运行中/已完成的历史归属
+    不变；改回单模型时 pending 反向清 NULL（派发回退批级）。"""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    files = [_stage_one(client, admin_headers, name=f'mu{i}.txt',
+                        upload_session_id=f'u-mu{i}') for i in range(2)]
+    bid = client.post('/ai/chat/batches', json={
+        'name': 'mm-update', 'prompt': 'p', 'files': files,
+        'models': ['m/a', 'm/b'],
+    }, headers=admin_headers).get_json()['batch']['id']
+    try:
+        assert _session_models(db_conn, bid) == [(0, 'm/a'), (1, 'm/b')]
+        # seq1 模拟已开跑
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET status='running' "
+                        "WHERE batch_id=%s AND batch_seq=1", (bid,))
+        db_conn.commit()
+        # 改成 3 个模型：pending(seq0) 重分配到 m/c；running(seq1) 保持 m/b
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'models': ['m/c', 'm/d', 'm/e']})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['batch']['models'] == ['m/c', 'm/d', 'm/e']
+        assert body['batch']['model'] == 'm/c'
+        assert [(s['batch_seq'], s['model']) for s in body['sessions']] == [
+            (0, 'm/c'), (1, 'm/b')]
+        # 改回单模型：pending 清 NULL，running 不动
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'models': ['m/solo']})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['batch']['models'] == ['m/solo']
+        assert body['sessions'][0]['model'] is None
+        assert body['sessions'][1]['model'] == 'm/b'
+        # 显式 null：回到单模型语义（列表清空，model 由请求体 model 字段决定）
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'models': None, 'model': 'legacy/back'})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['batch']['models'] is None
+        assert body['batch']['model'] == 'legacy/back'
+        assert body['sessions'][0]['model'] is None
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+
+
+def test_append_assigns_by_batch_models(setup_app, db_conn, tmp_path, monkeypatch):
+    """多模型批追加文件：序号接续全批 seq 轮询，分布不断档。"""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f0 = _stage_one(client, admin_headers, name='ma0.txt', upload_session_id='u-ma0')
+    bid = client.post('/ai/chat/batches', json={
+        'name': 'mm-append', 'prompt': 'p', 'files': [f0], 'models': ['m/a', 'm/b'],
+    }, headers=admin_headers).get_json()['batch']['id']
+    try:
+        extra = [_stage_one(client, admin_headers, name=f'ma{i+1}.txt',
+                            upload_session_id=f'u-ma{i+1}') for i in range(2)]
+        r = client.post(f'/ai/chat/batches/{bid}/append', json={'files': extra},
+                        headers=admin_headers)
+        assert r.status_code in (200, 201), r.get_data(as_text=True)
+        # 全批 seq: 0→a, 1→b, 2→a
+        assert _session_models(db_conn, bid) == [(0, 'm/a'), (1, 'm/b'), (2, 'm/a')]
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)

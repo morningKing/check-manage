@@ -27,6 +27,9 @@ export interface AiChatBatch {
   /** 批并发上限(2026-10-27,新建/编辑对话框):本批同时执行的子任务数;
    *  null/缺省=不限(跟随全局并发)。落 ai_execution_budgets,调度 claim 前现读 */
   max_concurrency?: number | null
+  /** 多模型列表(2026-10-27):≥2 个时子会话按 batch_seq 轮询分配(session.model),
+   *  派发子会话快照优先、批级回退;model 列保留首模型兼容旧读者 */
+  models?: string[] | null
   status: BatchStatus
   total: number
   done: number
@@ -50,6 +53,8 @@ export interface AiChatBatchSession {
   opencode_session_id: string | null
   error_message: string | null
   last_message_preview: string | null
+  /** 多模型批(2026-10-27):本子会话轮询分配到的生效模型;null=跟随批级 */
+  model?: string | null
   /** 动作门禁(设计 §5.4):最近一次终态核对的结果计数 */
   gate_failed?: number
   gate_passed?: number

@@ -95,6 +95,40 @@ describe('EditBatchConfigDialog 批并发上限', () => {
     const body = await mountAndSave({ ...baseBatch }) as unknown as { max_concurrency: number | null }
     expect(body.max_concurrency).toBeNull()
   })
+
+  it('多模型:回显批 models(旧批回落 [model]),保存显式传数组;清空传 null+model 兜底', async () => {
+    // 新批:models 列表回显
+    const w = mount(EditBatchConfigDialog, {
+      props: { modelValue: true, batch: { ...baseBatch, models: ['prov/m-a', 'prov/m-b'] } },
+      global: { stubs },
+    })
+    await flushPromises()
+    expect((w.vm as any).selectedModels).toEqual(['prov/m-a', 'prov/m-b'])
+    const save = w.findAll('button').find(b => b.text().includes('保存'))!
+    await save.trigger('click')
+    await flushPromises()
+    let body = updateBatchConfigMock.mock.calls[0][1] as { models: string[] | null, model: string | null }
+    expect(body.models).toEqual(['prov/m-a', 'prov/m-b'])
+    expect(body.model).toBe('prov/m-a')
+
+    // 旧批(无 models 列表):回落 [model] 单值兼容回显
+    const w2 = mount(EditBatchConfigDialog, {
+      props: { modelValue: true, batch: { ...baseBatch, model: 'legacy/m' } },
+      global: { stubs },
+    })
+    await flushPromises()
+    expect((w2.vm as any).selectedModels).toEqual(['legacy/m'])
+
+    // 清空多选:models=null + model=null(回到默认模型)
+    ;(w.vm as any).selectedModels = []
+    await flushPromises()
+    const save2 = w.findAll('button').find(b => b.text().includes('保存'))!
+    await save2.trigger('click')
+    await flushPromises()
+    body = updateBatchConfigMock.mock.calls[1][1] as { models: string[] | null, model: string | null }
+    expect(body.models).toBeNull()
+    expect(body.model).toBeNull()
+  })
 })
 
 describe('EditBatchConfigDialog pre 规则行 round-trip', () => {

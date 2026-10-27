@@ -26,6 +26,9 @@
  *  - 用例 4c「批并发上限入口」（2026-10-27 新增）：新建对话框设并发上限 1
  *    → 落 ai_execution_budgets（详情/列表回显 1）→ 编辑对话框回显/改 3/
  *    清空，保存后 API 侧即时生效。fail-fast 批（未知 agent）0 LLM。
+ *  - 用例 4d「批多模型分配」（2026-10-27 新增）：API 建批带 models 列表 →
+ *    子会话按 batch_seq 轮询分配（a,b,a）、批 model 列保留首模型 → 编辑
+ *    对话框多选 tag 回显。fail-fast 批 0 LLM。
  *  - 用例 5「技能注入」← e2e/batch-skill-check.spec.ts（已删）：
  *    改为 **provision_repo 自带 skill/**（makeProvisionRepo skills 形参），
  *    消除源对磁盘全局技能预置（trace-analyzer/writing-beats）的环境依赖。
@@ -459,6 +462,54 @@ test('批并发上限：对话框建批设 1 → 编辑改 3 → 清空回显空
     await screenshot(page, 'ui-journeys-max-concurrency')
   } finally {
     await cleanupBatchByName(tk, name)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 用例 4d：批多模型分配（2026-10-27，fail-fast 批 0 LLM）——API 建批带
+// models 列表 → 子会话按 batch_seq 轮询分配 → 编辑对话框多选回显
+// ---------------------------------------------------------------------------
+
+test('批多模型：子会话轮询分配 + 编辑对话框多选回显（0 LLM）', async ({ page }) => {
+  // 模型名自造（后端只查字符串不校验存在性，与 model 单值同口径）；
+  // 未知 agent fail-fast 0 LLM，断言只看分配与回显
+  const tk = await adminTokenCached()
+  const name = tag('multi-model')
+  const uploadSession = tag('upl-mm')
+  const files = []
+  for (let i = 0; i < 3; i++) {
+    files.push(await uploadStaging(tk, `mm-${i}.txt`, 'probe', `${uploadSession}-${i}`))
+  }
+  const batch = await createBatch(tk, {
+    name,
+    prompt: '对每个输入文件输出一行摘要。',
+    agent: 'e2e-no-such-agent',
+    models: ['e2e/model-a', 'e2e/model-b'],
+    files,
+  })
+  const bid = batch.batch?.id ?? batch.id
+  try {
+    // 子会话按 seq 轮询：a,b,a；批 model 列保留首模型
+    const d = await getDetail(tk, bid)
+    expect(d.batch.models).toEqual(['e2e/model-a', 'e2e/model-b'])
+    expect(d.batch.model).toBe('e2e/model-a')
+    expect(d.sessions.map(s => s.model)).toEqual(
+      ['e2e/model-a', 'e2e/model-b', 'e2e/model-a'])
+
+    // UI：编辑对话框多选框回显两个模型 tag
+    await gotoChat(page)
+    await expandBatchGroup(page, name)
+    const group = page.locator('.batch-group', { hasText: name }).first()
+    await group.locator('[title="编辑 Agent/模型"]').click()
+    const editDialog = page.getByRole('dialog', { name: '编辑批任务配置' })
+    await expect(editDialog).toBeVisible({ timeout: 10_000 })
+    const tags = editDialog.locator('[data-test="edit-model-select"] .el-tag')
+    await expect(tags).toHaveCount(2)
+    await expect(tags.first()).toContainText('e2e/model-a')
+    await expect(tags.nth(1)).toContainText('e2e/model-b')
+    await screenshot(page, 'ui-journeys-multi-model')
+  } finally {
+    await cleanupBatch(tk, bid)
   }
 })
 

@@ -56,6 +56,8 @@ export function createBatch(body: {
   subagent_reuse?: string[] | null
   /** 批并发上限(2026-10-27):本批同时执行的子任务数;null/未传=不限 */
   max_concurrency?: number | null
+  /** 多模型列表(2026-10-27):≥2 个时子会话轮询分配;null/未传=单模型(用 model) */
+  models?: string[] | null
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)
@@ -141,6 +143,8 @@ export function updateBatchConfig(id: string, body: {
   prompt?: string
   /** 批并发上限(2026-10-27):显式键哨兵——传了才更新,null=清除上限 */
   max_concurrency?: number | null
+  /** 多模型列表(2026-10-27):显式键哨兵——传了才更新,null=回到单模型 */
+  models?: string[] | null
 }) {
   return patch<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}`, body)
 }

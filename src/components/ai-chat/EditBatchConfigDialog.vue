@@ -18,8 +18,9 @@
       </ElSelect>
     </div>
     <div class="row">
-      <label>模型 <span class="hint">（留空=默认）</span></label>
-      <ElSelect v-model="model" placeholder="使用默认模型" clearable filterable>
+      <label>模型 <span class="hint">（可选 · 可多选：多选保存后「待运行 / 重试 / 重新执行」的子任务按顺序轮询重新分配；运行中与已完成的子任务不受影响。留空=默认）</span></label>
+      <ElSelect v-model="selectedModels" multiple placeholder="使用默认模型" clearable filterable
+                data-test="edit-model-select">
         <ElOption v-for="m in models" :key="m.id" :label="m.label" :value="m.id" />
       </ElSelect>
     </div>
@@ -98,7 +99,9 @@ const store = useAiChatBatchesStore()
 const agents = ref<AgentInfo[]>([])
 const models = ref<ModelInfo[]>([])
 const agent = ref<string>('')
-const model = ref<string>('')
+// 多模型（2026-10-27）：回显批 models（旧批无列表回落 [model] 单值兼容）；
+// 保存显式传（哨兵幂等），null=回到单模型
+const selectedModels = ref<string[]>([])
 const name = ref<string>('')
 const prompt = ref<string>('')
 const provisionRepo = ref<string>('')
@@ -131,7 +134,9 @@ function prefill() {
   name.value = props.batch.name || ''
   prompt.value = props.batch.prompt || ''
   agent.value = props.batch.agent || ''
-  model.value = props.batch.model || ''
+  selectedModels.value = Array.isArray((props.batch as any).models)
+    ? ((props.batch as any).models as string[])
+    : ((props.batch as any).model ? [(props.batch as any).model as string] : [])
   provisionRepo.value = props.batch.provision_repo || ''
   provisionRef.value = props.batch.provision_ref || ''
   reuseAgents.value = Array.isArray((props.batch as any).subagent_reuse)
@@ -209,7 +214,9 @@ async function save() {
     const body = {
       name: name.value.trim(),
       prompt: prompt.value.trim(),
-      agent: agent.value || null, model: model.value || null,
+      agent: agent.value || null,
+      model: selectedModels.value[0] || null,
+      models: selectedModels.value.length ? selectedModels.value : null,
       provision_repo: provisionRepo.value.trim() || null,
       provision_ref: provisionRef.value.trim() || null,
       action_checks: gateEnabled.value ? action_checks : [],

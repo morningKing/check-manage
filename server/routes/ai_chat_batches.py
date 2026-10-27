@@ -24,6 +24,8 @@ from utils.batch_repo import (
     create_batch,
     validate_subagent_reuse,
     validate_max_concurrency,
+    validate_models,
+    _UNSET,
     delete_batch,
     get_batch_detail,
     list_batches,
@@ -138,6 +140,13 @@ def create():
         max_concurrency = validate_max_concurrency(body.get('max_concurrency'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    # 多模型列表（2026-10-27）：与 model 单值是两个独立入口——未传 models
+    # 即旧行为（批行 models 列 NULL，派发走 model）；≥2 个时子会话按
+    # batch_seq 轮询分配（见 batch_repo.create_batch）
+    try:
+        models = validate_models(body.get('models'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     # 引用门禁策略（spec §8.2）：存在且 enabled 才放行（失效引用 400）；
     # create_batch 内有同款兜底校验（开放 API/定时扫描直达路径）。
     gate_policy_id = body.get('gatePolicyId') or None
@@ -160,7 +169,8 @@ def create():
                           action_checks=action_checks or None,
                           gate_policy_id=gate_policy_id,
                           gate_retry=bool(body.get('gate_retry')),
-                          subagent_reuse=subagent_reuse or None)
+                          subagent_reuse=subagent_reuse or None,
+                          models=models)
     # 并发上限在 notify 之前落库：worker 被唤醒后的首个 claim tick 就会读
     # 预算表，晚落会让首批子任务超上限被认领。create_batch 的 RETURNING 行
     # 不含预算子查询——落完重拉 detail，保证创建响应回显真实生效值
@@ -384,6 +394,18 @@ def update_config(batch_id):
             max_concurrency = validate_max_concurrency(body.get('max_concurrency'))
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
+    # 多模型列表（2026-10-27）：显式键哨兵，null=回到单模型（清列表+pending
+    # 子会话分配）。服务层会把批行 model 列同步为首模型；这里再把主 UPDATE
+    # 用的 model 参数对齐，避免中间态不一致
+    models_set = 'models' in body
+    models = None
+    if models_set:
+        try:
+            models = validate_models(body.get('models'))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        if not model and models:
+            model = models[0]
     # 名称/提示词（编辑对话框，2026-09-29）：显式传入才更新，非空校验与
     # 创建口径一致（name ≤200 字符）；prompt 对待运行/重试/重执行子任务
     # 生效（worker 派发实时读 batch.prompt），运行中/已完成的不受影响。
@@ -401,6 +423,7 @@ def update_config(batch_id):
         patch_kwargs['prompt'] = prompt
     result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
                                  provision_repo=provision_repo, provision_ref=provision_ref,
+                                 models=models if models_set else _UNSET,
                                  **patch_kwargs)
     if result is None:
         return jsonify({'error': 'not found'}), 404

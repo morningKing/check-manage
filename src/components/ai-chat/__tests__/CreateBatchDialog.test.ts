@@ -121,6 +121,39 @@ describe('CreateBatchDialog', () => {
     }))
   })
 
+  it('多模型随 payload 下发(models 数组,model 带首模型),未选为 null', async () => {
+    vi.mocked(batchApi.createBatch).mockResolvedValue({
+      batch: { id: 'b', user_id: 'u', name: 'B1', prompt: 'do',
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
+               done: 0, failed: 0, created_at: '', completed_at: null },
+      sessions: [],
+    })
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B1')
+    await w.find('input[data-test="prompt"]').setValue('do')
+    ;(w.vm as any).stagedFiles = [{ name: 'a.txt', path: 'p/a.txt' }]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      models: null, model: null,
+    }))
+    // 多选两个模型再提交(reset 后重填)
+    ;(w.vm as any).selectedModels = ['prov/m-a', 'prov/m-b']
+    await w.find('input[data-test="name"]').setValue('B1')
+    await w.find('input[data-test="prompt"]').setValue('do')
+    ;(w.vm as any).stagedFiles = [{ name: 'a.txt', path: 'p/a.txt' }]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      models: ['prov/m-a', 'prov/m-b'], model: 'prov/m-a',
+    }))
+  })
+
   it('saves a new template when 保存为模板 is checked', async () => {
     vi.mocked(batchApi.createBatch).mockResolvedValue({
       batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',

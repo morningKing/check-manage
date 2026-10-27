@@ -48,8 +48,9 @@
       </div>
 
       <div class="row">
-        <label>模型 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选）</span></label>
-        <ElSelect v-model="selectedModel" placeholder="使用默认模型" clearable filterable>
+        <label>模型 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · 可多选：多选时子任务按顺序轮询分配模型，适合同题对比；留空=默认）</span></label>
+        <ElSelect v-model="selectedModels" multiple placeholder="使用默认模型" clearable filterable
+                  data-test="model-select">
           <ElOption v-for="m in models" :key="m.id" :label="m.label" :value="m.id" />
         </ElSelect>
       </div>
@@ -185,7 +186,8 @@ const templateName = ref('')
 const submitting = ref(false)
 const selectedAgent = ref<string>('')
 const agents = ref<AgentInfo[]>([])
-const selectedModel = ref<string>('')
+// 多模型（2026-10-27）：多选时子会话按顺序轮询分配，派发子会话快照优先
+const selectedModels = ref<string[]>([])
 const models = ref<ModelInfo[]>([])
 const provisionRepo = ref<string>('')
 // 动作门禁(设计 §5.2 入口 A):开启后随创建请求下发 action_checks,
@@ -387,7 +389,8 @@ async function submit() {
       prompt: prompt.value.trim(),
       template_id: selectedTemplateId.value,
       agent: selectedAgent.value || null,
-      model: selectedModel.value || null,
+      model: selectedModels.value[0] || null,
+      models: selectedModels.value.length ? selectedModels.value : null,
       provision_repo: provisionRepo.value.trim() || null,
       provision_ref: provisionRef.value.trim() || null,
       gate_retry: gateEnabled.value ? gateRetry.value : false,
@@ -422,7 +425,7 @@ function reset() {
   prompt.value = ''
   selectedTemplateId.value = null
   selectedAgent.value = ''
-  selectedModel.value = ''
+  selectedModels.value = []
   provisionRepo.value = ''
   provisionRef.value = ''
   gateEnabled.value = false
