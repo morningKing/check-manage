@@ -369,6 +369,67 @@ def test_run_one_standalone_session_happy_path(user_id, db_conn, monkeypatch, tm
         _cleanup_api_key(db_conn, key_id)
 
 
+def test_run_one_batch_child_prefers_assigned_session_model(
+        user_id, db_conn, monkeypatch, tmp_path):
+    """多模型批（2026-10-27）派发契约：批子会话的 model 快照（创建/编辑时
+    轮询分配进 ai_chat_sessions.model）优先于批级 model——这是「子会话真的
+    用各自模型跑」的最后一环。seq0 无快照 → 回退批级；seq1 有快照 → 快照
+    生效；send_message 与执行审计 attempt 的 effective_model 都要拿到。"""
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    bid, sids = _seed_batch(db_conn, user_id, 2)
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_batches SET model = 'batch/default' "
+                        "WHERE id = %s", (bid,))
+            # 仅 seq1 有轮询分配快照（seq0 = 单模型/未分配场景，NULL 回退）
+            cur.execute("UPDATE ai_chat_sessions SET model = 'child/assigned' "
+                        "WHERE id = %s", (sids[1],))
+        db_conn.commit()
+
+        fake_oc = MagicMock()
+        fake_oc.create_session.return_value = 'oc-mm'
+        fake_oc.list_agents.return_value = [{'name': 'build', 'mode': 'primary'}]
+        fake_oc.send_message.return_value = {'id': 'msg-1'}
+        fake_oc.list_messages.return_value = [
+            {'role': 'assistant', 'finished': True,
+             'content': [{'type': 'text', 'text': '好'}]}
+        ]
+        fake_oc.get_messages.return_value = []
+        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+        ws = str(tmp_path)
+        monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+
+        w = BatchWorker()
+        claimed = w._claim_pending_sessions(limit=2)
+        claimed.sort(key=lambda r: r['batch_seq'])
+        for row in claimed:
+            w._run_one(row)
+
+        models_by_seq = {}
+        for call in fake_oc.send_message.call_args_list:
+            models_by_seq[call.kwargs['model']] = call.kwargs.get('model')
+        sent = [c.kwargs['model'] for c in fake_oc.send_message.call_args_list]
+        assert sorted(sent, key=lambda m: {'batch/default': 0, 'child/assigned': 1}[m]) \
+            == ['batch/default', 'child/assigned']
+
+        # 执行审计：effective_model 逐子会话与派发一致（真跑时的可查证据）
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.batch_seq, a.effective_model FROM ai_execution_attempts a "
+                "JOIN ai_chat_sessions s ON s.id = a.session_id "
+                "WHERE s.batch_id = %s AND a.effective_model IS NOT NULL "
+                "ORDER BY s.batch_seq", (bid,))
+            audit = cur.fetchall()
+        assert audit == [(0, 'batch/default'), (1, 'child/assigned')]
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id = %s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+        db_conn.commit()
+
+
 def test_run_one_standalone_session_failure_does_not_touch_batches_table(
         user_id, db_conn, monkeypatch, tmp_path):
     """batch_id=None 时 _mark_failed 不该再去碰 ai_chat_batches（之前是安全的
