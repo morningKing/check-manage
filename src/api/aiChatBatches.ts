@@ -54,6 +54,8 @@ export function createBatch(body: {
   /** 子代理会话复用名单(2026-09-24):这些 agent 在本任务内跨轮次强制续跑
    *  同一子会话(OC 插件注入 task_id + 派发指令双保险);空/未传 = 不启用 */
   subagent_reuse?: string[] | null
+  /** 批并发上限(2026-10-27):本批同时执行的子任务数;null/未传=不限 */
+  max_concurrency?: number | null
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)
@@ -137,6 +139,8 @@ export function updateBatchConfig(id: string, body: {
   name?: string
   /** 提示词(编辑对话框,2026-09-29):对待运行/重试/重执行子任务生效 */
   prompt?: string
+  /** 批并发上限(2026-10-27):显式键哨兵——传了才更新,null=清除上限 */
+  max_concurrency?: number | null
 }) {
   return patch<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}`, body)
 }

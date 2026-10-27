@@ -34,6 +34,27 @@ def get_budget(scope_type: str, scope_id: str) -> dict | None:
             'onExceed': row[5] or 'drain', 'enabled': row[6]}
 
 
+def upsert_batch_concurrency(batch_id: str, max_concurrency: int | None) -> None:
+    """批并发上限的窄更新（批任务新建/编辑 UI 入口）：只写 max_concurrency
+    列。不能走 upsert_budget——那是全字段覆盖语义，会把同一预算行上已有的
+    token/cost/时长预算抹成 NULL。None = 清除上限（行保留，引擎按
+    max_concurrency IS NOT NULL 过滤，等效不限制）。"""
+    import secrets
+    bid = 'bud_' + secrets.token_hex(6)
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_execution_budgets "
+                "  (id, scope_type, scope_id, max_concurrency, on_exceed, enabled) "
+                "VALUES (%s, 'batch', %s, %s, 'drain', TRUE) "
+                "ON CONFLICT (scope_type, scope_id) DO UPDATE SET "
+                "  max_concurrency = EXCLUDED.max_concurrency",
+                (bid, batch_id, max_concurrency),
+            )
+        conn.commit()
+
+
 def upsert_budget(scope_type: str, scope_id: str, *, max_wall_clock_ms=None,
                   max_tokens=None, max_cost=None, max_concurrency=None,
                   on_exceed='drain', enabled=True) -> str | None:

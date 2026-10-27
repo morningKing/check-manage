@@ -23,6 +23,7 @@ from utils.batch_repo import (
     continue_child,
     create_batch,
     validate_subagent_reuse,
+    validate_max_concurrency,
     delete_batch,
     get_batch_detail,
     list_batches,
@@ -131,6 +132,12 @@ def create():
         subagent_reuse = validate_subagent_reuse(body.get('subagent_reuse'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    # 批并发上限（2026-10-27）：None/缺省=不限；落 ai_execution_budgets，
+    # 引擎 claim 前现读（concurrency_blocked_batches）
+    try:
+        max_concurrency = validate_max_concurrency(body.get('max_concurrency'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     # 引用门禁策略（spec §8.2）：存在且 enabled 才放行（失效引用 400）；
     # create_batch 内有同款兜底校验（开放 API/定时扫描直达路径）。
     gate_policy_id = body.get('gatePolicyId') or None
@@ -154,6 +161,13 @@ def create():
                           gate_policy_id=gate_policy_id,
                           gate_retry=bool(body.get('gate_retry')),
                           subagent_reuse=subagent_reuse or None)
+    # 并发上限在 notify 之前落库：worker 被唤醒后的首个 claim tick 就会读
+    # 预算表，晚落会让首批子任务超上限被认领。create_batch 的 RETURNING 行
+    # 不含预算子查询——落完重拉 detail，保证创建响应回显真实生效值
+    if max_concurrency is not None:
+        from utils.execution_budget import upsert_batch_concurrency
+        upsert_batch_concurrency(result['batch']['id'], max_concurrency)
+        result = get_batch_detail(g.current_user['userId'], result['batch']['id'])
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()
@@ -360,6 +374,16 @@ def update_config(batch_id):
                 body.get('subagent_reuse'))
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
+    # 批并发上限（2026-10-27）：显式键哨兵语义，null=清除上限；先校验再
+    # 落库（不半更新）。不进 patch_kwargs——它不落 ai_chat_batches 行，
+    # update_batch_config 也没有这个参数，写入走预算表窄更新
+    max_concurrency = None
+    max_concurrency_set = 'max_concurrency' in body
+    if max_concurrency_set:
+        try:
+            max_concurrency = validate_max_concurrency(body.get('max_concurrency'))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
     # 名称/提示词（编辑对话框，2026-09-29）：显式传入才更新，非空校验与
     # 创建口径一致（name ≤200 字符）；prompt 对待运行/重试/重执行子任务
     # 生效（worker 派发实时读 batch.prompt），运行中/已完成的不受影响。
@@ -380,6 +404,14 @@ def update_config(batch_id):
                                  **patch_kwargs)
     if result is None:
         return jsonify({'error': 'not found'}), 404
+    # 并发上限走预算表窄更新（只动并发列，保住同行可能已有的 token/cost/
+    # 时长预算）；引擎下轮 claim 即生效。update_batch_config 返回的 detail
+    # 快照生成于本次写入之前——重拉一次，否则响应带旧值、前端列表行被
+    # 旧值替换，编辑对话框重开就回显旧上限（E2E 实证）
+    if max_concurrency_set:
+        from utils.execution_budget import upsert_batch_concurrency
+        upsert_batch_concurrency(batch_id, max_concurrency)
+        result = get_batch_detail(g.current_user['userId'], batch_id)
     # 未终态子任务同步替换期望,已终态子任务的历史核对结果保持原样。
     # 换策略/解绑（spec §8.2）同样要同步：同步集是「策略 ∪ 批（模板兜底）」
     # 合并集，在 UPDATE 落列之后现查（gate_policy_id 已是最新值）——合并

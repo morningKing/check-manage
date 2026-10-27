@@ -688,3 +688,171 @@ def test_gate_dry_run_verifier_not_supported(setup_app, db_conn, tmp_path, monke
     assert r.status_code == 200 and r.get_json()['supported'] is False
     assert '无法预演' in r.get_json()['note']
     client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+
+
+# ---------------------------------------------------------------------------
+# 批并发上限（2026-10-27，新建/编辑对话框入口）：落 ai_execution_budgets
+# (scope_type='batch').max_concurrency，调度 claim 前现读即生效
+# ---------------------------------------------------------------------------
+
+def _budget_row(db_conn, batch_id):
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT max_concurrency, enabled, max_tokens FROM ai_execution_budgets "
+            "WHERE scope_type='batch' AND scope_id=%s", (batch_id,))
+        return cur.fetchone()
+
+
+def test_create_batch_with_max_concurrency_writes_budget_and_detail_echoes(
+        setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mc.txt', upload_session_id='u-mc1')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'mc-batch', 'prompt': 'p', 'files': [f], 'max_concurrency': 1,
+    }, headers=admin_headers)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    bid = r.get_json()['batch']['id']
+    try:
+        # 预算行落库且启用
+        assert _budget_row(db_conn, bid) == (1, True, None)
+        # 详情回显
+        detail = client.get(f'/ai/chat/batches/{bid}', headers=admin_headers).get_json()
+        assert detail['batch']['max_concurrency'] == 1
+        # 列表回显（编辑对话框从列表行预填）
+        listing = client.get('/ai/chat/batches?page=1&pageSize=50',
+                             headers=admin_headers).get_json()
+        mine = next(b for b in listing['items'] if b['id'] == bid)
+        assert mine['max_concurrency'] == 1
+    finally:
+        # 走 API 删除：delete_batch 现在负责把预算行一并清掉
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+    assert _budget_row(db_conn, bid) is None
+
+
+def test_create_batch_without_max_concurrency_writes_no_budget(
+        setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mc0.txt', upload_session_id='u-mc0')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'mc-absent', 'prompt': 'p', 'files': [f],
+    }, headers=admin_headers)
+    assert r.status_code == 201
+    bid = r.get_json()['batch']['id']
+    try:
+        assert _budget_row(db_conn, bid) is None
+        detail = client.get(f'/ai/chat/batches/{bid}', headers=admin_headers).get_json()
+        assert detail['batch']['max_concurrency'] is None
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+
+
+@pytest.mark.parametrize('bad', [0, -1, '3', 1.5, True, 101])
+def test_create_batch_rejects_invalid_max_concurrency(
+        setup_app, tmp_path, monkeypatch, bad):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mcb.txt', upload_session_id='u-mcb')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'mc-bad', 'prompt': 'p', 'files': [f], 'max_concurrency': bad,
+    }, headers=admin_headers)
+    assert r.status_code == 400
+    assert 'max_concurrency' in r.get_json()['error']
+
+
+def test_update_config_max_concurrency_set_change_clear_and_narrow_upsert(
+        setup_app, db_conn, tmp_path, monkeypatch):
+    """编辑链路：设 1 → 改 3 → 清空（null）；窄更新只动并发列——同行已有的
+    token 预算不被抹（upsert_budget 是全字段覆盖语义，这里必须绕开）。"""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mcu.txt', upload_session_id='u-mcu')
+    bid = client.post('/ai/chat/batches', json={
+        'name': 'mc-update', 'prompt': 'p', 'files': [f],
+    }, headers=admin_headers).get_json()['batch']['id']
+    try:
+        # 预插一行带 token 预算的预算行（模拟未来其他入口写入的其他字段）
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_execution_budgets (id, scope_type, scope_id, "
+                "max_tokens, max_concurrency, on_exceed, enabled) "
+                "VALUES ('bud_test_narrow', 'batch', %s, 12345, NULL, 'drain', TRUE)",
+                (bid,))
+        db_conn.commit()
+
+        # 未传键 = 不动
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'agent': 'a1'})
+        assert r.status_code == 200
+        assert _budget_row(db_conn, bid) == (None, True, 12345)
+
+        # 设 1：只更新并发列
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'max_concurrency': 1})
+        assert r.status_code == 200
+        assert _budget_row(db_conn, bid) == (1, True, 12345)
+
+        # 改 3：响应体必须已带新值——detail 快照生成于预算写入之后重拉
+        # （曾经先返回旧值 1，前端列表行被旧值替换、编辑框重开回显旧上限）
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'max_concurrency': 3})
+        assert r.status_code == 200
+        assert r.get_json()['batch']['max_concurrency'] == 3
+        assert _budget_row(db_conn, bid) == (3, True, 12345)
+
+        # 清空（null）：并发列回 NULL，token 预算保留
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'max_concurrency': None})
+        assert r.status_code == 200
+        assert _budget_row(db_conn, bid) == (None, True, 12345)
+        detail = client.get(f'/ai/chat/batches/{bid}', headers=admin_headers).get_json()
+        assert detail['batch']['max_concurrency'] is None
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+    assert _budget_row(db_conn, bid) is None
+
+
+@pytest.mark.parametrize('bad', [0, 'x', 0.5, False])
+def test_update_config_rejects_invalid_max_concurrency(
+        setup_app, db_conn, tmp_path, monkeypatch, bad):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mcv.txt', upload_session_id='u-mcv')
+    bid = client.post('/ai/chat/batches', json={
+        'name': 'mc-bad2', 'prompt': 'p', 'files': [f],
+    }, headers=admin_headers).get_json()['batch']['id']
+    try:
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'max_concurrency': bad})
+        assert r.status_code == 400
+        assert 'max_concurrency' in r.get_json()['error']
+        assert _budget_row(db_conn, bid) is None
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
+
+
+def test_concurrency_budget_blocks_claim_after_ui_set(
+        setup_app, db_conn, tmp_path, monkeypatch):
+    """入口到引擎闭环冒烟：UI 设并发 1 后，concurrency_blocked_batches 把该批
+    判为已满（1 个 running = 上限），pending 子任务本轮不认领。"""
+    from utils.execution_budget import concurrency_blocked_batches
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='mce.txt', upload_session_id='u-mce')
+    detail = client.post('/ai/chat/batches', json={
+        'name': 'mc-engine', 'prompt': 'p', 'files': [f], 'max_concurrency': 1,
+    }, headers=admin_headers).get_json()
+    bid = detail['batch']['id']; sid = detail['sessions'][0]['id']
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s", (sid,))
+        db_conn.commit()
+        assert concurrency_blocked_batches().get(bid) is True
+        # 清除上限后同状态不再阻塞
+        r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                         json={'max_concurrency': None})
+        assert r.status_code == 200
+        assert bid not in concurrency_blocked_batches()
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)

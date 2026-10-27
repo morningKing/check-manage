@@ -76,6 +76,27 @@ async function mountAndSave(batch: Record<string, unknown> = baseBatch) {
   return updateBatchConfigMock.mock.calls[0][1] as { action_checks: any[] }
 }
 
+describe('EditBatchConfigDialog 批并发上限', () => {
+  it('预填批上的 max_concurrency,保存时显式传给后端', async () => {
+    const w = mount(EditBatchConfigDialog, {
+      props: { modelValue: true, batch: { ...baseBatch, max_concurrency: 2 } },
+      global: { stubs },
+    })
+    await flushPromises()
+    expect((w.vm as any).maxConcurrency).toBe(2)
+    const save = w.findAll('button').find(b => b.text().includes('保存'))!
+    await save.trigger('click')
+    await flushPromises()
+    const body = updateBatchConfigMock.mock.calls[0][1] as { max_concurrency: number | null }
+    expect(body.max_concurrency).toBe(2)
+  })
+
+  it('批未设上限时回显 null,保存传 null(=清除,幂等)', async () => {
+    const body = await mountAndSave({ ...baseBatch }) as unknown as { max_concurrency: number | null }
+    expect(body.max_concurrency).toBeNull()
+  })
+})
+
 describe('EditBatchConfigDialog pre 规则行 round-trip', () => {
   it('回填保留 mode:pre,保存时 deny 行原样透传(apply_to 不丢,post 行契约不变)', async () => {
     const body = await mountAndSave()

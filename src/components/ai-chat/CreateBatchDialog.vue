@@ -95,6 +95,13 @@
       </div>
 
       <div class="row">
+        <label>并发上限 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · 本批同时执行的子任务数，留空=跟随全局并发；保存后可在编辑对话框调整，立即生效）</span></label>
+        <ElInputNumber v-model="maxConcurrency" :min="1" :max="100" :step="1"
+                       :value-on-clear="null" placeholder="留空=跟随全局并发"
+                       data-test="max-concurrency" style="width: 220px" />
+      </div>
+
+      <div class="row">
         <label>子代理会话复用 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · 勾选的子代理在本任务内跨轮次续跑同一会话，保留历史上下文；气泡展开可分段查看）</span></label>
         <ElSelect v-model="reuseAgents" multiple filterable clearable data-test="reuse-select"
                   placeholder="选择需要复用会话的子代理（留空=不启用）" style="width:100%">
@@ -146,7 +153,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import {
-  ElDialog, ElInput, ElSelect, ElOption, ElCheckbox, ElButton, ElUpload,
+  ElDialog, ElInput, ElInputNumber, ElSelect, ElOption, ElCheckbox, ElButton, ElUpload,
   ElMessage,
 } from 'element-plus'
 import { stagingUpload, createBatch, listBatches, extractActionChecks } from '@/api/aiChatBatches'
@@ -202,6 +209,9 @@ const extracting = ref(false)
 const reuseAgents = ref<string[]>([])
 const subagentList = ref<AgentInfo[]>([])
 const subagentOptions = computed(() => subagentList.value)
+// 批并发上限（2026-10-27）：本批同时执行的子任务数，落 ai_execution_budgets；
+// null=不限（跟随全局并发 AI_BATCH_CONCURRENCY）
+const maxConcurrency = ref<number | null>(null)
 
 /** M1.5:AI 提炼——只产出建议并预填表单,登记仍由用户点「创建」确认 */
 async function onExtract() {
@@ -383,6 +393,7 @@ async function submit() {
       gate_retry: gateEnabled.value ? gateRetry.value : false,
       action_checks,
       subagent_reuse: reuseAgents.value.length ? reuseAgents.value : null,
+      max_concurrency: maxConcurrency.value ?? null,
       files: stagedFiles.value,
       // 引用门禁策略(2026-10-11 spec §8.2):启用门禁且选中才下发(后端键
       // gatePolicyId;undefined 键经 JSON 序列化自动剔除)
@@ -419,6 +430,7 @@ function reset() {
   gatePolicyId.value = ''
   gateChecks.value = []
   reuseAgents.value = []
+  maxConcurrency.value = null
   stagedFiles.value = []
   saveAsTemplate.value = false
   templateName.value = ''

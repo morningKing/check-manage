@@ -31,6 +31,13 @@
     </div>
 
     <div class="row">
+      <label>并发上限 <span class="hint">（可选 · 本批同时执行的子任务数，留空=跟随全局并发；保存立即生效，运行中的批次下一个调度周期按新值认领）</span></label>
+      <ElInputNumber v-model="maxConcurrency" :min="1" :max="100" :step="1"
+                     :value-on-clear="null" placeholder="留空=跟随全局并发"
+                     data-test="edit-max-concurrency" style="width: 220px" />
+    </div>
+
+    <div class="row">
       <label>子代理会话复用 <span class="hint">（可选 · 勾选的子代理在本任务内跨轮次续跑同一子会话，保留历史上下文；气泡展开可分段查看）</span></label>
       <ElSelect v-model="reuseAgents" multiple filterable clearable
                 placeholder="选择需要复用会话的子代理（留空=不启用）" style="width:100%">
@@ -73,7 +80,7 @@
 </template>
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElDialog, ElSelect, ElOption, ElButton, ElInput,
+import { ElDialog, ElSelect, ElOption, ElButton, ElInput, ElInputNumber,
          ElCheckbox, ElMessage } from 'element-plus'
 import { listAgents, listModels } from '@/api/aiChat'
 import type { AgentInfo, ModelInfo } from '@/api/aiChat'
@@ -99,6 +106,9 @@ const provisionRef = ref<string>('')
 const saving = ref(false)
 const reuseAgents = ref<string[]>([])
 const subagentList = ref<AgentInfo[]>([])
+// 批并发上限（2026-10-27）：null=不限（跟随全局并发）；保存始终显式传，
+// 后端幂等 upsert
+const maxConcurrency = ref<number | null>(null)
 
 // 动作门禁(设计 §5.2 入口 A 的编辑面):预填批任务上已保存的期望
 // 行编辑形态与提交归一见共享组件 GateCheckRows(行类型/serializeChecks 同源)
@@ -126,6 +136,7 @@ function prefill() {
   provisionRef.value = props.batch.provision_ref || ''
   reuseAgents.value = Array.isArray((props.batch as any).subagent_reuse)
     ? ((props.batch as any).subagent_reuse as string[]) : []
+  maxConcurrency.value = (props.batch as any).max_concurrency ?? null
   // 引用门禁策略(spec §8.2):批详情里有 gate_policy_id 就选中;初值留作
   // 「未动不传」比对基线
   gatePolicyIdInitial.value = (props.batch as any).gate_policy_id || ''
@@ -204,6 +215,8 @@ async function save() {
       action_checks: gateEnabled.value ? action_checks : [],
       gate_retry: gateRetry.value,
       subagent_reuse: reuseAgents.value,
+      // 并发上限始终显式传（后端幂等窄 upsert）：null=清除上限
+      max_concurrency: maxConcurrency.value ?? null,
     }
     // 引用门禁策略(spec §8.2):显式键哨兵语义——清空/换选传新值,关闸传 null
     // 解绑,未动不传。例外:批引用了策略但门禁从未启用过(policy-only,开放

@@ -88,6 +88,39 @@ describe('CreateBatchDialog', () => {
     }))
   })
 
+  it('并发上限默认 null(不限),设置后随 payload 下发', async () => {
+    vi.mocked(batchApi.createBatch).mockResolvedValue({
+      batch: { id: 'b', user_id: 'u', name: 'B1', prompt: 'do',
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
+               done: 0, failed: 0, created_at: '', completed_at: null },
+      sessions: [],
+    })
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B1')
+    await w.find('input[data-test="prompt"]').setValue('do')
+    ;(w.vm as any).stagedFiles = [{ name: 'a.txt', path: 'p/a.txt' }]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      max_concurrency: null,
+    }))
+    // 提交成功会 reset() 清空表单;重新填一遍再设并发上限 1 提交
+    ;(w.vm as any).maxConcurrency = 1
+    await w.find('input[data-test="name"]').setValue('B1')
+    await w.find('input[data-test="prompt"]').setValue('do')
+    ;(w.vm as any).stagedFiles = [{ name: 'a.txt', path: 'p/a.txt' }]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenLastCalledWith(expect.objectContaining({
+      max_concurrency: 1,
+    }))
+  })
+
   it('saves a new template when 保存为模板 is checked', async () => {
     vi.mocked(batchApi.createBatch).mockResolvedValue({
       batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',

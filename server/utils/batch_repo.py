@@ -249,6 +249,23 @@ def validate_subagent_reuse(value) -> list:
     return names
 
 
+MAX_BATCH_CONCURRENCY = 100
+
+
+def validate_max_concurrency(value) -> int | None:
+    """校验批级并发上限（新建/编辑对话框入口，2026-10-27）：落
+    ai_execution_budgets(scope_type='batch').max_concurrency，调度 claim
+    前现读（concurrency_blocked_batches）。None/缺省 = 不限（跟随全局并发
+    AI_BATCH_CONCURRENCY）。bool 是 int 子类，先排除（True→1 静默放行太隐晦）。"""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError('max_concurrency 必须是 1-100 的整数')
+    if not 1 <= value <= MAX_BATCH_CONCURRENCY:
+        raise ValueError(f'max_concurrency 必须是 1-{MAX_BATCH_CONCURRENCY} 的整数')
+    return value
+
+
 def create_batch(user_id: str, *, name: str, prompt: str,
                  template_id: str | None, files: list[dict],
                  scan_task_id: str | None = None,
@@ -353,10 +370,16 @@ def list_batches(user_id: str, *, page: int, page_size: int,
                      " WHERE s.batch_id = ai_chat_batches.id AND s.status = 'cancelled')")
     paused_sub = ("(SELECT count(*) FROM ai_chat_sessions s "
                   " WHERE s.batch_id = ai_chat_batches.id AND s.status = 'paused')")
+    # 批并发上限（2026-10-27）：随列表下发——编辑对话框从列表行预填，缺了
+    # 会把已设上限回显成空、无辜保存即清除
+    mc_sub = ("(SELECT b.max_concurrency FROM ai_execution_budgets b "
+              " WHERE b.scope_type = 'batch' AND b.scope_id = ai_chat_batches.id"
+              "   AND b.enabled)")
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                f"SELECT *, {cancelled_sub} AS cancelled, {paused_sub} AS paused "
+                f"SELECT *, {cancelled_sub} AS cancelled, {paused_sub} AS paused, "
+                f"{mc_sub} AS max_concurrency "
                 f"FROM ai_chat_batches {scope} "
                 "ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 (*base, page_size, offset),
@@ -376,7 +399,10 @@ def get_batch_detail(user_id: str, batch_id: str, *,
                 "  (SELECT count(*) FROM ai_chat_sessions s "
                 "   WHERE s.batch_id = ai_chat_batches.id AND s.status='cancelled') AS cancelled, "
                 "  (SELECT count(*) FROM ai_chat_sessions s "
-                "   WHERE s.batch_id = ai_chat_batches.id AND s.status='paused') AS paused "
+                "   WHERE s.batch_id = ai_chat_batches.id AND s.status='paused') AS paused, "
+                "  (SELECT b.max_concurrency FROM ai_execution_budgets b "
+                "   WHERE b.scope_type='batch' AND b.scope_id = ai_chat_batches.id "
+                "     AND b.enabled) AS max_concurrency "
                 "FROM ai_chat_batches WHERE id=%s AND user_id=%s"
             )
             params = [batch_id, user_id]
@@ -422,6 +448,10 @@ def delete_batch(user_id: str, batch_id: str, *,
         with conn.cursor() as cur:
             cur.execute(sql, tuple(params))
             deleted = cur.rowcount > 0
+            # 批没了，并发上限预算行一并清（scope 唯一索引按 batch_id 定位；
+            # 残留虽无害——无 running 会话永不阻塞——但会越积越多）
+            if deleted:
+                cur.execute("DELETE FROM ai_execution_budgets WHERE scope_type='batch' AND scope_id=%s", (batch_id,))
         conn.commit()
     return deleted
 

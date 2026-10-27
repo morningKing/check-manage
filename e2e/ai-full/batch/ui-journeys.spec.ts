@@ -23,6 +23,9 @@
  *    才可搜。扩展后：批任务名命中（hit-batch）→ 点击展开批组；文件名唯一
  *    关键词（不带范围）命中跨批子会话 → 批次上下文 + failed 状态 → 打开。
  *    fail-fast 批（未知 agent 子任务秒级 failed）0 LLM。
+ *  - 用例 4c「批并发上限入口」（2026-10-27 新增）：新建对话框设并发上限 1
+ *    → 落 ai_execution_budgets（详情/列表回显 1）→ 编辑对话框回显/改 3/
+ *    清空，保存后 API 侧即时生效。fail-fast 批（未知 agent）0 LLM。
  *  - 用例 5「技能注入」← e2e/batch-skill-check.spec.ts（已删）：
  *    改为 **provision_repo 自带 skill/**（makeProvisionRepo skills 形参），
  *    消除源对磁盘全局技能预置（trace-analyzer/writing-beats）的环境依赖。
@@ -379,6 +382,83 @@ test('全量搜索覆盖批任务：批任务名命中展开批组/跨批子会�
     await screenshot(page, 'ui-journeys-global-search-batch')
   } finally {
     await cleanupBatch(tk, bid)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 用例 4c：批并发上限入口（2026-10-27，fail-fast 批 0 LLM）——新建对话框
+// 设上限 → 落 ai_execution_budgets → 编辑对话框回显/改值/清空即时生效
+// ---------------------------------------------------------------------------
+
+test('批并发上限：对话框建批设 1 → 编辑改 3 → 清空回显空（0 LLM）', async ({ page }) => {
+  // 0 LLM：未知 agent 建批（同 4b）→ 子任务秒级 failed；本例断言只看
+  // 并发上限的落库与回显，不依赖子任务状态
+  const tk = await adminTokenCached()
+  const name = tag('max-conc')
+  // ElInputNumber 的 data-test 透传在组件根 div 上，输入框用唯一 placeholder 定位
+  const mcInput = (scope: ReturnType<Page['getByRole']>) =>
+    scope.locator('input[placeholder="留空=跟随全局并发"]')
+  try {
+    await gotoChat(page)
+    await openBatchDialog(page)
+    const dialog = page.getByRole('dialog', { name: '新建批任务' })
+    await dialog.locator('input[data-test="name"]').fill(name)
+    await dialog.locator('textarea[data-test="prompt"]').fill('对每个输入文件输出一行摘要。')
+    // agent 填未知名（worker 认领即 fail-fast，不产生 LLM 消耗）。
+    // EP 2.6+ Select 新结构：placeholder 在 .el-select__placeholder span 上，
+    // filterable 输入框是 .el-select__input（无 placeholder 属性）——按行定位
+    const agentRow = dialog.locator('.row', { hasText: 'Agent' }).first()
+    await agentRow.locator('.el-select__wrapper').click({ timeout: 8_000 })
+    const agentInput = agentRow.locator('.el-select__input')
+    await agentInput.fill('e2e-no-such-agent')
+    await agentInput.press('Enter')
+    await dialog.locator('input[type="file"]').setInputFiles([
+      { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') },
+    ])
+    await expect(dialog.locator('.files')).toContainText('a.txt', { timeout: 8_000 })
+    await mcInput(dialog).fill('1')
+    await dialog.locator('button[data-test="create-btn"]').click()
+
+    // 批组出现（创建成功）→ 后端断言：预算行生效且详情/列表都回显 1
+    await expect(page.locator('.batch-group', { hasText: name }).first())
+      .toBeVisible({ timeout: 15_000 })
+    const bid = await findBatchIdByName(tk, name)
+    expect(bid, '批任务应创建成功').toBeTruthy()
+    expect((await getDetail(tk, bid!)).batch.max_concurrency).toBe(1)
+    const list = await fetch(`${API}/ai/chat/batches?page=1&pageSize=50`,
+      { headers: authHeaders(tk) }).then(r => r.json())
+    expect((list.items as Array<{ id: string; max_concurrency: number | null }>)
+      .find(b => b.id === bid)?.max_concurrency).toBe(1)
+
+    // UI 编辑链：展开批组 → 组头「编辑」→ 回显 1 → 改 3 → 保存 → API=3
+    await expandBatchGroup(page, name)
+    const group = page.locator('.batch-group', { hasText: name }).first()
+    const editDialog = page.getByRole('dialog', { name: '编辑批任务配置' })
+    const saveAndAssert = async (value: string, api: number | null) => {
+      await mcInput(editDialog).fill(value)
+      await editDialog.locator('button:has-text("保存")').click()
+      await expect(editDialog).toBeHidden({ timeout: 10_000 })
+      expect((await getDetail(tk, bid!)).batch.max_concurrency).toBe(api)
+    }
+    await group.locator('[title="编辑 Agent/模型"]').click()
+    await expect(editDialog).toBeVisible({ timeout: 10_000 })
+    await expect(mcInput(editDialog)).toHaveValue('1')
+    await saveAndAssert('3', 3)
+
+    // 重开 → 回显 3 → 清空 → 保存 → API=null（清除上限）
+    await group.locator('[title="编辑 Agent/模型"]').click()
+    await expect(editDialog).toBeVisible({ timeout: 10_000 })
+    await expect(mcInput(editDialog)).toHaveValue('3')
+    await saveAndAssert('', null)
+
+    // 重开 → 回显空（列表行已同步 detail.batch，预填不再误显示旧值）
+    await group.locator('[title="编辑 Agent/模型"]').click()
+    await expect(editDialog).toBeVisible({ timeout: 10_000 })
+    await expect(mcInput(editDialog)).toHaveValue('')
+    await editDialog.locator('button:has-text("取消")').click()
+    await screenshot(page, 'ui-journeys-max-concurrency')
+  } finally {
+    await cleanupBatchByName(tk, name)
   }
 })
 

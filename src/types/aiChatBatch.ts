@@ -24,6 +24,9 @@ export interface AiChatBatch {
   action_checks?: Array<Record<string, unknown>> | null
   /** 门禁不过时自动修正开关(设计 §5.4) */
   gate_retry?: boolean | null
+  /** 批并发上限(2026-10-27,新建/编辑对话框):本批同时执行的子任务数;
+   *  null/缺省=不限(跟随全局并发)。落 ai_execution_budgets,调度 claim 前现读 */
+  max_concurrency?: number | null
   status: BatchStatus
   total: number
   done: number
