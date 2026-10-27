@@ -18,6 +18,15 @@ import {
 /** 触发 decoration 重算（列表/幽灵文本变化时用） */
 export const GHOST_REFRESH_META = "suggest-editor:ghost"
 
+declare module "@tiptap/core" {
+  interface Commands<ReturnType> {
+    completionGhost: {
+      /** AI 续写一段（Ctrl+J / ⋯菜单）：从光标处发起整段续写 */
+      requestParagraphCompletion: () => ReturnType
+    }
+  }
+}
+
 /** LLM 兜底层：只在本地层完全没命中时才请求 */
 const LLM_DEBOUNCE_MS = 700
 /** 文档自学习索引的重建防抖（避免每个按键都重建索引） */
@@ -87,6 +96,9 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
   let learnScheduled = false
   let dismissedAtVersion = -1
   let llmTimer: ReturnType<typeof setTimeout> | null = null
+  /** 用户主动发起的整段续写（Ctrl+J）：回流条件比自动兜底宽松（不要求句尾） */
+  let manualPendingId: string | null = null
+  let manualVersionAtRequest = -1
   /** 片段占位符跳转状态（接受带 ${1:xx} 的词条后可用 Tab 逐个跳转） */
   let tabstops: TabstopState | null = null
 
@@ -233,6 +245,30 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
     versionAtRequest = docVersion
   }
 
+  /** 用户主动发起的整段续写（Ctrl+J / ⋯菜单）：不要求句尾，只要光标处有上文可依据 */
+  const requestParagraphContinuation = (): boolean => {
+    if (!LLM_COMPLETION_ENABLED) return false
+    const editor = getEditor()
+    if (!editor) return false
+    const state = editor.state
+    if (!state.selection.empty) return false
+    const context = tailAt(state)
+    if (!context || context.tail.trim().length < MIN_CONTEXT_CHARS) return false
+    // 撤掉待发的自动兜底：否则它的 sentence 请求会把本条 paragraph 命令 supersede 掉
+    if (llmTimer) {
+      clearTimeout(llmTimer)
+      llmTimer = null
+    }
+    // 作废已在途的自动请求：其结果可能在手动续写之后才回流，若不失效会先占住 ghost，
+    // 导致段落结果被「已有候选」挡掉（requestLlm 与手动续写互斥）
+    pendingId = null
+    closeList()
+    dismissedAtVersion = -1
+    manualPendingId = requestCompletion(ydoc, ydoc.clientID, context.tail.slice(-600), "paragraph")
+    manualVersionAtRequest = docVersion
+    return true
+  }
+
   /** 文档自学习索引：防抖重建，重建后刷新一次（让文档词进入候选） */
   const scheduleLearn = (state: EditorState): void => {
     if (learnScheduled || learnedVersion === docVersion) return
@@ -300,22 +336,27 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
         | { kind?: unknown; clientId?: unknown; status?: unknown; replacement?: unknown }
         | undefined
       if (!value || value.kind !== "complete") continue
-      if (value.clientId !== ydoc.clientID || key !== pendingId) continue
+      if (value.clientId !== ydoc.clientID) continue
+
+      const isManual = key === manualPendingId
+      if (!isManual && key !== pendingId) continue
 
       if (value.status === "superseded" || value.status === "error") {
-        pendingId = null
+        if (isManual) manualPendingId = null
+        else pendingId = null
         continue
       }
       if (value.status !== "done" || typeof value.replacement !== "string" || !value.replacement) continue
 
-      pendingId = null
-      if (docVersion !== versionAtRequest) continue // 期间又编辑过 → 结果已过期
+      if (isManual) manualPendingId = null
+      else pendingId = null
+      if (docVersion !== (isManual ? manualVersionAtRequest : versionAtRequest)) continue // 期间又编辑过 → 结果已过期
       if (list || ghost) continue // 本地层已经有更好的候选
       const editor = getEditor()
       if (!editor) continue
       const selection = editor.state.selection
       if (!selection.empty) continue
-      if (!atSentenceEnd(editor.state)) continue // 期间光标已离开句尾 → 提示不再成立
+      if (!isManual && !atSentenceEnd(editor.state)) continue // 自动兜底：期间光标已离开句尾 → 提示不再成立
 
       ghost = { id: key, pos: selection.from, insert: value.replacement, replaceLength: 0, source: "AI" }
       refresh()
@@ -479,6 +520,20 @@ export function CompletionGhost(options: { ydoc: Y.Doc; getEditor: () => Editor 
 
   return Extension.create({
     name: "completionGhost",
+    addCommands() {
+      return {
+        /** AI 续写一段（Ctrl+J / ⋯菜单）：从光标处发起整段续写，结果以 ghost 呈现 */
+        requestParagraphCompletion:
+          () =>
+          () =>
+            requestParagraphContinuation(),
+      }
+    },
+    addKeyboardShortcuts() {
+      return {
+        "Mod-j": () => requestParagraphContinuation(),
+      }
+    },
     addProseMirrorPlugins() {
       return [
         new Plugin({

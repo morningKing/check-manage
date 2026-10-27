@@ -54,12 +54,13 @@ interface RewriteCommand {
   updatedAt: number
 }
 
-/** 光标处的续写联想（ghost text）请求，按客户端隔离 */
+/** 光标处的续写联想（ghost text）请求，按客户端隔离；paragraph = 用户主动发起的整段续写 */
 interface CompleteCommand {
   id: string
   kind: "complete"
   clientId: number
   context: string
+  mode?: "paragraph"
   status: CommandStatus
   replacement?: string
   error?: string
@@ -243,12 +244,12 @@ function stripFences(text: string): string {
     .trim()
 }
 
-function sanitizeCompletion(text: string): string {
+function sanitizeCompletion(text: string, max = 60): string {
   return stripFences(text)
     .replace(/^["'「『]+|["'」』]+$/g, "")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 60)
+    .slice(0, max)
 }
 
 /** 清理：过期 / 锚点已死 / 原文已不存在的建议 */
@@ -516,20 +517,30 @@ async function runRewrite(state: DocState, id: string, command: RewriteCommand):
 
 async function runCompletion(state: DocState, id: string, command: CompleteCommand): Promise<void> {
   const session = await getCompletionSession(state)
-  const prompt = [
-    "【续写任务】根据下面的上下文，只输出接下来的一小段文字（一句话以内，≤40 字）。",
-    "不要重复上下文，不要解释，不要调用任何工具。",
-    "<<<CONTEXT>>>",
-    command.context,
-    "<<<END>>>",
-  ].join("\n")
+  const paragraph = command.mode === "paragraph"
+  const prompt = paragraph
+    ? [
+        "【续写任务】根据下面的上下文，接着写一段话（80~200 字，一到三句），风格与上下文保持一致。",
+        "不要重复上下文，不要解释，不要调用任何工具。",
+        "【续写模式】段落",
+        "<<<CONTEXT>>>",
+        command.context,
+        "<<<END>>>",
+      ].join("\n")
+    : [
+        "【续写任务】根据下面的上下文，只输出接下来的一小段文字（一句话以内，≤40 字）。",
+        "不要重复上下文，不要解释，不要调用任何工具。",
+        "<<<CONTEXT>>>",
+        command.context,
+        "<<<END>>>",
+      ].join("\n")
 
   const result = await withTimeout(
     state.completionLock(() => session.analyze(prompt)),
     Math.min(config.analyzeTimeoutMs, COMPLETION_TIMEOUT_MS),
     () => session.cancel(),
   )
-  const text = sanitizeCompletion(result.text)
+  const text = sanitizeCompletion(result.text, paragraph ? 400 : 60)
   if (!text) {
     markCommand(state, id, { status: "error", error: "agent 未返回续写文本" })
     return

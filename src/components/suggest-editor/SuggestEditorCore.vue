@@ -14,6 +14,7 @@
             :doc-id="docId"
             @ai-rewrite="openReviseMenuAtSelection"
             @open-shortcuts="shortcutsOpen = true"
+            @print="onPrint"
           />
           <span class="se-status-pill">
             <i class="se-status-dot" :class="`is-${syncState}`" />
@@ -72,6 +73,23 @@
             @click="submitRewrite(preset.instruction)"
           >
             {{ preset.label }}
+          </button>
+        </div>
+        <div class="se-revise-menu-row se-revise-tone">
+          <span class="se-revise-tone-label">语气</span>
+          <input
+            v-model.number="toneValue"
+            class="se-revise-tone-slider"
+            type="range"
+            min="0"
+            max="4"
+            step="1"
+            aria-label="语气（口语到正式）"
+            title="口语 ↔ 正式，选好后点「按语气改写」"
+          />
+          <span class="se-revise-tone-value">{{ TONE_LABELS[toneValue] ?? '中性' }}</span>
+          <button type="button" class="se-revise-menu-btn" @click="submitRewrite(toneInstruction)">
+            按语气改写
           </button>
         </div>
         <div class="se-revise-menu-row">
@@ -252,11 +270,24 @@ const SHORTCUT_ROWS = [
   { keys: '/', desc: '句首唤起块菜单（正文、标题、列表、表格…）' },
   { keys: 'Tab', desc: '接受补全候选或续写联想；Esc 丢弃' },
   { keys: 'Ctrl+Space', desc: '强制弹出补全候选（词中也可）' },
+  { keys: 'Ctrl+J', desc: 'AI 续写一段（从光标处接着写）' },
   { keys: '右键 / Alt+A', desc: 'AI 改写选中文字（美化、扩写、精简、翻译…）' },
   { keys: 'Ctrl+F', desc: '查找与替换' },
   { keys: 'Ctrl+/', desc: '本帮助' },
   { keys: 'Esc', desc: '关闭弹层 / 退出专注模式' },
 ]
+
+/** 打印 / 导出 PDF：走浏览器打印（print CSS 已隐藏编辑器 chrome，建议标注不进纸面） */
+function onPrint(): void {
+  window.print()
+}
+
+/** 语气滑杆（口语 ↔ 正式，5 档）：提交为一条语气改写指令 */
+const TONE_LABELS = ['很口语', '偏口语', '中性', '偏正式', '很正式']
+const toneValue = ref(2)
+const toneInstruction = computed(
+  () => `把语气调整为「${TONE_LABELS[toneValue.value] ?? '中性'}」（程度 ${toneValue.value + 1}/5），保持原意与事实不变`,
+)
 
 interface AssistantStatus {
   state?: string
@@ -599,6 +630,7 @@ function openReviseMenu(from: number, to: number, anchor?: { x: number; y: numbe
   const current = editorRef.value
   if (!current) return
   customInstruction.value = ''
+  toneValue.value = 2
   const quote = current.state.doc.textBetween(from, to, '\n').slice(0, 80)
   if (anchor) {
     menu.value = { x: clampMenuX(anchor.x), y: clampMenuY(anchor.y), from, to, quote }

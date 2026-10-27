@@ -44,14 +44,21 @@ export function requestRewrite(input: {
   return id
 }
 
-/** 写入一条「续写联想」命令（ghost text）；结果只回给发起它的客户端 */
-export function requestCompletion(ydoc: Y.Doc, clientId: number, context: string): string {
+/** 写入一条「续写联想」命令（ghost text）；结果只回给发起它的客户端。
+ *  mode="paragraph" 是用户主动发起的整段续写（服务端放宽字数与提示词）。 */
+export function requestCompletion(
+  ydoc: Y.Doc,
+  clientId: number,
+  context: string,
+  mode?: "paragraph",
+): string {
   const id = crypto.randomUUID()
   ydoc.getMap(COMMANDS_MAP).set(id, {
     id,
     kind: "complete",
     clientId,
     context,
+    ...(mode ? { mode } : {}),
     status: "pending",
     createdAt: Date.now(),
     updatedAt: Date.now(),

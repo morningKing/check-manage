@@ -129,6 +129,14 @@ function completionFor(context) {
   return "，并保持前后语气一致。"
 }
 
+/** 整段续写（用户主动发起）：固定两三句，E2E 用「综上所述」锚定断言 */
+function paragraphCompletionFor() {
+  return (
+    "综上所述，本节先给出结论再展开论据：第一，明确执行步骤与责任人；" +
+    "第二，统一数据口径与文档模板；第三，在关键节点设置复核与回滚条件，确保过程可追溯。"
+  )
+}
+
 const agent = {
   async initialize() {
     return { protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: false } }
@@ -154,7 +162,8 @@ const agent = {
     // 3) 续写联想
     const completionContext = extractBlock(promptText, "<<<CONTEXT>>>", "<<<END>>>")
     if (completionContext !== null) {
-      const completion = completionFor(completionContext)
+      const isParagraph = promptText.includes("【续写模式】段落")
+      const completion = isParagraph ? paragraphCompletionFor() : completionFor(completionContext)
       await cx.notify(acp.methods.client.session.update, {
         sessionId,
         update: {

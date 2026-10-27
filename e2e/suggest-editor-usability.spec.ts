@@ -219,3 +219,111 @@ test('U6 目录导航：HUD 目录列出标题并点击滚动定位', async ({ p
     await deleteDocument(page.request, token, docId)
   }
 })
+
+test('U7 打印 / 导出 PDF：⋯菜单触发 window.print（纸面由 print CSS 负责）', async ({ page }) => {
+  const token = readSharedToken()
+  const docId = await createDocument(page.request, token, `E2E-易用-打印-${Date.now()}`)
+  try {
+    // 打印对话框在 headless 下无法交互：stub 掉 window.print 断言触发即可
+    await page.addInitScript(() => {
+      ;(window as unknown as Record<string, unknown>).__printTriggered = false
+      window.print = () => {
+        ;(window as unknown as Record<string, unknown>).__printTriggered = true
+      }
+    })
+    await openDocById(page, docId)
+    await page.locator('span[title="更多格式与操作"]').click()
+    await page.locator('.el-dropdown-menu__item', { hasText: '打印 / 导出 PDF' }).click()
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as Record<string, unknown>).__printTriggered))
+      .toBe(true)
+  } finally {
+    await deleteDocument(page.request, token, docId)
+  }
+})
+
+test('U8 AI 整段续写：Ctrl+J 发起 → ghost 预览 → Tab 落正文', async ({ page }) => {
+  test.setTimeout(90_000)
+  const token = readSharedToken()
+  const docId = await createDocument(page.request, token, `E2E-易用-续写-${Date.now()}`)
+  try {
+    await openDocById(page, docId)
+    await typeAtEnd(page, '系统上线前需要完成准备工作。')
+    // 等 700ms 自动兜底 debounce 先跑掉：确保自动 sentence 请求先于 manual 发出，
+    // 服务端「同客户端只留最新」会保留后发的 paragraph 命令（顺序固定，不被反向取代）
+    await page.waitForTimeout(900)
+
+    await page.keyboard.press('Control+j')
+    const ghost = page.locator('.ghost-text')
+    await expect(ghost).toContainText('综上所述', { timeout: 30_000 })
+
+    await page.keyboard.press('Tab')
+    await expect(page.locator('.doc-surface')).toContainText('综上所述', { timeout: 10_000 })
+  } finally {
+    await deleteDocument(page.request, token, docId)
+  }
+})
+
+test('U9 语气滑杆：口语↔正式连续调节，按语气改写以卡片落地', async ({ page }) => {
+  test.setTimeout(90_000)
+  const token = readSharedToken()
+  const docId = await createDocument(page.request, token, `E2E-易用-语气-${Date.now()}`)
+  try {
+    await openDocById(page, docId)
+    await typeAtEnd(page, '但是这次改造需要验证。')
+    await page.waitForTimeout(600)
+
+    const aiBtn = page.getByRole('button', { name: 'AI 改写' })
+    const reviseMenu = page.locator('.se-revise-menu')
+    await expect(async () => {
+      await selectLastParagraph(page)
+      await expect(aiBtn).toBeEnabled({ timeout: 2_000 })
+      await aiBtn.click()
+      await expect(reviseMenu).toBeVisible({ timeout: 2_000 })
+    }).toPass({ timeout: 20_000 })
+
+    // 滑杆调到 4 = 很正式（v-model 监听 input 事件）
+    await page.locator('.se-revise-tone-slider').evaluate((el) => {
+      const input = el as HTMLInputElement
+      input.value = '4'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await expect(page.locator('.se-revise-tone-value')).toHaveText('很正式')
+
+    await reviseMenu.getByRole('button', { name: '按语气改写' }).click()
+    await expect(
+      page.locator('.se-suggest-note[data-source="rewrite"]').first(),
+    ).toBeVisible({ timeout: 30_000 })
+  } finally {
+    await deleteDocument(page.request, token, docId)
+  }
+})
+
+test('U10 拼写检查开关：⋯菜单切换 + 刷新保持', async ({ page }) => {
+  const token = readSharedToken()
+  const docId = await createDocument(page.request, token, `E2E-易用-拼写-${Date.now()}`)
+  try {
+    await openDocById(page, docId)
+    const surface = page.locator('.doc-surface')
+    await expect(surface).toHaveAttribute('spellcheck', 'false', { timeout: 10_000 }) // 中文文档默认关
+
+    await page.locator('span[title="更多格式与操作"]').click()
+    await page.locator('.el-dropdown-menu__item', { hasText: '拼写检查：关（点击开启）' }).click()
+    await expect(surface).toHaveAttribute('spellcheck', 'true')
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem('check-manage:se:spellcheck')))
+      .toBe('1')
+
+    // 刷新后从 localStorage 恢复
+    await page.reload()
+    await expect(page.locator('.doc-surface')).toBeVisible({ timeout: 30_000 })
+    await expect(page.locator('.doc-surface')).toHaveAttribute('spellcheck', 'true', { timeout: 10_000 })
+
+    // 关闭恢复
+    await page.locator('span[title="更多格式与操作"]').click()
+    await page.locator('.el-dropdown-menu__item', { hasText: '拼写检查：开（点击关闭）' }).click()
+    await expect(surface).toHaveAttribute('spellcheck', 'false')
+  } finally {
+    await deleteDocument(page.request, token, docId)
+  }
+})

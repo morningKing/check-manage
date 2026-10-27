@@ -1288,3 +1288,99 @@
 .se-scope .doc-surface > * {
   scroll-margin-top: 96px;
 }
+
+/* 改写菜单的语气滑杆行 */
+.se-revise-tone {
+  align-items: center;
+
+  .se-revise-tone-label {
+    flex: none;
+    color: var(--se-muted);
+    font-size: 12px;
+  }
+
+  .se-revise-tone-slider {
+    flex: 1;
+    min-width: 0;
+    height: 18px;
+    accent-color: #7e22ce;
+    cursor: pointer;
+  }
+
+  .se-revise-tone-value {
+    flex: none;
+    min-width: 42px;
+    text-align: center;
+    color: #7e22ce;
+    font-size: 12px;
+  }
+}
+
+/* ---------------- 打印 / 导出 PDF（浏览器打印对话框「另存为 PDF」同路） ----------------
+   只保留正文纸面：平台头部/侧栏/编辑器 chrome 全部隐藏，高度链放开让长文档完整分页，
+   建议标注/ghost/查找高亮不进纸面。 */
+@media print {
+  .app-aside,
+  .app-header,
+  .tab-bar,
+  .se-head,
+  .se-doc-hud,
+  .se-find-panel,
+  .se-suggest-panel,
+  .se-focus-exit,
+  .se-completion-popup,
+  .se-slash-menu,
+  .se-table-grid,
+  .se-revise-menu {
+    display: none !important;
+  }
+
+  html,
+  body,
+  #app {
+    background: #fff !important;
+  }
+
+  /* 打开高度链：编辑器外层容器在屏幕态是 overflow hidden 的固定视口盒，打印必须放开 */
+  .app-layout,
+  .app-main,
+  .content-main,
+  .suggest-doc-page,
+  .se-scope,
+  .se-layout,
+  .se-workspace,
+  .se-editor-host {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  .se-scope .doc-surface {
+    width: 100% !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* 建议标注（Word 式批注底色/编号圆标）与 ghost、查找高亮不进纸面 */
+  .se-scope .suggest {
+    background: transparent !important;
+    border-bottom: none !important;
+  }
+
+  .se-scope .suggest-marker,
+  .se-scope .ghost-text,
+  .se-scope .ghost-source,
+  .se-scope .completion-widget {
+    display: none !important;
+  }
+
+  .se-scope .se-find-hit,
+  .se-scope .se-find-current {
+    background: transparent !important;
+    outline: none !important;
+  }
+}

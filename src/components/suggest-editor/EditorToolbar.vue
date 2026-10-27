@@ -144,9 +144,14 @@
           <span class="se-bubble-btn" title="更多格式与操作">⋯</span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="code">行内代码</el-dropdown-item>
+              <el-dropdown-item command="continuePara">AI 续写一段 (Ctrl+J)</el-dropdown-item>
+              <el-dropdown-item command="code" divided>行内代码</el-dropdown-item>
               <el-dropdown-item command="link">链接…</el-dropdown-item>
               <el-dropdown-item command="clear">清除格式</el-dropdown-item>
+              <el-dropdown-item command="spellcheck" divided>
+                {{ spellcheckOn ? '拼写检查：开（点击关闭）' : '拼写检查：关（点击开启）' }}
+              </el-dropdown-item>
+              <el-dropdown-item command="print">打印 / 导出 PDF…</el-dropdown-item>
               <el-dropdown-item command="shortcuts" divided>快捷键…</el-dropdown-item>
               <template v-if="editor.isActive('table')">
                 <el-dropdown-item command="rowBefore" divided>上方插入行</el-dropdown-item>
@@ -191,6 +196,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'ai-rewrite'): void
   (e: 'open-shortcuts'): void
+  (e: 'print'): void
 }>()
 
 const BLOCK_OPTIONS = [
@@ -214,6 +220,7 @@ const onTransaction = () => {
 }
 onMounted(() => {
   props.editor.on('transaction', onTransaction)
+  applySpellcheck()
 })
 onBeforeUnmount(() => {
   props.editor.off('transaction', onTransaction)
@@ -235,6 +242,35 @@ function hasSelection(): boolean {
   tick.value
   const { from, to } = props.editor.state.selection
   return from !== to
+}
+
+/* ---------------- 拼写检查开关（浏览器 spellcheck；中文文档默认关——红波浪线多为噪声） ---------------- */
+
+const SPELLCHECK_KEY = 'check-manage:se:spellcheck'
+
+function readSpellcheck(): boolean {
+  try {
+    return localStorage.getItem(SPELLCHECK_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+const spellcheckOn = ref(readSpellcheck())
+
+function applySpellcheck(): void {
+  // contenteditable 的 spellcheck 属性浏览器实时生效，直接改 DOM 即可，无需重建编辑器
+  props.editor.view.dom.setAttribute('spellcheck', spellcheckOn.value ? 'true' : 'false')
+}
+
+function toggleSpellcheck(): void {
+  spellcheckOn.value = !spellcheckOn.value
+  try {
+    localStorage.setItem(SPELLCHECK_KEY, spellcheckOn.value ? '1' : '0')
+  } catch {
+    /* localStorage 不可用时仅会话内生效 */
+  }
+  applySpellcheck()
 }
 
 const blockType = computed<BlockValue>(() => {
@@ -319,9 +355,12 @@ function onMoreCommand(command: string): void {
   const editor = props.editor
   const chain = editor.chain().focus()
   switch (command) {
+    case 'continuePara': chain.requestParagraphCompletion().run(); break
     case 'code': chain.toggleCode().run(); break
     case 'link': openLink(); break
     case 'clear': clearFormatting(editor); break
+    case 'spellcheck': toggleSpellcheck(); break
+    case 'print': emit('print'); break
     case 'shortcuts': emit('open-shortcuts'); break
     case 'rowBefore': TABLE_COMMANDS.addRowBefore(editor); break
     case 'rowAfter': TABLE_COMMANDS.addRowAfter(editor); break
