@@ -65,6 +65,34 @@ describe('BatchGroup', () => {
     expect(w.find('.bg-meta').text()).toBe('1/3')
   })
 
+  // 多模型批展示（2026-10-27）：批头标注模型数（不再只显示首模型误导"整批
+  // 一个模型"），展开的子任务行各自显示轮询分配到的模型；单模型批子会话
+  // model 为 NULL 不显示标签
+  it('multi-model batch: head shows count, each child row shows its assigned model', async () => {
+    const w = await mountGroup(
+      batch({ model: 'prov/m-a', models: ['prov/m-a', 'prov/m-b', 'prov/m-c'] }),
+      [session({ id: 's1', model: 'prov/m-a', batch_seq: 0 }),
+       session({ id: 's2', model: 'prov/m-b', batch_seq: 1 }),
+       session({ id: 's3', model: null, batch_seq: 2 })],
+    )
+    await w.find('.batch-group__head').trigger('click')
+    await flushPromises()
+    const am = w.find('.bg-am')
+    expect(am.text()).toContain('3 个模型')
+    expect(am.attributes('title')).toContain('prov/m-a')
+    const tags = w.findAll('.bg-child__model').map(n => n.text())
+    expect(tags).toEqual(['m-b', 'm-a'])   // 行按 seq 降序;s3 无快照（跟随批级）不显示
+  })
+
+  it('single-model batch keeps legacy head label and no child model tags', async () => {
+    const w = await mountGroup(batch({ model: 'prov/only' }),
+      [session({ id: 's1', model: null })])
+    await w.find('.batch-group__head').trigger('click')
+    await flushPromises()
+    expect(w.find('.bg-am').text()).toBe('默认 · prov/only')
+    expect(w.findAll('.bg-child__model')).toHaveLength(0)
+  })
+
   // F10（P0 spec §9 / 缺口补齐计划 1.5）：终态文案映射锁定——paused/cancelled
   // 必须渲染中文文案而非原始状态键（曾有映射缺失，重建列表时直接露键名）
   it('F10: paused/cancelled badges render Chinese labels', async () => {

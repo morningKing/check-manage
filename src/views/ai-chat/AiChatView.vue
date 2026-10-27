@@ -162,8 +162,15 @@ const activeUsage = computed(() => store.activeUsage)
 const effectiveModel = computed(() => composerModel.value || defaultModel.value)
 const modelInfo = computed(() => models.value.find((m) => m.id === effectiveModel.value))
 const contextLimit = computed(() => modelInfo.value?.contextLimit ?? null)
-const modelLabel = computed(() => modelInfo.value?.label
-  || (effectiveModel.value ? effectiveModel.value.split('/').pop() || effectiveModel.value : '默认'))
+// 批子会话（多模型分配,2026-10-27）：显示该子任务实际执行的模型快照——
+// 否则状态条永远是聊天输入框选的模型,页面上无法核对多模型派发结果
+const childModel = computed(() =>
+  batches.activeSessions.find((s) => s.id === activeId.value)?.model || '')
+const modelLabel = computed(() => {
+  const shown = childModel.value || effectiveModel.value
+  return models.value.find((m) => m.id === shown)?.label
+    || (shown ? shown.split('/').pop() || shown : '默认')
+})
 
 
 const input = ref('')

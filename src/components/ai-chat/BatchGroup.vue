@@ -7,7 +7,7 @@
         <div class="bg-sub">
           <span :class="`badge badge--${batch.status}`">{{ statusLabel(batch.status) }}</span>
           <span class="bg-meta">{{ batch.done }}/{{ batch.total }}</span>
-          <span class="bg-am">{{ batch.agent || '默认' }} · {{ batch.model || '默认' }}</span>
+          <span class="bg-am" :title="modelsTitle">{{ agentModelLabel }}</span>
           <ElIcon class="bg-id-copy" title="复制批任务 ID"
                   @click.stop="copyId(batch.id, '批任务')"><DocumentCopy /></ElIcon>
           <span class="bg-actions" @click.stop>
@@ -41,6 +41,8 @@
               title="动作门禁未通过:缺失项见子任务 error_message">门禁 ×{{ s.gate_failed }}</span>
         <span v-else-if="(s.gate_passed ?? 0) > 0" class="gate-badge gate-badge--pass"
               title="动作门禁核对全部通过">门禁 ✓</span>
+        <span v-if="s.model" class="bg-child__model" :title="`本子任务执行模型: ${s.model}`">
+          {{ shortModel(s.model) }}</span>
         <ElIcon v-if="['pending', 'running'].includes(s.status)"
                 class="bg-child__cancel" title="中断此任务"
                 @click.stop="onCancel(s.id)"><VideoPause /></ElIcon>
@@ -89,6 +91,23 @@ const expanded = computed(() => store.activeBatch?.id === props.batch.id)
 // 子任务会话按 batch_seq 降序展示：最新创建/追加的排最上面（旧会话沉底）。
 const sortedSessions = computed(() =>
   [...store.activeSessions].sort((a, b) => (b.batch_seq ?? 0) - (a.batch_seq ?? 0)))
+
+// 多模型批（2026-10-27）展示：批行 model 只存首模型（兼容旧读者），组头
+// 若照搬会让人误以为整批只有一个模型——列表非空时标注模型数，悬浮给全量；
+// 子任务行各自展示轮询分配到的 model（单模型批子会话为 NULL，不显示）
+const batchModels = computed(() =>
+  Array.isArray((props.batch as any).models) ? ((props.batch as any).models as string[]) : [])
+const agentModelLabel = computed(() => {
+  const agent = props.batch.agent || '默认'
+  const model = batchModels.value.length > 1
+    ? `${batchModels.value[0].split('/').pop()} 等 ${batchModels.value.length} 个模型`
+    : (props.batch.model || '默认')
+  return `${agent} · ${model}`
+})
+const modelsTitle = computed(() => batchModels.value.length > 1
+  ? `多模型轮询分配：\n${batchModels.value.map((m, i) => `子任务 ${i} 起 → ${m}（按序轮流）`).join('\n')}`
+  : '')
+function shortModel(m: string) { return m.split('/').pop() || m }
 
 function toggle() {
   if (expanded.value) store.clearSelection()
@@ -249,4 +268,9 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .gate-badge { flex: 0 0 auto; font-size: 10px; padding: 1px 6px; border-radius: 8px; }
 .gate-badge--fail { background: var(--el-color-danger-light-8); color: var(--el-color-danger); }
 .gate-badge--pass { background: var(--el-color-success-light-8); color: var(--el-color-success); }
+.bg-child__model {
+  flex: 0 0 auto; font-size: 10px; max-width: 140px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; padding: 1px 6px; border-radius: 8px;
+  background: var(--el-fill-color-light); color: var(--el-text-color-secondary);
+}
 </style>
