@@ -569,6 +569,19 @@ try:
 except Exception as _e:
     logging.warning('def version content archive migration on boot failed: %s', _e)
 
+# O1 统一运行诊断表（2026-10-27）：ai_run_diagnoses。随启动幂等执行；
+# 漏注册会让 run_diagnosis 聚合器建行报「表不存在」→ 批 finalize 后
+# 诊断静默缺失（best-effort 吞掉），必须在此显式注册。
+try:
+    _mp21 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_10_27_run_diagnoses.py')
+    _spec21 = _ilu.spec_from_file_location('_run_diag_boot', _mp21)
+    _m21 = _ilu.module_from_spec(_spec21)
+    _spec21.loader.exec_module(_m21)
+    _m21.run()
+except Exception as _e:
+    logging.warning('run diagnoses migration on boot failed: %s', _e)
+
 # 工具级耗时采集列（2026-10-10）：agent_tool_calls 加 started_at/duration_ms
 # + root/manifest 聚合索引（SkillOpt 性能分析二期，spec §7）。随启动幂等执行。
 try:
