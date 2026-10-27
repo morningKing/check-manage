@@ -599,12 +599,20 @@ def list_sessions():
 def search_sessions():
     """Search the current user's sessions by title, file name or message content.
 
-    Two modes (批任务搜索 Spec §5):
+    Two modes（批任务搜索 Spec §5 + 2026-10-27 全量搜索扩展）:
 
-    - Default (no `batchId`): regular interactive sessions only, matched on
-      title OR message text parts, status filtered to active/closed — same
-      scope as `list_sessions`. Batch children stay out of the default results
-      so a large batch can't flood the sidebar search.
+    - Default (no `batchId`): 全量搜索。覆盖三类对象——
+      ① 批任务本体：按名称命中（用户自己的批次），hitType='batch'，携带
+      total/done/failed 进度，排在会话命中之前（导航价值高、命中数少）；
+      ② 批子会话：跨全部本人批次，状态走 BATCH_CHILD_SEARCH_STATUSES 白名单，
+      命中字段同批内搜索（标题/输入文件/预览/消息内容），isBatchChild=True
+      带批次上下文。Spec §3.2 曾把「默认加入全部会话搜索」列为非本期目标，
+      其顾虑（jsonb 展开无索引全表扫）已被 2026-09-28 的 search_text 物化列 +
+      gin_trgm 索引消除——现在与普通会话内容检索走同一索引通路；
+      ③ 普通会话：维持 active/closed + 标题/消息内容命中不变。
+      合并查询里 batch_id IS NULL 走普通会话分支，batch_id 非空要求 JOIN 上
+      的批次属于本人（b.id IS NOT NULL），外用户批次自然排除。
+
     - `batchId` given: only that batch's child sessions, across ALL their live
       statuses (see BATCH_CHILD_SEARCH_STATUSES), matched on title, input file
       path/name, last_message_preview OR full message text. The batch must
@@ -626,6 +634,7 @@ def search_sessions():
         return jsonify({'sessions': []})
 
     pat = _ilike_pattern(q)
+    batch_rows = []
     with get_db() as conn:
         cur = conn.cursor()
         if batch_id:
@@ -673,35 +682,83 @@ def search_sessions():
             )
             rows = cur.fetchall()
         else:
+            # ① 批任务本体：按名称命中（ai_chat_batches 小表 + user 索引，直查）。
+            cur.execute(
+                "SELECT b.id, b.name, b.status, b.total, b.done, b.failed, b.created_at "
+                "FROM ai_chat_batches b "
+                "WHERE b.user_id = %(uid)s AND b.name ILIKE %(pat)s ESCAPE '\\' "
+                "ORDER BY b.created_at DESC LIMIT %(limit)s",
+                {'pat': pat, 'uid': user['userId'], 'limit': _SEARCH_LIMIT},
+            )
+            batch_rows = cur.fetchall()
+            # ②+③ 普通会话与批子会话合并为一条查询：batch_id IS NULL 走普通
+            # 会话的 active/closed 范围（现状不变）；batch_id 非空要求 JOIN 上
+            # 的批次属于本人（b.id IS NOT NULL，外用户批次 JOIN 不上自然排除），
+            # 状态走白名单。命中字段/排序/消息锚点与批内搜索同一套语义。
             cur.execute(
                 "SELECT s.id, s.title, s.last_active_at, s.status, "
-                "       s.batch_id, s.batch_input_file, "
-                "       COALESCE(s.title ILIKE %s ESCAPE '\\', false) AS title_match, "
+                "       s.batch_id, s.batch_input_file, s.batch_seq, b.name AS batch_name, "
+                "       s.last_message_preview, "
+                "       COALESCE(s.title ILIKE %(pat)s ESCAPE '\\', false) AS title_match, "
+                "       COALESCE(s.batch_input_file ILIKE %(pat)s ESCAPE '\\', false) AS file_match, "
+                "       COALESCE(s.last_message_preview ILIKE %(pat)s ESCAPE '\\', false) AS preview_match, "
                 "       cm.content AS hit_content, cm.id AS hit_msg_id, cm.seq AS hit_seq "
                 "FROM ai_chat_sessions s "
+                "LEFT JOIN ai_chat_batches b ON b.id = s.batch_id AND b.user_id = %(uid)s "
                 "LEFT JOIN LATERAL ( "
                 "  SELECT m.content, m.id, m.seq FROM ai_chat_messages m "
                 "  WHERE m.session_id = s.id "
-                "    AND m.search_text ILIKE %s ESCAPE '\\' "
+                "    AND m.search_text ILIKE %(pat)s ESCAPE '\\' "
                 "  ORDER BY m.created_at DESC, m.seq DESC LIMIT 1 "
                 ") cm ON true "
-                "WHERE s.user_id = %s "
-                "  AND s.status IN ('active', 'closed') "
+                "WHERE s.user_id = %(uid)s "
                 "  AND ( "
-                "    COALESCE(s.title ILIKE %s ESCAPE '\\', false) "
+                "    (s.batch_id IS NULL AND s.status IN ('active', 'closed')) "
+                "    OR (b.id IS NOT NULL AND s.status IN %(statuses)s) "
+                "  ) "
+                "  AND ( "
+                "    COALESCE(s.title ILIKE %(pat)s ESCAPE '\\', false) "
+                "    OR COALESCE(s.batch_input_file ILIKE %(pat)s ESCAPE '\\', false) "
+                "    OR COALESCE(s.last_message_preview ILIKE %(pat)s ESCAPE '\\', false) "
                 "    OR EXISTS ( "
                 "      SELECT 1 FROM ai_chat_messages m2 "
                 "      WHERE m2.session_id = s.id "
-                "        AND m2.search_text ILIKE %s ESCAPE '\\' "
+                "        AND m2.search_text ILIKE %(pat)s ESCAPE '\\' "
                 "    ) "
                 "  ) "
-                "ORDER BY title_match DESC, s.last_active_at DESC NULLS LAST "
-                "LIMIT %s",
-                (pat, pat, user['userId'], pat, pat, _SEARCH_LIMIT),
+                # 排序：标题 > 文件名 > 预览 > 内容命中（Spec §7.2 同款），再按
+                # 最近活跃倒序、批内序号正序，保证确定性。
+                "ORDER BY title_match DESC, file_match DESC, preview_match DESC, "
+                "         s.last_active_at DESC NULLS LAST, s.batch_seq ASC NULLS LAST "
+                "LIMIT %(limit)s",
+                {'pat': pat, 'uid': user['userId'],
+                 'statuses': tuple(BATCH_CHILD_SEARCH_STATUSES),
+                 'limit': _SEARCH_LIMIT},
             )
             rows = cur.fetchall()
 
     sessions = []
+    if not batch_id:
+        # 全量搜索：批任务本体命中排最前（数量少、导航价值高）。注意必须
+        # 独立于会话行循环——批名命中常常不匹配任何会话字段（rows 为空），
+        # 嵌进循环体会在零会话命中时整段跳过。
+        for br in batch_rows:
+            (bid, bname, bstatus, b_total, b_done, b_failed, _created) = br
+            sessions.append({
+                'id': bid,
+                'title': bname,
+                'lastActiveAt': None,
+                'status': bstatus,
+                'matchField': 'title',
+                'snippet': '',
+                'hitType': 'batch',
+                'isBatchChild': False,
+                'total': b_total,
+                'done': b_done,
+                'failed': b_failed,
+                'messageId': None,
+                'seq': None,
+            })
     for r in rows:
         if batch_id:
             (sid, title, ts, status, _bid, input_file, batch_seq, batch_name,
@@ -725,6 +782,7 @@ def search_sessions():
                 'status': status,
                 'matchField': match_field,
                 'snippet': snippet,
+                'hitType': 'session',
                 'batchId': batch_id,
                 'batchName': batch_name,
                 'batchSeq': batch_seq,
@@ -735,20 +793,51 @@ def search_sessions():
                 'seq': hit_seq if match_field == 'content' else None,
             })
         else:
-            (sid, title, ts, status, _bid, input_file, title_match,
+            (sid, title, ts, status, _bid, input_file, batch_seq, batch_name,
+             preview, title_match, file_match, preview_match,
              hit_content, hit_msg_id, hit_seq) = r
-            sessions.append({
-                'id': sid,
-                'title': _session_title(title, _bid, input_file),
-                'lastActiveAt': ts.isoformat() if ts else None,
-                'status': status,
-                'matchField': 'title' if title_match else 'content',
-                'snippet': '' if title_match else _content_snippet(hit_content, q),
-                'messageId': None if title_match else hit_msg_id,
-                'seq': None if title_match else hit_seq,
-            })
+            if title_match:
+                match_field, snippet = 'title', ''
+            elif file_match:
+                match_field, snippet = 'file', ''
+            elif preview_match:
+                match_field, snippet = 'preview', _single_line(preview or '')
+            else:
+                match_field, snippet = 'content', _content_snippet(hit_content, q)
+            if _bid:
+                # 批子会话（跨全部批次）：带批次上下文，语义同批内搜索（Spec §4.3）
+                sessions.append({
+                    'id': sid,
+                    'title': _session_title(title, _bid, input_file),
+                    'lastActiveAt': ts.isoformat() if ts else None,
+                    'status': status,
+                    'matchField': match_field,
+                    'snippet': snippet,
+                    'hitType': 'session',
+                    'batchId': _bid,
+                    'batchName': batch_name,
+                    'batchSeq': batch_seq,
+                    'inputFileName': (input_file or '').rsplit('/', 1)[-1] or None,
+                    'isBatchChild': True,
+                    'messageId': hit_msg_id if match_field == 'content' else None,
+                    'seq': hit_seq if match_field == 'content' else None,
+                })
+            else:
+                # 普通会话：现状不变（普通会话无 input_file/preview 列值，
+                # file/preview 命中天然为 false，仍只按标题/内容判 matchField）
+                sessions.append({
+                    'id': sid,
+                    'title': _session_title(title, _bid, input_file),
+                    'lastActiveAt': ts.isoformat() if ts else None,
+                    'status': status,
+                    'matchField': match_field,
+                    'snippet': snippet,
+                    'hitType': 'session',
+                    'messageId': None if match_field != 'content' else hit_msg_id,
+                    'seq': None if match_field != 'content' else hit_seq,
+                })
 
-    return jsonify({'sessions': sessions})
+    return jsonify({'sessions': sessions[:_SEARCH_LIMIT]})
 
 
 @ai_chat_bp.route('/sessions/<sid>', methods=['PATCH'])

@@ -278,7 +278,7 @@ let _sessionSearchTimer: ReturnType<typeof setTimeout> | null = null
 const sessionSearchMode = computed(() => sessionQuery.value.trim().length > 0)
 const sessionSearchPlaceholder = computed(() => (sessionSearchBatchId.value
   ? `在“${sessionSearchBatchName.value || '批任务'}”中搜索会话标题、文件名或内容`
-  : '搜索会话标题或内容…'))
+  : '搜索会话、批任务名称、文件名或内容…'))
 
 function setSearchScope(batchId: string, batchName: string) {
   sessionSearchBatchId.value = batchId
@@ -340,13 +340,25 @@ function clearSessionSearch() {
 const BATCH_MATCH_FIELD_LABEL: Record<string, string> = {
   title: '标题', file: '输入文件', preview: '最近消息', content: '消息内容',
 }
+// 会话/批任务共用的状态文案（全量搜索的批任务本体命中会带 partial）
 const BATCH_CHILD_STATUS_LABEL: Record<string, string> = {
   pending: '待运行', running: '正在运行', paused: '已暂停',
   completed: '已完成', failed: '失败', cancelled: '已中断',
-  active: '进行中', closed: '已关闭',
+  active: '进行中', closed: '已关闭', partial: '部分完成',
 }
 
 async function selectSearchHit(h: AiSessionSearchHit) {
+  // 批任务本体命中（全量搜索按名称命中）：展开该批任务分组（selectBatch
+  // 落 activeBatch → BatchGroup expanded）。与普通会话点击一致，打开后清
+  // 搜索回到列表视图。
+  if (h.hitType === 'batch') {
+    try {
+      await batches.ensureBatchInList(h.id)
+      await batches.selectBatch(h.id)
+      clearSessionSearch()
+    } catch { ElMessage.error('打开批任务失败') }
+    return
+  }
   // 批任务子会话：加载所属批次 → 展开分组 → 打开子会话（Spec §4.4）。
   // 保留搜索条件，允许返回结果继续查看其余命中。
   if (h.isBatchChild && h.batchId) {
@@ -1407,29 +1419,42 @@ function onKey(e: Event) {
               <div
                 v-for="h in sessionHits" :key="h.id"
                 class="session-item session-item--hit"
+                :data-test="h.hitType === 'batch' ? 'hit-batch' : 'hit-session'"
                 :class="{ active: h.id === activeId, 'is-closed': h.status === 'closed' }"
                 @click="selectSearchHit(h)"
               >
                 <span class="session-item__body">
-                  <span class="session-item__title" v-html="hl(h.title)"></span>
-                  <!-- 批任务子会话命中：批次/文件/状态/命中字段上下文（Spec §4.3） -->
-                  <span v-if="h.isBatchChild" class="session-item__batchctx">
-                    <span class="session-item__batchline">
-                      批任务：{{ h.batchName || '未命名批任务' }}
-                      <template v-if="h.batchSeq != null"> · #{{ h.batchSeq }}</template>
+                  <!-- 批任务本体命中（全量搜索）：名称 + 状态/进度，点击展开该批任务 -->
+                  <template v-if="h.hitType === 'batch'">
+                    <span class="session-item__title" v-html="hl(h.title)"></span>
+                    <span class="session-item__batchctx">
+                      <span class="session-item__batchline">
+                        批任务 · 状态：{{ BATCH_CHILD_STATUS_LABEL[h.status || ''] || h.status }}
+                        · 子任务：{{ h.done ?? 0 }}/{{ h.total ?? 0 }}<template v-if="h.failed"> · 失败 {{ h.failed }}</template>
+                      </span>
                     </span>
-                    <span v-if="h.inputFileName" class="session-item__batchline">文件：{{ h.inputFileName }}</span>
-                    <span class="session-item__batchline">
-                      状态：{{ BATCH_CHILD_STATUS_LABEL[h.status || ''] || h.status }}
-                      · 命中：{{ BATCH_MATCH_FIELD_LABEL[h.matchField] || h.matchField }}
+                  </template>
+                  <template v-else>
+                    <span class="session-item__title" v-html="hl(h.title)"></span>
+                    <!-- 批任务子会话命中：批次/文件/状态/命中字段上下文（Spec §4.3） -->
+                    <span v-if="h.isBatchChild" class="session-item__batchctx">
+                      <span class="session-item__batchline">
+                        批任务：{{ h.batchName || '未命名批任务' }}
+                        <template v-if="h.batchSeq != null"> · #{{ h.batchSeq }}</template>
+                      </span>
+                      <span v-if="h.inputFileName" class="session-item__batchline">文件：{{ h.inputFileName }}</span>
+                      <span class="session-item__batchline">
+                        状态：{{ BATCH_CHILD_STATUS_LABEL[h.status || ''] || h.status }}
+                        · 命中：{{ BATCH_MATCH_FIELD_LABEL[h.matchField] || h.matchField }}
+                      </span>
                     </span>
-                  </span>
-                  <span v-if="h.snippet" class="session-item__snippet" v-html="hl(h.snippet)"></span>
+                    <span v-if="h.snippet" class="session-item__snippet" v-html="hl(h.snippet)"></span>
+                  </template>
                 </span>
               </div>
               <ElEmpty
                 v-if="!sessionHits.length"
-                :description="sessionSearchBatchId ? '本批任务中未找到匹配子会话' : '未找到匹配会话'"
+                :description="sessionSearchBatchId ? '本批任务中未找到匹配子会话' : '未找到匹配的会话或批任务'"
                 :image-size="48"
               />
             </template>

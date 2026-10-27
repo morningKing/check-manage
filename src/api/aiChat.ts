@@ -33,7 +33,15 @@ export interface AiSessionSearchHit {
   matchField: 'title' | 'content' | 'file' | 'preview'
   /** 内容/预览命中时的一行摘要（围绕关键词，已折叠换行）；标题/文件命中为空串 */
   snippet?: string
-  /** 批任务范围搜索（batchId 参数）时命中子会话的批次上下文 */
+  /** 命中对象类型：'session'=会话（缺省/兼容旧返回）、'batch'=批任务本体
+   *  （全量搜索按批任务名称命中，id 即批次 id，点击展开该批任务） */
+  hitType?: 'session' | 'batch'
+  /** hitType='batch' 时的进度：子任务 done/total 与失败数 */
+  total?: number
+  done?: number
+  failed?: number
+  /** 批任务范围搜索（batchId 参数）时命中子会话的批次上下文；
+   *  全量搜索命中的批子会话（跨批）同样携带 */
   batchId?: string
   batchName?: string
   batchSeq?: number | null

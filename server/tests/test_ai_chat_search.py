@@ -1,8 +1,12 @@
 """Tests for AI chat session search (GET /ai/chat/sessions/search).
 
-Searches the current user's regular (active/closed) sessions by title OR by
-message text-part content; batch-child sessions (status='pending') are excluded
-by the same status filter used by the regular session list.
+Two modes（批任务搜索 Spec §5 + 2026-10-27 全量搜索扩展）:
+
+- Default (no batchId): regular sessions (active/closed) by title OR message
+  text, PLUS batch coverage — 批任务本体按名称命中（hitType='batch'，带进度，
+  排在会话命中之前），批子会话跨全部批次按白名单状态搜标题/输入文件/预览/
+  消息内容（isBatchChild=True，带批次上下文与消息锚点）。
+- batchId given: only that batch's children, same child semantics.
 """
 
 import sys
@@ -39,14 +43,30 @@ def _db(fetchall_rows):
     return fake, cur
 
 
-# Row shape returned by the regular-search query (10 cols):
-# (id, title, last_active_at, status, batch_id, batch_input_file, title_match,
+def _db_seq(fetchall_seq):
+    """fetchall 按查询次序返回不同结果——默认全量搜索现在依次发两条查询
+    （批任务名命中 → 合并会话查询），单结果 mock 会让两条查询拿到同一份行。"""
+    conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchall.side_effect = [list(rows) for rows in fetchall_seq]
+    conn.cursor.return_value = cur
+
+    @contextmanager
+    def fake():
+        yield conn
+
+    return fake, cur
+
+
+# Row shape returned by the merged default-search query (15 cols, 同批内搜索):
+# (id, title, last_active_at, status, batch_id, batch_input_file, batch_seq,
+#  batch_name, last_message_preview, title_match, file_match, preview_match,
 #  hit_content, hit_msg_id, hit_seq)
 def _row(sid='s1', title='会话标题', status='active', title_match=False,
          hit_content=None, ts=None, batch_id=None, batch_input_file=None,
          hit_msg_id=None, hit_seq=None):
-    return (sid, title, ts, status, batch_id, batch_input_file, title_match,
-            hit_content, hit_msg_id, hit_seq)
+    return (sid, title, ts, status, batch_id, batch_input_file, None, None,
+            None, title_match, False, False, hit_content, hit_msg_id, hit_seq)
 
 
 # Row shape returned by the batch-scoped query (15 cols):
@@ -96,26 +116,26 @@ def test_search_whitespace_query_returns_empty():
 # ---------------------------------------------------------------------------
 
 def test_search_scopes_by_user_and_active_closed_status():
-    fake, cur = _db([])
+    fake, cur = _db_seq([[], []])
     with patch('routes.ai_chat.get_db', fake):
         _client().get('/ai/chat/sessions/search?q=auth', headers=_h('user-42'))
     sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
     # Same regular-session scope as the list endpoint: user filter + status set
     assert 'user_id' in sql
     assert "status IN ('active', 'closed')" in sql
-    # No batch_id exclusion clause (batch children are 'pending', already excluded)
-    assert 'batch_id IS NOT NULL' not in sql
     # The query term is parameterised (no string interpolation of user input)
-    params = list(cur.execute.call_args.args[1])
+    params = [list(c.args[1].values()) if isinstance(c.args[1], dict) else list(c.args[1])
+              for c in cur.execute.call_args_list]
+    flat = [p for ps in params for p in ps]
     # patterns wrap the term as %auth%; user id is passed bare
-    assert any(isinstance(p, str) and 'auth' in p for p in params)
-    assert 'user-42' in params
+    assert any(isinstance(p, str) and 'auth' in p for p in flat)
+    assert 'user-42' in flat
 
 
 def test_search_matches_title_and_content():
     """The WHERE clause must match either the title OR the materialized
     search_text（大数据量优化 §1.2：jsonb 展开换物化列 + trgm 索引）。"""
-    fake, cur = _db([])
+    fake, cur = _db_seq([[], []])
     with patch('routes.ai_chat.get_db', fake):
         _client().get('/ai/chat/sessions/search?q=jwt', headers=_h())
     sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
@@ -127,12 +147,14 @@ def test_search_matches_title_and_content():
 
 def test_search_like_wildcards_are_escaped():
     """% and _ in user input must be escaped so they act as literals."""
-    fake, cur = _db([])
+    fake, cur = _db_seq([[], []])
     with patch('routes.ai_chat.get_db', fake):
         _client().get('/ai/chat/sessions/search?q=a%25b', headers=_h())  # q = a%b
-    params = cur.execute.call_args.args[1]
-    patterns = [p for p in params if isinstance(p, str) and ('a%b' in p or '\\%' in p)]
-    assert any('\\%' in p for p in patterns), f'wildcard not escaped: {patterns}'
+    for c in cur.execute.call_args_list:
+        params = c.args[1]
+        values = list(params.values()) if isinstance(params, dict) else params
+        assert any('\\%' in p for p in values if isinstance(p, str)), \
+            f'wildcard not escaped in {c.args[0]!r}'
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +165,7 @@ def test_search_title_hit_response():
     ts = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
     rows = [_row(sid='s1', title='JWT 鉴权重构', status='active',
                  title_match=True, hit_content=None, ts=ts)]
-    fake, _ = _db(rows)
+    fake, _ = _db_seq([[], rows])
     with patch('routes.ai_chat.get_db', fake):
         r = _client().get('/ai/chat/sessions/search?q=jwt', headers=_h())
     assert r.status_code == 200
@@ -156,13 +178,14 @@ def test_search_title_hit_response():
     assert hit['snippet'] == ''
     assert hit['status'] == 'active'
     assert hit['lastActiveAt'].startswith('2026-09-08T10:00:00')
+    assert hit['hitType'] == 'session'
 
 
 def test_search_content_hit_builds_snippet():
     content = [{'type': 'text', 'text': '我们来讨论一下如何用 JWT 替换 session 鉴权，' * 3}]
     rows = [_row(sid='s2', title='鉴权讨论', status='active',
                  title_match=False, hit_content=content)]
-    fake, _ = _db(rows)
+    fake, _ = _db_seq([[], rows])
     with patch('routes.ai_chat.get_db', fake):
         r = _client().get('/ai/chat/sessions/search?q=JWT', headers=_h())
     hit = r.get_json()['sessions'][0]
@@ -180,7 +203,7 @@ def test_search_content_hit_non_text_parts_ignored():
         {'type': 'text', 'text': '这里没有关键词'},
     ]
     rows = [_row(sid='s3', title='t', hit_content=content)]
-    fake, _ = _db(rows)
+    fake, _ = _db_seq([[], rows])
     with patch('routes.ai_chat.get_db', fake):
         r = _client().get('/ai/chat/sessions/search?q=JWT', headers=_h())
     hit = r.get_json()['sessions'][0]
@@ -248,14 +271,128 @@ def test_batch_search_matches_title_file_preview_and_content():
     assert 'jsonb_array_elements' not in sql
 
 
-def test_batch_search_default_mode_unchanged():
-    """Without batchId the legacy single-shape query (active/closed only) runs."""
-    fake, cur = _db([])
+def test_global_search_not_pinned_to_single_batch():
+    """全量搜索不限定单个 batchId（区别于批内范围搜索），普通会话范围保持
+    active/closed 不变；批子会话分支走 JOIN 本人批次 + 白名单状态。"""
+    fake, cur = _db_seq([[], []])
     with patch('routes.ai_chat.get_db', fake):
         _client().get('/ai/chat/sessions/search?q=jwt', headers=_h())
     sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
     assert "status IN ('active', 'closed')" in sql
-    assert 'JOIN ai_chat_batches' not in sql
+    # 批子会话分支：JOIN 批次限定本人，但不钉死单个批次
+    assert 'LEFT JOIN ai_chat_batches b ON b.id = s.batch_id AND b.user_id' in sql
+    assert 's.status IN %(statuses)s' in sql
+    assert 's.batch_id = %(bid)s' not in sql
+
+
+# ---------------------------------------------------------------------------
+# 全量搜索扩展（2026-10-27）：默认搜索覆盖批任务本体 + 跨批子会话
+# ---------------------------------------------------------------------------
+
+def test_global_search_queries_batch_names():
+    """批任务本体按名称命中：独立小查询，限定本人批次。"""
+    fake, cur = _db_seq([[], []])
+    with patch('routes.ai_chat.get_db', fake):
+        _client().get('/ai/chat/sessions/search?q=季度', headers=_h('user-42'))
+    batch_calls = [c for c in cur.execute.call_args_list
+                   if 'FROM ai_chat_batches' in str(c.args[0])]
+    assert len(batch_calls) == 1
+    sql = str(batch_calls[0].args[0])
+    assert 'b.name ILIKE' in sql
+    assert batch_calls[0].args[1]['uid'] == 'user-42'
+    assert batch_calls[0].args[1]['limit'] <= 50
+
+
+def test_global_search_also_matches_batch_children():
+    """批子会话跨全部批次：命中字段同批内搜索（标题/输入文件/预览/内容）。"""
+    from routes.ai_chat import BATCH_CHILD_SEARCH_STATUSES
+    fake, cur = _db_seq([[], []])
+    with patch('routes.ai_chat.get_db', fake):
+        _client().get('/ai/chat/sessions/search?q=风险', headers=_h('user-42'))
+    session_calls = [c for c in cur.execute.call_args_list
+                     if 'FROM ai_chat_sessions' in str(c.args[0])]
+    assert len(session_calls) == 1
+    sql = str(session_calls[0].args[0])
+    assert 's.title ILIKE' in sql
+    assert 's.batch_input_file ILIKE' in sql
+    assert 's.last_message_preview ILIKE' in sql
+    assert 'search_text ILIKE' in sql
+    assert 'jsonb_array_elements' not in sql
+    params = session_calls[0].args[1]
+    assert params['uid'] == 'user-42'
+    assert params['statuses'] == BATCH_CHILD_SEARCH_STATUSES
+
+
+def test_global_search_batch_hit_response_first():
+    """批任务本体命中：hitType='batch' + 进度字段，排在会话命中之前。"""
+    ts = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
+    batch_rows = [('batch-9', '季度报告分析', 'running', 12, 5, 1, ts)]
+    session_rows = [_row(sid='s1', title='JWT 鉴权重构', title_match=True, ts=ts)]
+    fake, _ = _db_seq([batch_rows, session_rows])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=季度', headers=_h())
+    hits = r.get_json()['sessions']
+    assert hits[0]['hitType'] == 'batch'
+    assert hits[0]['id'] == 'batch-9'
+    assert hits[0]['title'] == '季度报告分析'
+    assert hits[0]['status'] == 'running'
+    assert hits[0]['total'] == 12
+    assert hits[0]['done'] == 5
+    assert hits[0]['failed'] == 1
+    assert hits[0]['matchField'] == 'title'
+    assert hits[0]['snippet'] == ''
+    assert hits[0]['isBatchChild'] is False
+    assert hits[0]['messageId'] is None
+    # 会话命中排在其后，显式 hitType='session'
+    assert hits[1]['id'] == 's1'
+    assert hits[1]['hitType'] == 'session'
+    assert hits[1]['matchField'] == 'title'
+
+
+def test_global_search_batch_hit_without_session_hits():
+    """批名命中但零会话命中时，批任务命中仍必须返回（拼装独立于会话行循环）。"""
+    ts = datetime(2026, 9, 8, 10, 0, tzinfo=timezone.utc)
+    batch_rows = [('batch-9', '季度报告分析', 'failed', 3, 0, 3, ts)]
+    fake, _ = _db_seq([batch_rows, []])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=季度', headers=_h())
+    hits = r.get_json()['sessions']
+    assert len(hits) == 1
+    assert hits[0]['hitType'] == 'batch'
+    assert hits[0]['id'] == 'batch-9'
+    assert hits[0]['status'] == 'failed'
+    assert hits[0]['failed'] == 3
+
+
+def test_global_search_child_hit_carries_batch_context():
+    """全量搜索命中的批子会话带批次上下文 + 消息锚点，isBatchChild=True。"""
+    session_rows = [_batch_row(sid='b1', title='report-001.pdf', status='failed',
+                               batch_seq=3,
+                               hit_content='[{"type":"text","text":"存在风险"}]',
+                               hit_msg_id='msg_1', hit_seq=9)]
+    fake, _ = _db_seq([[], session_rows])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=风险', headers=_h())
+    hit = r.get_json()['sessions'][0]
+    assert hit['isBatchChild'] is True
+    assert hit['batchId'] == 'batch-123'
+    assert hit['batchName'] == '季度报告分析'
+    assert hit['batchSeq'] == 3
+    assert hit['inputFileName'] == 'report-001.pdf'
+    assert hit['matchField'] == 'content'
+    assert hit['messageId'] == 'msg_1'
+    assert hit['seq'] == 9
+
+
+def test_global_search_combined_hits_capped_at_50():
+    """批任务命中 + 会话命中合并后总数不超 50。"""
+    batch_rows = [(f'batch-{i}', f'批任务{i}', 'completed', 1, 1, 0, None)
+                  for i in range(30)]
+    session_rows = [_row(sid=f's{i}', title_match=True) for i in range(30)]
+    fake, _ = _db_seq([batch_rows, session_rows])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=x', headers=_h())
+    assert len(r.get_json()['sessions']) == 50
 
 
 def test_batch_search_title_hit_response():
@@ -342,7 +479,7 @@ def test_content_hit_carries_message_anchor():
     row = _row(sid='s1', title_match=False,
                hit_content='[{"type":"text","text":"部门汇总结果"}]',
                hit_msg_id='msg_hit1', hit_seq=17)
-    fake, _ = _db([row])
+    fake, _ = _db_seq([[], [row]])
     with patch('routes.ai_chat.get_db', fake):
         r = _client().get('/ai/chat/sessions/search?q=汇总', headers=_h())
     hit = r.get_json()['sessions'][0]
@@ -353,7 +490,7 @@ def test_content_hit_carries_message_anchor():
 
 def test_title_hit_has_no_message_anchor():
     row = _row(sid='s1', title_match=True)
-    fake, _ = _db([row])
+    fake, _ = _db_seq([[], [row]])
     with patch('routes.ai_chat.get_db', fake):
         r = _client().get('/ai/chat/sessions/search?q=标题', headers=_h())
     hit = r.get_json()['sessions'][0]

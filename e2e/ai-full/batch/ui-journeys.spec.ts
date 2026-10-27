@@ -18,6 +18,11 @@
  *    **自建批**（文件名带唯一关键词）消除源的 test.skip 环境耦合；断言
  *    范围标签/placeholder 切换、清除范围、命中批任务标注、空态文案、
  *    命中跳转打开子会话（selectSearchHit → batch-bar）。
+ *  - 用例 4b「全量搜索覆盖批任务」（2026-10-27 新增）：默认不带范围搜索
+ *    此前只覆盖普通会话，批任务本体与子会话必须先进批组点「搜索本批任务」
+ *    才可搜。扩展后：批任务名命中（hit-batch）→ 点击展开批组；文件名唯一
+ *    关键词（不带范围）命中跨批子会话 → 批次上下文 + failed 状态 → 打开。
+ *    fail-fast 批（未知 agent 子任务秒级 failed）0 LLM。
  *  - 用例 5「技能注入」← e2e/batch-skill-check.spec.ts（已删）：
  *    改为 **provision_repo 自带 skill/**（makeProvisionRepo skills 形参），
  *    消除源对磁盘全局技能预置（trace-analyzer/writing-beats）的环境依赖。
@@ -316,6 +321,64 @@ test('批内搜索：范围标签切换/命中标注/空态文案/命中跳转�
     await screenshot(page, 'ui-journeys-search-hit-open')
   } finally {
     await cleanupBatchByName(tk, name)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 用例 4b：全量搜索覆盖批任务（2026-10-27，fail-fast 批 0 LLM）
+// ---------------------------------------------------------------------------
+
+test('全量搜索覆盖批任务：批任务名命中展开批组/跨批子会话命中打开', async ({ page }) => {
+  // 0 LLM：未知 agent 建批 → worker 认领即 fail-fast，子任务秒级 failed
+  //（failed 在子会话搜索白名单内），批名/文件名唯一关键词保证命中确定性
+  const tk = await adminTokenCached()
+  const name = tag('globalsearch')
+  const KEY = `月光全检索${Date.now()}`
+  const uploadSession = tag('upl')
+  const file = await uploadStaging(tk, `${KEY}-报告.txt`, '全量搜索目标内容', uploadSession)
+  const batch = await createBatch(tk, {
+    name,
+    prompt: '对每个输入文件输出一行摘要。',
+    agent: 'e2e-no-such-agent',
+    files: [file],
+  })
+  const bid = batch.batch?.id ?? batch.id
+  try {
+    // 等批次收敛终态，保证「状态：失败」断言确定性
+    await waitBatchTerminal(tk, bid)
+    await gotoChat(page)
+
+    // 1) 不带范围搜批任务名 → 批任务本体命中（hit-batch），带状态/进度行
+    await page.locator('.ai-sidebar__search input').fill(name)
+    const batchHit = page.locator('[data-test="hit-batch"]')
+    await expect(batchHit.first()).toBeVisible({ timeout: 10_000 })   // 300ms 防抖 + 请求
+    await expect(batchHit.first()).toContainText(name)
+    await expect(batchHit.first().locator('.session-item__batchline')).toContainText('状态：')
+
+    // 2) 点批任务命中 → 展开该批任务分组（selectBatch → BatchGroup open），
+    //    与普通会话点击一致，打开后清空搜索
+    await batchHit.first().click()
+    const group = page.locator('.batch-group', { hasText: name }).first()
+    await expect(group.locator('.batch-group__head')).toHaveClass(/open/, { timeout: 15_000 })
+    await expect(page.locator('.ai-sidebar__search input')).toHaveValue('')
+
+    // 3) 不带范围搜文件名唯一关键词 → 跨批子会话命中，带批次上下文
+    //    （批任务：/文件：/状态：失败——failed 子会话在全量搜索白名单内）
+    await page.locator('.ai-sidebar__search input').fill(KEY)
+    const hits = page.locator('[data-test="hit-session"]')
+    await expect(hits.first()).toBeVisible({ timeout: 10_000 })
+    const first = hits.first()
+    await expect(first.locator('.session-item__batchline').nth(0)).toContainText('批任务：')
+    await expect(first.locator('.session-item__batchline').nth(1)).toContainText(`文件：${KEY}-报告.txt`)
+    await expect(first.locator('.session-item__batchline').nth(2)).toContainText('状态：失败')
+
+    // 4) 点子会话命中 → 打开（主面板批任务栏出现「批任务 ID」标识）
+    await first.click()
+    await expect(page.locator('.batch-bar__id[title="点击复制批任务 ID"]'))
+      .toBeVisible({ timeout: 15_000 })
+    await screenshot(page, 'ui-journeys-global-search-batch')
+  } finally {
+    await cleanupBatch(tk, bid)
   }
 })
 
