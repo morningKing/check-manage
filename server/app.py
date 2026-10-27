@@ -464,11 +464,15 @@ except Exception as _e:
 
 # 会话内容搜索物化（2026-09-28 大数据量优化 §1.2）：ai_chat_messages.search_text
 # 触发器维护 + trgm 索引 + 存量回填。随启动幂等执行。
+# 注意 exec_module 不可省：缺了它模块代码从未执行，run() 报
+# "module '_msg_search_boot' has no attribute 'run'"（被 except 吞成 warning，
+# 重启路径上该迁移静默永不执行——2026-10-27 生产启动实测）。
 try:
     _mp14 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          'migrations', '2026_09_28_message_search_text.py')
     _spec14 = _ilu.spec_from_file_location('_msg_search_boot', _mp14)
     _m14 = _ilu.module_from_spec(_spec14)
+    _spec14.loader.exec_module(_m14)
     _m14.run()
 except Exception as _e:
     logging.warning('message search_text migration on boot failed: %s', _e)
