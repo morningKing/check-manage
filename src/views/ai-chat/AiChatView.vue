@@ -835,7 +835,10 @@ const activeBatchInfo = computed(() => {
   const child = batches.activeSessions.find((s) => s.id === id)
   if (!child) return null
   const b = batches.activeBatch
-  return { status: child.status, agent: b?.agent || '', model: b?.model || '',
+  // 模型显示当前子任务自己的（多模型轮询分配快照）；无快照（单模型批/
+  // 旧批）回退批级——批级 model 恒为首模型,照搬会让每个子任务都显示同一个
+  return { status: child.status, agent: b?.agent || '',
+           model: child.model || b?.model || '',
            batchId: b?.id || '', childId: child.id }
 })
 // 无人值守的批子会话不允许 ask：清掉 selectSession 时可能加载到的挂起
