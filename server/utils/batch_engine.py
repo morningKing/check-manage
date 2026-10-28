@@ -838,6 +838,11 @@ class BatchWorker:
         # P0 单实例租约（spec §5.3）：持lease才跑 dispatcher 与 _restart_audit。
         self._lease_owner: str | None = None
         self._holds_lease = False
+        # F3（pending-flip 修复）：每次执行的子会话租约心跳句柄
+        # （session_id -> stop Event）。心跳独立线程续租，覆盖 dispatch 前的
+        # 冷目录 create_session、子代理收敛等待、门禁核对等非轮询阶段；
+        # _run_one 的 finally 统一停止（含测试直呼 _run_one 的路径）。
+        self._heartbeats: dict = {}
         self._lease_thread: threading.Thread | None = None
         # 租约被占时的后台重试（快速重启的 TTL 窗口内不永久放弃 dispatcher）
         self._acquire_retry_thread: threading.Thread | None = None
@@ -1159,6 +1164,11 @@ class BatchWorker:
         except Exception:
             traceback.print_exc()
         finally:
+            # F3 兜底：_run_one 大 try 之前（工作区准备/会话创建段）抛异常时
+            # 不经过其 finally——心跳线程必须在此再停一次（pop 幂等）。
+            _hb_stop = self._heartbeats.pop(session_row['id'], None)
+            if _hb_stop is not None:
+                _hb_stop.set()
             with self._lock:
                 self._running_session_ids.discard(session_row['id'])
             self.notify()  # let the dispatcher start the next queued one
@@ -1394,6 +1404,9 @@ class BatchWorker:
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
                           and session_row.get('continue_prompt'))
+        # F3：本轮执行的租约心跳（覆盖 claim→send 与收尾的非轮询阶段）。
+        # 放在批上下文早退之后：批已删除时无 OC 工作可保。
+        lease_lost = self._start_lease_heartbeat(sid, fencing_token)
         # Only set for a fresh (non-continue) turn — a continued turn reuses an
         # OpenCode session that already has full conversation history, so
         # re-injecting/re-recording memory there would be redundant.
@@ -1571,6 +1584,10 @@ class BatchWorker:
                                                       model, generation=generation)
                 baseline_ids = None  # 全新 session，没有旧消息需要跳过
                 logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
+            # F3：dispatch 期间执行权若已易主（心跳置位），这里静默放手——
+            # 提示词可能已被新 owner 接管重发，不再做任何落账/写回。
+            if lease_lost is not None and lease_lost.is_set():
+                raise _LeaseLost()
 
             # Persist the conversation progressively from the worker's own REST
             # polling (the path that already drives completion detection), so the
@@ -1596,7 +1613,7 @@ class BatchWorker:
                 oc_session_id, sid, directory=ws,
                 on_progress=_persist_progress,
                 baseline_ids=baseline_ids,
-                lease_owner=self._lease_owner, fencing_token=fencing_token)
+                lease_lost=lease_lost)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg,
                                        directory=ws, generation=generation,
                                        turn_label=turn_label,
@@ -1727,6 +1744,11 @@ class BatchWorker:
             self._notify_child_done(
                 session_row, False, elapsed=time.monotonic() - turn_start, error=err)
         finally:
+            # F3：先停心跳——终态写回后租约无意义，且测试直呼 _run_one 的
+            # 路径没有 _safe_run_one 兜底，线程不停会一直续租泄漏。
+            _hb_stop = self._heartbeats.pop(sid, None)
+            if _hb_stop is not None:
+                _hb_stop.set()
             # 收尾：无论成功失败，把工作区里已产生的新增/修改文件记进独立表
             # （best-effort，失败不影响子任务本身的状态落库）。
             if ws:
@@ -2543,8 +2565,7 @@ class BatchWorker:
                         directory: str = '',
                         on_progress=None,
                         baseline_ids: set | None = None,
-                        lease_owner: str | None = None,
-                        fencing_token: int | None = None) -> tuple[str | None, dict | None]:
+                        lease_lost: 'threading.Event | None' = None) -> tuple[str | None, dict | None]:
         """Poll until the latest assistant message reports finished.
 
         Returns (preview_first_line, full_message_dict). The full message is
@@ -2585,20 +2606,12 @@ class BatchWorker:
         tool_stall_start: float | None = None
         child_sigs: dict = {}
         first = True
-        last_hb_at = 0.0
         while deadline is None or time.time() < deadline:
-            # P1 子会话租约心跳（spec §6.2）：每 HEARTBEAT_SEC 续租一次；
-            # rowcount=0 → 执行权已被接管，立刻 abort 并放弃本回合。
-            if lease_owner and fencing_token is not None \
-                    and time.time() - last_hb_at >= 20:
-                last_hb_at = time.time()
-                if not self._renew_child_lease(sid, lease_owner, fencing_token):
-                    try:
-                        opencode_client.abort_session(oc_session_id,
-                                                      directory=directory)
-                    except Exception:
-                        pass
-                    raise _LeaseLost()
+            # F3/F4：租约心跳线程判定执行权易主时静默放手——不 abort（接管
+            # 者可能正在复用该 OpenCode 会话，与 _LeaseLost 处理器语义一致）、
+            # 不写终态（fencing 会拒绝），新 owner 的对账/轮询负责收口。
+            if lease_lost is not None and lease_lost.is_set():
+                raise _LeaseLost()
             stop = self._stop_requested(sid)
             if stop:
                 try:
@@ -3314,6 +3327,51 @@ class BatchWorker:
                        ', continue on same opencode session' if oc else '')
         self.notify()  # 立刻唤醒调度器接续
         return True
+
+    def _start_lease_heartbeat(self, session_id: str,
+                               fencing_token) -> 'threading.Event | None':
+        """F3：为本轮执行启动子会话租约心跳线程，返回 lease_lost 事件。
+
+        旧实现把续租内联在 _await_finished 的轮询循环里——claim→send 之间
+        （冷目录 create_session 可达 120s，超过租约 TTL 90s）、子代理收敛
+        等待、门禁核对等阶段租约裸奔过期，另一进程的对账器会把仍在工作的
+        会话重排回 pending（生产「运行中→待运行但会话还在干」成因）。
+
+        心跳节奏 min(20, TTL/3)（TTL 收紧的测试配置自动等比加快）；续租
+        失败（owner/fencing 不匹配 = 执行权易主）只置位 lease_lost，由执行
+        线程在轮询/检查点自行放弃——不 abort、不写终态（F4，与 _LeaseLost
+        处理器语义一致：接管者可能正在复用该 OpenCode 会话）。
+
+        无租约身份（未 start 的 worker / 直呼测试）返回 None，行为同旧。"""
+        owner = self._lease_owner
+        if not owner or fencing_token is None:
+            return None
+        lease_lost = threading.Event()
+        stop = threading.Event()
+        self._heartbeats[session_id] = stop
+        threading.Thread(
+            target=self._lease_heartbeat_loop,
+            args=(session_id, owner, fencing_token, lease_lost, stop),
+            daemon=True, name=f'lease-hb-{str(session_id)[:8]}').start()
+        return lease_lost
+
+    def _lease_heartbeat_loop(self, session_id: str, lease_owner: str,
+                              fencing_token: int, lease_lost: threading.Event,
+                              stop: threading.Event) -> None:
+        interval = max(1.0, min(20.0, execution_lease_ttl() / 3.0))
+        while not stop.wait(interval):
+            try:
+                if not self._renew_child_lease(session_id, lease_owner,
+                                               fencing_token):
+                    lease_lost.set()
+                    logger.warning('child lease lost sid=%s (heartbeat); '
+                                   'executor will drop', session_id)
+                    return
+            except Exception:
+                # DB 瞬断：下一拍再试；期间租约若真过期被接管，下一拍续租
+                # 必然 rowcount=0 → lease_lost 置位，执行线程放手。
+                logger.exception('lease heartbeat failed sid=%s (will retry)',
+                                 session_id)
 
     @staticmethod
     def _renew_child_lease(session_id: str, lease_owner: str,

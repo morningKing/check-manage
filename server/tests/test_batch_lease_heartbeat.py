@@ -63,7 +63,7 @@ def user_id(db_conn):
     db_conn.commit()
 
 
-def _seed_running(db_conn, user_id, *, lease_owner, ttl_sec, fencing=7):
+def _seed_running(db_conn, user_id, *, lease_owner, ttl_sec=90, fencing=7):
     bid, sid = str(uuid.uuid4()), str(uuid.uuid4())
     with db_conn.cursor() as cur:
         cur.execute(
