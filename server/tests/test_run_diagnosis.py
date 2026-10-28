@@ -7,6 +7,8 @@ sessionstart 自动引导）。种子先经 db_conn 提交，聚合器再走 db.
 """
 import uuid
 
+import pytest
+
 from utils.run_diagnosis import build_run_diagnosis, DIMENSION_KEYS
 
 
@@ -140,3 +142,54 @@ def test_promise_action_lazy_fill_via_existing_audit(db_conn, monkeypatch):
     d = build_run_diagnosis(attempt)
     assert calls == [sid]
     assert d['dimensions']['promise_action']['status'] == 'fail'
+
+
+@pytest.fixture
+def client():
+    """真实 DB test client（shadow conftest 的 mock-DB client，
+    同 test_skill_fit_routes.py:35-58 模式）。"""
+    import sys
+    import db as _db
+    from app import app as flask_app
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if (mod_name.startswith('routes.') or mod_name.startswith('utils.')
+                or mod_name == 'auth'):
+            for attr in ('get_db', '_default_get_db'):
+                if getattr(mod, attr, None) is not None:
+                    try:
+                        setattr(mod, attr, _db.get_db)
+                    except (AttributeError, TypeError):
+                        pass
+    flask_app.config['TESTING'] = True
+    return flask_app.test_client()
+
+
+def test_trigger_and_read_endpoints(client, db_conn, admin_headers):
+    attempt, _ = _seed_attempt(db_conn, exp_status='passed')
+    resp = client.post(f'/ai/chat/admin/attempts/{attempt}/run-diagnosis',
+                       headers=admin_headers)
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body['attemptId'] == attempt
+    resp2 = client.get(f'/ai/chat/admin/attempts/{attempt}/run-diagnosis',
+                       headers=admin_headers)
+    assert resp2.status_code == 200
+    assert resp2.get_json()['overall'] in ('pass', 'partial', 'uncertain')
+
+
+def test_trigger_missing_attempt_404(client, admin_headers):
+    resp = client.post('/ai/chat/admin/attempts/nope/run-diagnosis',
+                       headers=admin_headers)
+    assert resp.status_code == 404
+
+
+def test_list_by_root_session(client, db_conn, admin_headers):
+    attempt, sid = _seed_attempt(db_conn, exp_status='passed')
+    client.post(f'/ai/chat/admin/attempts/{attempt}/run-diagnosis',
+                headers=admin_headers)
+    resp = client.get(f'/ai/chat/admin/run-diagnoses?rootSessionId={sid}',
+                      headers=admin_headers)
+    assert resp.status_code == 200
+    assert any(r['attemptId'] == attempt for r in resp.get_json()['items'])

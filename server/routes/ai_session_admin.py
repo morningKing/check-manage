@@ -1654,3 +1654,57 @@ def perf_slow_tasks():
     except (TypeError, ValueError):
         limit = 10
     return jsonify({'tasks': list_slow_tasks(get_db, limit)})
+
+
+# ── O1 统一运行诊断（spec 2026-10-26-agent-self-evolution-design §3.3）──
+
+@ai_execution_admin_bp.post('/attempts/<attempt_id>/run-diagnosis')
+@require_permission('admin.ai_chat_admin')
+def run_diagnosis_generate(attempt_id):
+    from utils.run_diagnosis import build_run_diagnosis
+    d = build_run_diagnosis(attempt_id)
+    if d is None:
+        return jsonify({'error': 'attempt 不存在'}), 404
+    log_operation('create', 'ai_run_diagnoses', attempt_id, None,
+                  '运行诊断生成（O1 确定性聚合）')
+    return jsonify(d), 201
+
+
+@ai_execution_admin_bp.get('/attempts/<attempt_id>/run-diagnosis')
+@require_permission('admin.ai_chat_admin')
+def run_diagnosis_get(attempt_id):
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, attempt_id, root_session_id, overall, dimensions, "
+                "       generator_version, created_at "
+                "FROM ai_run_diagnoses WHERE attempt_id = %s "
+                "ORDER BY generator_version DESC, created_at DESC LIMIT 1",
+                (attempt_id,))
+            row = cur.fetchone()
+    if not row:
+        return jsonify({'error': '尚未生成诊断'}), 404
+    return jsonify({'id': row[0], 'attemptId': row[1],
+                    'rootSessionId': row[2], 'overall': row[3],
+                    'dimensions': row[4], 'generatorVersion': row[5],
+                    'createdAt': row[6].isoformat() if row[6] else None})
+
+
+@ai_execution_admin_bp.get('/run-diagnoses')
+@require_permission('admin.ai_chat_admin')
+def run_diagnoses_list():
+    from db import get_db
+    root = (request.args.get('rootSessionId') or '').strip()
+    if not root:
+        return jsonify({'error': 'rootSessionId 必填'}), 400
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, attempt_id, overall, created_at "
+                "FROM ai_run_diagnoses WHERE root_session_id = %s "
+                "ORDER BY created_at DESC LIMIT 100", (root,))
+            items = [{'id': r[0], 'attemptId': r[1], 'overall': r[2],
+                      'createdAt': r[3].isoformat() if r[3] else None}
+                     for r in cur.fetchall()]
+    return jsonify({'items': items})

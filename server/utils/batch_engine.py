@@ -1819,6 +1819,18 @@ class BatchWorker:
             except Exception:
                 logger.debug('workspace_bytes refresh failed sid=%s', sid,
                              exc_info=True)
+            # O1 运行诊断（best-effort）：诊断缺失/失败只记日志，不回写任务
+            # 终态——fail-closed 只适用于门禁核对本身，聚合器是纯旁路观测。
+            # attempt 变量取 _run_one 作用域内的 audit_attempt_id（早期退出
+            # 路径可能未赋值/为 None，同 oc_session_id 用 locals() 兜底）。
+            _diag_attempt_id = locals().get('audit_attempt_id')
+            if _diag_attempt_id:
+                try:
+                    from utils.run_diagnosis import build_run_diagnosis
+                    build_run_diagnosis(_diag_attempt_id)
+                except Exception as _diag_exc:  # noqa: BLE001
+                    logger.warning('run diagnosis (best-effort) failed for %s: %s',
+                                   _diag_attempt_id, _diag_exc)
 
     # --- 动作账本与到位门禁（设计:docs/design/AI子任务动作账本与到位门禁设计.md）---
 
