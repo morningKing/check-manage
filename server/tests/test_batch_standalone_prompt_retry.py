@@ -117,6 +117,12 @@ def test_early_failure_keeps_original_prompt_for_retry(db_conn, user_id,
 
     _patch_oc(monkeypatch, create_session=staticmethod(_refused))
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    with db_conn.cursor() as cur:
+        # claim 后的真实形态是 running（F1 起重排 UPDATE 带 status='running'
+        # CAS，直呼 _run_one 也要先摆对状态）。
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
 
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': None,
                      'batch_input_file': None, 'input_files': None,

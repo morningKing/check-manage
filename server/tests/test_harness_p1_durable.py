@@ -198,7 +198,12 @@ def test_reconcile_alive_session_requeues_continue(db_conn, user_id, monkeypatch
             (f'{sids[0]}:asst1', sids[0], '[{"type":"text","text":"进行中"}]'))
     db_conn.commit()
     fake = MagicMock()
-    fake.get_messages.return_value = [{'info': {'role': 'assistant'}}]
+    # 回合已空闲形状（finish + time.completed）：F5 缓重排只拦「飞行中」
+    # （最新 assistant 消息未终态/带未完成工具）的回合；本测试的前提是
+    # 「会话活着 + 有进度证据 → 续跑而非失败」，与飞行中语义无关。
+    fake.get_messages.return_value = [
+        {'info': {'role': 'assistant', 'finish': 'stop',
+                  'time': {'completed': {'seconds': 1}}}}]
     monkeypatch.setattr(eng, 'opencode_client', fake)
     w = BatchWorker()
     w._reconcile_stale_running()
