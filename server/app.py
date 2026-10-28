@@ -582,6 +582,18 @@ try:
 except Exception as _e:
     logging.warning('run diagnoses migration on boot failed: %s', _e)
 
+# O2 技能进化候选区表（2026-10-27）：ai_skill_candidates。随启动幂等执行；
+# 漏注册会让候选创建/列表端点 500。
+try:
+    _mp22 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_10_27_skill_candidates.py')
+    _spec22 = _ilu.spec_from_file_location('_skill_cand_boot', _mp22)
+    _m22 = _ilu.module_from_spec(_spec22)
+    _spec22.loader.exec_module(_m22)
+    _m22.run()
+except Exception as _e:
+    logging.warning('skill candidates migration on boot failed: %s', _e)
+
 # 工具级耗时采集列（2026-10-10）：agent_tool_calls 加 started_at/duration_ms
 # + root/manifest 聚合索引（SkillOpt 性能分析二期，spec §7）。随启动幂等执行。
 try:
