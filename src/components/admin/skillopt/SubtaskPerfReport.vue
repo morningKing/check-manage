@@ -188,6 +188,10 @@
             </div>
           </ElCollapseItem>
         </ElCollapse>
+
+        <!-- 运行诊断（O1） -->
+        <ElDivider content-position="left">运行诊断（O1）</ElDivider>
+        <RunDiagnosisPanel v-if="attemptId" :attempt-id="attemptId" />
       </template>
     </div>
   </ElDrawer>
@@ -196,7 +200,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
-  ElAlert, ElButton, ElCollapse, ElCollapseItem, ElDrawer, ElMessage,
+  ElAlert, ElButton, ElCollapse, ElCollapseItem, ElDivider, ElDrawer, ElMessage,
   ElTable, ElTableColumn, ElTag,
 } from 'element-plus'
 import { getAdminChildPerf } from '@/api/aiBatchAdmin'
@@ -205,12 +209,14 @@ import type {
   PerfAttemptDetail, PerfToolCall, PerfTurn,
 } from '@/api/aiSkills'
 import { fmtMs, pct } from './format'
+import RunDiagnosisPanel from './RunDiagnosisPanel.vue'
 
 /**
  * 子任务性能报告（2026-10-15）：批子会话 / 性能分析页共用的报告抽屉。
  * 数据源二选一：batchId+sid（批任务入口，后端解析子会话最新 attempt）或
  * attemptId（技能拟合优化页入口）。分区：概要 / 最慢工具调用 Top10（含参数）/
- * 推理耗时 Top10 / 失败调用 / 重复调用 / 子代理分解；一键复制 Markdown。
+ * 推理耗时 Top10 / 失败调用 / 重复调用 / 子代理分解 / 运行诊断（O1，
+ * 仅 attemptId 入口）；一键复制 Markdown。
  */
 
 const props = defineProps<{

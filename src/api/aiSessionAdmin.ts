@@ -255,3 +255,17 @@ export function getAnalysisStatus(analysisId: string) {
     completedAt: string | null
   }>(`${EXEC_BASE}/analyses/${analysisId}`)
 }
+
+// ── 运行诊断（O1：RunDiagnosisPanel 五维度状态条） ─────────────────────
+
+export function generateRunDiagnosis(attemptId: string) {
+  return post(`/ai/chat/admin/attempts/${attemptId}/run-diagnosis`)
+}
+
+export function getRunDiagnosis(attemptId: string) {
+  return get(`/ai/chat/admin/attempts/${attemptId}/run-diagnosis`)
+}
+
+export function listRunDiagnoses(rootSessionId: string) {
+  return get('/ai/chat/admin/run-diagnoses', { rootSessionId })
+}
