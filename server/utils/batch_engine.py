@@ -1927,8 +1927,15 @@ class BatchWorker:
                     "    active_turn_id = NULL, "
                     "    continue_prompt = CASE WHEN %s IS NOT NULL THEN %s "
                     "                      ELSE continue_prompt END "
-                    "WHERE id = %s",
+                    "WHERE id = %s AND status = 'running' "
+                    "  AND NOT cancel_requested AND NOT pause_requested",
                     (oc, repair, session_id))
+                requeued = cur.rowcount > 0
+        if not requeued:
+            # F1：同 _maybe_auto_retry——终态行不复活，用户取消/暂停不吞。
+            logger.info('action gate retry skipped sid=%s '
+                        '(row no longer requeueable)', session_id)
+            return False
         self._close_attempt_for_requeue(session_id, 'GATE_RETRY')
         logger.warning('action gate retry sid=%s (re-queued with repair prompt)',
                        session_id)
@@ -3289,8 +3296,18 @@ class BatchWorker:
                     "    active_turn_id = NULL, "
                     "    continue_prompt = CASE WHEN %s IS NOT NULL THEN %s "
                     "                      ELSE continue_prompt END "
-                    "WHERE id = %s",
+                    "WHERE id = %s AND status = 'running' "
+                    "  AND NOT cancel_requested AND NOT pause_requested",
                     (oc, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
+                requeued = cur.rowcount > 0
+        if not requeued:
+            # F1（pending-flip 修复）：行已被并发收口（终态）或用户已置
+            # cancel/pause——不重排、不清标志。调用方走 _mark_failed → CAS
+            # 未命中 → _on_transition_miss 按控制标志重定向到 cancelled/
+            # paused，终态行不得复活。
+            logger.info('batch auto-retry skipped sid=%s '
+                        '(row no longer requeueable)', session_id)
+            return False
         self._close_attempt_for_requeue(session_id, 'AUTO_RETRY')
         logger.warning('batch auto-retry sid=%s attempt=%d/%d (re-queued as pending%s)',
                        session_id, retry_count + 1, self.MAX_AUTO_RETRY,
@@ -3461,7 +3478,12 @@ class BatchWorker:
 
     def _requeue_lost(self, session_id: str, *, continue_on_same: bool,
                       batch_id: str | None):
-        """对账器把丢失的 running 行重新排队（retry_count 预算内，超限则失败）。"""
+        """对账器把丢失的 running 行重新排队（retry_count 预算内，超限则失败）。
+
+        F1（pending-flip 修复）：不清 cancel_requested/pause_requested——
+        worker 失联期间用户按下的中断/暂停必须保留，重排回 pending 后由
+        _cancel_pending_requests 正常消费（cancelled / paused），而不是
+        抹掉标志让任务原样重跑。"""
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT retry_count, fencing_token "
@@ -3479,7 +3501,7 @@ class BatchWorker:
                 cur.execute(
                     "UPDATE ai_chat_sessions "
                     "SET status='pending', retry_count = retry_count + 1, "
-                    "    error_message=NULL, cancel_requested=false, pause_requested=false, "
+                    "    error_message=NULL, "
                     "    execution_generation = execution_generation + 1, "
                     "    active_turn_id = NULL, "
                     "    continue_prompt = CASE WHEN %s THEN %s ELSE continue_prompt END "

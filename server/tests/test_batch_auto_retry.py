@@ -131,6 +131,12 @@ def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(lambda oc, directory='': [_idle_msg()]))
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    # F1 起重排 UPDATE 带 status='running' CAS——_run_one 生产上只会拿到
+    # claim 后的 running 行，直接调用也要先摆成真实链路形态。
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
 
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
                      'batch_input_file': 'x.csv', 'input_files': None,
@@ -210,6 +216,11 @@ def test_network_exception_requeues_fresh(db_conn, user_id, monkeypatch, tmp_pat
 
     _patch_oc(monkeypatch, create_session=staticmethod(_refused))
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    with db_conn.cursor() as cur:
+        # 同上：claim 后的真实形态是 running（F1 的 CAS 语义）。
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
 
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
                      'batch_input_file': 'x.csv', 'input_files': None,
