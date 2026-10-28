@@ -843,6 +843,9 @@ class BatchWorker:
         # 冷目录 create_session、子代理收敛等待、门禁核对等非轮询阶段；
         # _run_one 的 finally 统一停止（含测试直呼 _run_one 的路径）。
         self._heartbeats: dict = {}
+        # F5：缓重排计时器（session_id -> 首次判飞行中的时刻）。对账器每轮
+        # 末清掉已离开 stale 集的键，防无界增长。
+        self._recover_defer_since: dict = {}
         self._lease_thread: threading.Thread | None = None
         # 租约被占时的后台重试（快速重启的 TTL 窗口内不永久放弃 dispatcher）
         self._acquire_retry_thread: threading.Thread | None = None
@@ -984,6 +987,10 @@ class BatchWorker:
 
     # 运行中对账器节流：每分钟最多跑一轮（与 dispatcher 同线程，无竞态）。
     RECONCILE_INTERVAL_SEC = float(os.getenv('AI_BATCH_RECONCILE_SEC', '60'))
+    # F5：对账器缓重排兜底上限（秒）。worker 死后没有 STALL 看门狗盯着
+    # OC 回合，「看似活着」的永久悬挂由这个上限顶替——超时后照常重排。
+    RECOVER_DEFER_MAX_SEC = float(
+        os.getenv('AI_BATCH_RECOVER_DEFER_MAX_SEC', '1800'))
 
     # --- PG LISTEN/NOTIFY（P3-C1）---
 
@@ -3430,6 +3437,10 @@ class BatchWorker:
               * OpenCode 会话 404 → 带准确原因失败（沿用 P0 语义）；
               * OpenCode 不可达 → 跳过本轮；
               * 存在 unknown 副作用 → needs_review（禁止自动重放）；
+              * OC 回合仍在飞行中（F5，最新 assistant 消息未终态/带未完成
+                工具）→ 跳过本轮（行保持 running，等回合空闲）；缓重排有
+                兜底上限 RECOVER_DEFER_MAX_SEC，防「看似活着」的永久悬挂
+                挂死恢复；
               * OpenCode 会话存在 + 有 checkpoint → continue（原会话续跑，
                 注入续跑提示词，generation 不变）；
               * OpenCode 会话存在 + 无 checkpoint → 预算内原地续跑（沿用
@@ -3452,6 +3463,7 @@ class BatchWorker:
             return
         with self._lock:
             tracked = set(self._running_session_ids)
+        stale_seen = {r[0] for r in rows}
         for sid, batch_id, oc, ws, lease_until, fencing_token in rows:
             if sid in tracked:
                 continue  # 本进程正在跑，轮询循环自己负责
@@ -3482,7 +3494,7 @@ class BatchWorker:
                     self._emit_recovered(batch_id, sid, 'requeue_fresh')
                     continue
                 try:
-                    opencode_client.get_messages(oc, directory=ws or '')
+                    raw_msgs = opencode_client.get_messages(oc, directory=ws or '')
                 except requests.exceptions.HTTPError as e:
                     status = e.response.status_code if e.response is not None else None
                     if status == 404:
@@ -3522,10 +3534,32 @@ class BatchWorker:
                             fencing_token=fencing_token)
                         self._emit_recovered(batch_id, sid, 'failed_no_progress')
                         continue
+                # F5（pending-flip 修复）：OC 回合仍在飞行中 → 本轮跳过。
+                # 重启/失联窗口里 OpenCode 是独立进程、回合还在正常生成——
+                # 立即重排会让行翻 pending（状态说谎）且新 claim 向同一会话
+                # 补发 continue 提示词（同回合双发）。行保持 running，等回合
+                # 空闲（下轮对账）再重排续跑；兜底上限防「看似活着」的永久
+                # 悬挂挂死恢复（worker 死后没有 STALL 看门狗，上限顶替它）。
+                if self._turn_in_flight(raw_msgs):
+                    _since = self._recover_defer_since.get(sid)
+                    if _since is None:
+                        _since = self._recover_defer_since[sid] = time.time()
+                    if time.time() - _since <= self.RECOVER_DEFER_MAX_SEC:
+                        self._emit_recovered(batch_id, sid, 'deferred_in_flight')
+                        continue
+                    logger.warning('recover defer cap exceeded sid=%s '
+                                   '(turn looks alive for %.0fs); requeueing',
+                                   sid, time.time() - _since)
+                self._recover_defer_since.pop(sid, None)
                 self._requeue_lost(sid, continue_on_same=True, batch_id=batch_id)
                 self._emit_recovered(batch_id, sid, 'requeue_continue')
             except Exception:
                 logger.exception('reconcile row failed sid=%s', sid)
+        # 缓重排计时器只对「仍在 stale 集里的飞行中会话」有意义；行已离开
+        # （重排/终态/本进程接管）就清，防 dict 无界增长。
+        self._recover_defer_since = {
+            k: v for k, v in self._recover_defer_since.items()
+            if k in stale_seen}
 
     def _emit_recovered(self, batch_id: str | None, sid: str, decision: str):
         if batch_id:
@@ -3533,6 +3567,33 @@ class BatchWorker:
             batch_events.append_event(
                 batch_id, 'child.recovered', aggregate_type='child',
                 aggregate_id=sid, payload={'decision': decision})
+
+    @staticmethod
+    def _turn_in_flight(raw_msgs: list) -> bool:
+        """F5：OC 会话最新 assistant 消息仍在生成/带未完成工具 → 回合活着。
+
+        镜像 list_messages 的终态判定（finish + time.completed + running
+        tool），作用在 get_messages 的原始 {'info','parts'} 形状上（reconcile
+        本来就只拿它验存活）。无 assistant 消息（尚未开跑/已清空）按非飞行
+        中处理，恢复决策表照旧。刻意不镜像 resolved_tool_seen 的「消息间隙
+        翻终态」细则：finish=tool-calls + 工具已落地视为空闲照常重排——
+        间隙极短且新提示词会在 OC 内排队，不值得为它冒误判风险。"""
+        for m in reversed(raw_msgs or []):
+            info = m.get('info') or {}
+            if info.get('role') != 'assistant':
+                continue
+            finish = info.get('finish')
+            completed = (info.get('time') or {}).get('completed')
+            running_tool = False
+            for p in (m.get('parts') or m.get('content') or []):
+                if p.get('type') == 'tool' and \
+                        (p.get('state') or {}).get('status') in (
+                            None, '', 'pending', 'running'):
+                    running_tool = True
+                    break
+            finished = bool(completed) and finish not in (None, '')
+            return running_tool or not finished
+        return False
 
     def _requeue_lost(self, session_id: str, *, continue_on_same: bool,
                       batch_id: str | None):
