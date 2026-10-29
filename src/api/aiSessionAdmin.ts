@@ -269,3 +269,31 @@ export function getRunDiagnosis(attemptId: string) {
 export function listRunDiagnoses(rootSessionId: string) {
   return get('/ai/chat/admin/run-diagnoses', { rootSessionId })
 }
+
+// ── 进化候选（O2：候选区+双集回归+发布） ─────────────────────────────
+
+export function listSkillCandidates(
+  params: { status?: string; defKind?: string; defName?: string }) {
+  return get('/ai/chat/admin/skill-candidates', params)
+}
+
+export function createSkillCandidate(body: {
+  fitResultId: string
+  fallbackText?: string
+  expectedRepair?: string
+  possiblyHarmed?: string[]
+}) {
+  return post('/ai/chat/admin/skill-candidates', body)
+}
+
+export function validateSkillCandidate(id: string) {
+  return post(`/ai/chat/admin/skill-candidates/${id}/validate`)
+}
+
+export function promoteSkillCandidate(id: string) {
+  return post(`/ai/chat/admin/skill-candidates/${id}/promote`)
+}
+
+export function rejectSkillCandidate(id: string) {
+  return post(`/ai/chat/admin/skill-candidates/${id}/reject`)
+}

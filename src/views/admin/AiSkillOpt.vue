@@ -52,6 +52,11 @@
         <PerfView />
       </ElTabPane>
 
+      <!-- ── 进化候选（O2：候选区+双集回归+发布）────────────────────── -->
+      <ElTabPane label="进化候选" name="candidates">
+        <SkillCandidates />
+      </ElTabPane>
+
       <!-- ── 调用聚合（既有视图）──────────────────────────────────── -->
       <ElTabPane label="调用聚合" name="invocations">
         <p class="skillopt__desc">
@@ -163,6 +168,7 @@ import FitDefinitionList from '@/components/admin/skillopt/FitDefinitionList.vue
 import FitWorkspace from '@/components/admin/skillopt/FitWorkspace.vue'
 import DefPatternsPanel from '@/components/admin/skillopt/DefPatternsPanel.vue'
 import PerfView from '@/components/admin/skillopt/PerfView.vue'
+import SkillCandidates from '@/components/admin/skillopt/SkillCandidates.vue'
 import { getSkillFitDefinitionSummary } from '@/api/aiSkills'
 import type { SkillFitDefinitionSummary } from '@/api/aiSkills'
 import { classifyHealth } from '@/components/admin/skillopt/fitView'
