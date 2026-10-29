@@ -292,4 +292,53 @@ test.describe('admin UI 面', () => {
       await screenshot(page, 'admin-batch-softdel')
     } finally { await cleanupBatch(admin, bid) }
   })
+
+  test('已取消(cancelled)子任务可软删——删除终态口径须含 cancelled', async ({ page }) => {
+    const admin = await adminTokenCached()
+    const name = tag('admcxl')
+    const bid = await failFastBatch(admin, { files: 1, name })
+    try {
+      await waitFor(async () => (await getDetail(admin, bid)).batch.status === 'failed',
+        90_000, 'failed')
+
+      // 真实链路里 cancelled 由「中断/停止」产生；这里 fail-fast 收敛后把子任务
+      // 直接落成 cancelled 终态（与后端单测 test_batch_child_soft_delete 同手法，
+      // worker 对账器只重排 status='running' 的行，不会回翻）。
+      // 页面→admin API→repo→deleted_at 的删除链路仍是全真。
+      const sid = (await getDetail(admin, bid)).sessions[0].id
+      dbSeed(`UPDATE ai_chat_sessions SET status='cancelled' WHERE id='${sid}'`)
+
+      await gotoWithAuth(page, '/admin/ai-execution?tab=batches')
+      const row = page.getByRole('row', { name }).first()
+      await row.waitFor({ state: 'visible', timeout: 30_000 })
+      await row.getByRole('button', { name: '详情' }).first().click()
+      const drawer = page.locator('.el-drawer')
+      await expect(drawer).toBeVisible({ timeout: 15_000 })
+      // statusLabel 无 cancelled 映射，状态列显示原文（既有行为，不在本修范围）
+      const childRow = drawer.locator('.el-table__row', { hasText: 'in-0' }).first()
+      await expect(childRow).toBeVisible({ timeout: 15_000 })
+      await expect(childRow).toContainText('cancelled')
+
+      // 回归根因断言：cancelled 子任务的「删除」必须可用
+      // （修复前 AiBatchAdmin isTerminal 只认 completed/failed，按钮恒禁用）
+      const delBtn = childRow.getByRole('button', { name: '删除' })
+      await expect(delBtn).toBeEnabled()
+
+      await delBtn.click()
+      const box = page.locator('.el-message-box')
+      await expect(box).toBeVisible({ timeout: 10_000 })
+      await expect(box).toContainText('确定删除')
+      await box.locator('.el-button--primary').click()
+      // 成功 toast 带原状态 + 行从抽屉消失（detail 重取）
+      await expect(page.locator('.el-message', { hasText: '已软删除' }))
+        .toBeVisible({ timeout: 10_000 })
+      await expect(drawer.locator('.el-table__row', { hasText: 'in-0' }))
+        .toHaveCount(0, { timeout: 15_000 })
+
+      // API 侧权威：admin 详情不再含该子任务（deleted_at IS NULL 过滤）
+      const after = await (await fetch(`${API}/ai/chat/admin/batches/${bid}`,
+        { headers: authHeaders(admin) })).json()
+      expect(after.sessions.filter((s: any) => s.sessionId === sid).length).toBe(0)
+    } finally { await cleanupBatch(admin, bid) }
+  })
 })

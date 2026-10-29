@@ -100,7 +100,7 @@
                 <el-button link type="primary" @click="openChildPerf(row)">性能</el-button>
                 <el-button link type="warning" :disabled="!isTerminal(row.status)"
                            @click="onReexecute(row)">重跑</el-button>
-                <el-button link type="danger" :disabled="!isTerminal(row.status)"
+                <el-button link type="danger" :disabled="!canDelete(row.status)"
                            @click="onSoftDelete(row)">删除</el-button>
               </div>
             </template>
@@ -265,6 +265,12 @@ function statusTagType(s: string) {
   return 'info'
 }
 function isTerminal(s: string) { return s === 'completed' || s === 'failed' }
+// 删除口径与后端 admin_soft_delete_child(batch_repo.py) 对齐:cancelled 也是
+// 终态(中断/停止产生),后端明确放行且计数回滚按 failed 侧处理——isTerminal
+// 曾漏了它,页面上已取消的子任务删除钮恒禁用
+function canDelete(s: string) {
+  return s === 'completed' || s === 'failed' || s === 'cancelled'
+}
 function fmt(v: string | null) { return v ? new Date(v).toLocaleString('zh-CN') : '-' }
 
 async function reload() {
