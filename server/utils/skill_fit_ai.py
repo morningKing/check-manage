@@ -210,7 +210,8 @@ _DIAGNOSE_SYSTEM = """你是 AI 任务执行的"偏差诊断器"。给定技能�
 只输出 JSON 对象,不要多余文字,形如:
 {"cause": "definition_stale", "suggestions": ["…"], \
 "revised_steps": [{"id": "…", "name": "…", "expect": [{"tool": "bash", \
-"args_pattern": "…"}]}]}
+"args_pattern": "…"}]}], "edits": [{"old_str": "…", "new_str": "…", \
+"reason": "…"}], "expected_repair": "…", "possibly_harmed": ["…"]}
 
 cause 只能取以下五类之一:
 - definition_stale: 流程已变化,定义步骤该更新;
@@ -223,7 +224,13 @@ cause 只能取以下五类之一:
 1. suggestions 是具体修改建议数组(改定义/改 prompt/改环境),2~5 条中文;
 2. revised_steps 是修订后的完整 steps 草案(可直接回写 fit.steps),与定义同结构;
 3. 不虚构轨迹中不存在的工具调用;args_pattern 用 POSIX 正则,只匹配值本身;
-4. 只输出 JSON,以 { 开头、} 结尾。"""
+4. 只输出 JSON,以 { 开头、} 结尾;
+5. 输出必须包含 edits 数组:对「当前定义正文」给出最小可审计修改,每项 \
+{"old_str", "new_str", "reason"}——old_str 必须是正文中唯一出现的原文片段, \
+禁止整块重写;确实无法用局部 diff 表达时才输出 revised_steps 并在 \
+suggestions 里注明「整块重写」;
+6. 输出必须包含 expected_repair(预期修复什么场景、如何观察)与 \
+possibly_harmed(可能受损的既有行为清单,可为空数组)。"""
 
 
 def _load_fit_row(db_ctx, result_id: str) -> dict | None:
@@ -314,11 +321,58 @@ def _normalize_diagnosis(raw: dict) -> dict:
     suggestions = raw.get('suggestions') if isinstance(
         raw.get('suggestions'), list) else []
     revised = raw.get('revised_steps')
+    edits = raw.get('edits') if isinstance(raw.get('edits'), list) else []
+    clean_edits = []
+    for e in edits:
+        if (isinstance(e, dict) and isinstance(e.get('old_str'), str)
+                and isinstance(e.get('new_str'), str) and e['old_str'] != e['new_str']):
+            clean_edits.append({'old_str': e['old_str'], 'new_str': e['new_str'],
+                                'reason': str(e.get('reason') or '')})
     return {
         'cause': cause,
         'suggestions': [str(s) for s in suggestions if s],
         'revised_steps': revised if isinstance(revised, list) else [],
+        'edits': clean_edits,
+        'expected_repair': str(raw.get('expected_repair') or ''),
+        'possibly_harmed': [str(x) for x in (raw.get('possibly_harmed') or [])
+                            if x],
     }
+
+
+def evolution_context(def_kind: str, def_name: str, get_db=None) -> str:
+    """R1（Self-Harness 原则）：候选生成器输入必须含「此前被拒的修改」与
+    「必须保留的成功行为」。无记录返回空串（prompt 不注入该节）。"""
+    db_ctx = get_db or _default_get_db
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT edits, validation, source, status "
+                "FROM ai_skill_candidates "
+                "WHERE def_kind=%s AND def_name=%s AND status IN ('rejected','expired') "
+                "ORDER BY decided_at DESC NULLS LAST LIMIT 5", (def_kind, def_name))
+            rejected = cur.fetchall()
+            cur.execute(
+                "SELECT def_hash FROM ai_skill_fit_results "
+                "WHERE def_kind=%s AND def_name=%s AND status='fit' "
+                "ORDER BY computed_at DESC LIMIT 5", (def_kind, def_name))
+            holdout = cur.fetchall()
+    if not rejected and not holdout:
+        return ''
+    lines = []
+    if rejected:
+        lines.append('此前被拒绝/过期的候选修改（禁止换一种说法重复提交，'
+                     '除非你有理由认为判定有误并说明）：')
+        for edits, validation, source, status in rejected:
+            reason = (validation or {}).get('rejectReason') \
+                if isinstance(validation, dict) else None
+            olds = [e.get('old_str', '')[:80] for e in (edits or [])
+                    if isinstance(e, dict)]
+            lines.append(f'- [{status}] old_str={olds} 拒绝原因: '
+                         f'{reason or "人工拒绝"}')
+    if holdout:
+        lines.append('保留集（当前已对齐的成功行为，修复时不得破坏这些步骤的'
+                     '断言）：' + ', '.join(h[0][:8] for h in holdout))
+    return '\n'.join(lines)
 
 
 def diagnose_result(result_id: str, get_db=None) -> dict:
@@ -366,6 +420,9 @@ def diagnose_result(result_id: str, get_db=None) -> dict:
     ]
     if prompt:
         user_parts.append(f"# 任务 prompt\n{prompt}")
+    evo = evolution_context(fit['def_kind'], fit['def_name'], db_ctx)
+    if evo:
+        user_parts.append(f"# 进化上下文\n{evo}")
     raw = _llm_json(_DIAGNOSE_SYSTEM, '\n\n'.join(user_parts))
     diagnosis = _normalize_diagnosis(raw)
 

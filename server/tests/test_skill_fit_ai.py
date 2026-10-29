@@ -220,3 +220,74 @@ def test_preview_steps_attempt_missing_404(client, admin_headers):
                     json={'attemptId': 'no-such-attempt',
                           'steps': [{'id': 'a', 'name': 'A', 'expect': []}]})
     assert r.status_code == 404
+
+
+def test_normalize_diagnosis_accepts_edits_and_contract_fields():
+    """O2/Task8：诊断 schema 最小 diff 化——edits/expected_repair/possibly_harmed。"""
+    from utils.skill_fit_ai import _normalize_diagnosis
+    d = _normalize_diagnosis({
+        'cause': 'definition_stale',
+        'suggestions': ['放宽安装步骤匹配'],
+        'revised_steps': [],
+        'edits': [{'old_str': 'a', 'new_str': 'b', 'reason': 'r'}],
+        'expected_repair': '边界场景应命中步骤 2',
+        'possibly_harmed': ['已可跳过校验的场景可能被强制重跑'],
+    })
+    assert d['edits'] == [{'old_str': 'a', 'new_str': 'b', 'reason': 'r'}]
+    assert d['expected_repair'] == '边界场景应命中步骤 2'
+    assert d['possibly_harmed'] == ['已可跳过校验的场景可能被强制重跑']
+    assert d['cause'] == 'definition_stale'
+
+
+def test_normalize_diagnosis_defaults_for_new_fields():
+    """新字段缺省安全：无 edits/expected_repair/possibly_harmed 时给空值，
+    既有用例（旧 schema）不回归。"""
+    from utils.skill_fit_ai import _normalize_diagnosis
+    d = _normalize_diagnosis({'cause': 'order_deviation', 'suggestions': []})
+    assert d['edits'] == []
+    assert d['expected_repair'] == ''
+    assert d['possibly_harmed'] == []
+
+
+def test_evolution_context_lists_rejected_and_holdout(db_conn):
+    """R1（Self-Harness）：诊断输入须包含此前被拒/过期候选与保留集成功行为。"""
+    import json as _j
+    import uuid as _u
+    from utils.skill_fit_ai import evolution_context
+    name = f'eco_{_u.uuid4().hex[:8]}'
+    old_str = "args_pattern: 'pip install -r requirements'"
+    edits_json = _j.dumps([{'old_str': old_str, 'new_str': 'x', 'reason': 'r'}])
+    uid, sid, aid = (str(_u.uuid4()) for _ in range(3))
+    try:
+        with db_conn.cursor() as cur:
+            # ai_skill_fit_results.attempt_id 有 FK（2026_10_01:35）——先种真 attempt
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s, %s, 'x', 'FR', 'developer')", (uid, f'eco_{uid[:8]}'))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, status, session_token) "
+                        "VALUES (%s, %s, 'completed', %s)", (sid, uid, f'tok-{sid[:12]}'))
+            cur.execute("INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                        "  operation, started_at, finished_at) "
+                        "VALUES (%s, %s, 'batch', 'send', NOW(), NOW())", (aid, sid))
+            cur.execute("INSERT INTO ai_skill_candidates (id, def_kind, def_name, "
+                        "  base_content_hash, edits, source, status) "
+                        "VALUES (%s, 'skill', %s, %s, %s::jsonb, %s::jsonb, 'rejected')",
+                        ('cand_' + _u.uuid4().hex[:8], name, 'h' * 64,
+                         edits_json,
+                         _j.dumps({'expectedRepair': '', 'possiblyHarmed': []})))
+            cur.execute("INSERT INTO ai_skill_fit_results (id, attempt_id, session_id, "
+                        "  def_kind, def_name, def_hash, steps_total, steps_hit, "
+                        "  score, status, per_step) "
+                        "VALUES (%s, %s, %s, 'skill', %s, 'h2', 2, 2, 100, 'fit', '[]'::jsonb)",
+                        ('fit_' + _u.uuid4().hex[:8], aid, sid, name))
+        db_conn.commit()  # db_conn 非 autocommit（T7-6 同根因）
+        ctx = evolution_context('skill', name)
+        assert '此前被拒' in ctx and old_str in ctx
+        assert '保留集' in ctx and '不得破坏' in ctx
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_candidates WHERE def_name=%s", (name,))
+            cur.execute("DELETE FROM ai_skill_fit_results WHERE def_name=%s", (name,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (aid,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        db_conn.commit()
