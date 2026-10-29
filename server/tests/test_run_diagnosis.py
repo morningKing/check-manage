@@ -84,8 +84,9 @@ def test_promise_action_claimed_without_evidence_fails(db_conn):
 def test_overall_partial_when_only_fit_partial(db_conn):
     attempt, _ = _seed_attempt(db_conn, fit_status='partial')
     d = build_run_diagnosis(attempt)
-    assert d['dimensions']['skill_fit']['status'] in ('fail', 'pass')
-    assert d['overall'] in ('partial', 'fail')
+    # T2-4b 终审裁定：partial 拟合计维度 uncertain → overall 落 partial
+    assert d['dimensions']['skill_fit']['status'] == 'uncertain'
+    assert d['overall'] == 'partial'
 
 
 def test_all_five_dimensions_always_present(db_conn):
@@ -176,7 +177,7 @@ def test_trigger_and_read_endpoints(client, db_conn, admin_headers):
     resp2 = client.get(f'/ai/chat/admin/attempts/{attempt}/run-diagnosis',
                        headers=admin_headers)
     assert resp2.status_code == 200
-    assert resp2.get_json()['overall'] in ('pass', 'partial', 'uncertain')
+    assert resp2.get_json()['overall'] in ('success', 'partial', 'uncertain')
 
 
 def test_trigger_missing_attempt_404(client, admin_headers):

@@ -121,7 +121,9 @@ def _dim_skill_fit(cur, attempt_id: str) -> dict:
                     [{'type': 'fit_result', 'id': r[0], 'skill': r[1]}
                      for r in bad])
     if warn:
-        return _dim('pass', f'拟合部分命中: {[r[1] for r in warn]}',
+        # T2-4b（终审裁定）：partial 计 uncertain——overall 落 partial，
+        # 兑现设计 §3.2「partial→计 partial」，不与「其余全 pass」混成 success
+        return _dim('uncertain', f'拟合部分命中: {[r[1] for r in warn]}',
                     [{'type': 'fit_result', 'id': r[0], 'skill': r[1]}
                      for r in warn])
     return _dim('pass', f'{len(rows)} 个定义全部对齐')

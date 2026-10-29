@@ -63,6 +63,11 @@
           <ol v-if="diagnosis.suggestions.length" class="rd__sugs">
             <li v-for="(s, i) in diagnosis.suggestions" :key="i">{{ s }}</li>
           </ol>
+          <div class="rd__cand">
+            <ElButton size="small" type="primary" plain data-testid="cand-create"
+                      @click="emit('create-candidate')">生成候选</ElButton>
+            <span class="rd__cand-hint">进入候选区 → 回归验证 → 人工发布（不再直接生效）</span>
+          </div>
           <div v-if="diagnosis.revised_steps && diagnosis.revised_steps.length" class="rd__rev">
             <div class="rd__rev-head">
               <span>建议的修订步骤（{{ diagnosis.revised_steps.length }} 步）</span>
@@ -120,6 +125,7 @@ const emit = defineEmits<{
   (e: 'diagnose'): void
   (e: 'copy-revised', d: SkillFitDiagnosis): void
   (e: 'configure', attemptId: string): void
+  (e: 'create-candidate'): void
 }>()
 
 const title = computed(() => `运行详情 · ${props.row?.defName ?? ''}`)
@@ -152,6 +158,8 @@ function tagType(status: string): 'success' | 'warning' | 'danger' | 'info' {
 .rd__dot.is-out_of_order { background: var(--el-color-warning); }
 .rd__dot.is-skipped { background: var(--el-border-color-darker); opacity: .6; }
 .rd__cause { font-size: 13px; margin: 0 0 6px; }
+.rd__cand { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.rd__cand-hint { color: var(--el-text-color-secondary); font-size: 12px; }
 .rd__sugs { margin: 4px 0 8px; padding-left: 20px; font-size: 12.5px; }
 .rd__sugs li { margin: 3px 0; }
 .rd__rev { margin-top: 8px; }

@@ -229,17 +229,22 @@ def run_validation(candidate_id: str, get_db=None) -> dict:
 
     with db_ctx() as conn:
         with conn.cursor() as cur:
+            # 终审 Minor 加固：状态守卫——并发 reject/promote 与 validate
+            # 竞态时不再覆盖已决状态（rowcount=0 → 400）
             if decision:
                 cur.execute(
                     "UPDATE ai_skill_candidates SET validation = %s::jsonb, "
-                    "  status = %s, decided_at = NOW() WHERE id = %s",
+                    "  status = %s, decided_at = NOW() WHERE id = %s "
+                    "  AND status = 'pending'",
                     (json.dumps(validation, ensure_ascii=False),
                      decision, candidate_id))
             else:
                 cur.execute(
                     "UPDATE ai_skill_candidates SET validation = %s::jsonb "
-                    "WHERE id = %s",
+                    "WHERE id = %s AND status = 'pending'",
                     (json.dumps(validation, ensure_ascii=False), candidate_id))
+            if cur.rowcount == 0:
+                raise ValueError('候选状态已变化（可能已被人工处理），验证结果未写入')
         conn.commit()
     validation['decision'] = decision or 'insufficient_evidence'
     return validation

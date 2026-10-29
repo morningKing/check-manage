@@ -156,6 +156,28 @@ def test_validation_boundary_improves_holdout_stable(db_conn):
         assert r['after']['status'] == 'fit'
 
 
+def test_validation_rejects_on_holdout_regression(db_conn):
+    """终审必修②：保留集零退化硬门槛的否定用例——边界改善但保留集退化
+    必须 rejected（regressed 分支），rejectReason 指向保留集。"""
+    name, chash, _ = _seed_def_and_attempts(db_conn)
+    cid = 'cand_' + uuid.uuid4().hex[:10]
+    # 候选把安装模式改成只匹配 './' 路径：边界（./wrong.txt）改善，
+    # 保留（requirements.txt，无 ./）退化 → 命中 regressed 分支
+    with db_conn.cursor() as cur:
+        cur.execute("INSERT INTO ai_skill_candidates (id, def_kind, def_name, "
+                    "  base_content_hash, edits, source) "
+                    "VALUES (%s, 'skill', %s, %s, %s::jsonb, '{}'::jsonb)",
+                    (cid, name, chash,
+                     json.dumps([{'old_str': "args_pattern: 'pip install -r requirements'",
+                                  'new_str': "args_pattern: 'pip install -r \\./'",
+                                  'reason': '只认相对路径'}])))
+    db_conn.commit()
+    v = run_validation(cid)
+    assert v['decision'] == 'rejected'
+    assert v['regressed'], v
+    assert '保留集' in v['rejectReason']
+
+
 def test_validation_insufficient_evidence_stays_pending(db_conn):
     name, chash, _ = _seed_def_and_attempts(db_conn)
     cid = _seed_candidate(db_conn, name, chash)

@@ -30,7 +30,8 @@
                :subagent-fits="openSubagentFits" :diagnosis="openDiagnosis"
                :recomputing="recomputing" :diagnosing="diagnosing"
                @recompute="recomputeOpen" @diagnose="diagnoseOpen"
-               @copy-revised="copyRevised" @configure="openGenerator" />
+               @copy-revised="copyRevised" @configure="openGenerator"
+               @create-candidate="createCandidateFromDiagnosis" />
 
     <StepGeneratorDialog :visible="genVisible" :def-kind="def.defKind"
                          :def-name="def.defName" :def-hash="genHash"
@@ -51,6 +52,7 @@ import StepGeneratorDialog from './StepGeneratorDialog.vue'
 import {
   listSkillFits, getSkillFitDetail, recomputeSkillFit, diagnoseSkillFit,
 } from '@/api/aiSkills'
+import { createSkillCandidate } from '@/api/aiSessionAdmin'
 import type {
   SkillFitDefinitionSummary, SkillFitDetail, SkillFitDiagnosis, SkillFitRow,
   SkillDefVersion,
@@ -179,6 +181,26 @@ async function diagnoseOpen() {
     diagMap.value[row.attemptId] = res.diagnosis
   } catch { /* 全局 toast 已提示 */ } finally {
     diagnosing.value = false
+  }
+}
+
+/** 终审必修③：候选创建入口——诊断卡「生成候选」→ O2 候选区
+ *  （后端从 fit 结果行的诊断 JSONB 取 edits 建候选，返回 409 时提示既有候选）。 */
+async function createCandidateFromDiagnosis() {
+  const row = openRow.value
+  if (!row?.id) {
+    ElMessage.warning('该运行缺少结果 ID，请刷新后重试')
+    return
+  }
+  try {
+    const res: any = await createSkillCandidate({ fitResultId: row.id })
+    const cand = res.data?.candidate ?? res.candidate
+    ElMessage.success(`候选已创建（${cand?.id ?? ''}），请到「进化候选」页签回归验证后发布`)
+  } catch (e: any) {
+    const msg: string = e?.response?.data?.error || '候选创建失败'
+    ElMessage.error(msg.startsWith('重复候选')
+      ? `${msg}——可在「进化候选」页签处理既有候选`
+      : msg)
   }
 }
 

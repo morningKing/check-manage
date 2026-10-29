@@ -770,6 +770,9 @@ def suggestion_feedback(diagnosis_id, suggestion_id):
                     ('sfb_' + _sec.token_hex(6), diagnosis_id, suggestion_id, action,
                      body.get('appliedValue'), flask_g.current_user['userId']))
         conn.commit()
+    if candidate_id:
+        log_operation('create', 'ai_skill_candidates', candidate_id, None,
+                      'feedback applied 联动建候选（O2）')
     return jsonify({'ok': True,
                     **({'candidateId': candidate_id} if candidate_id else {})})
 
@@ -1320,6 +1323,16 @@ def rollback_skill_def_version(version_id):
         return jsonify({'error': f'定义文件写入失败: {e}'}), 500
     log_operation('update', 'ai_skill_def_versions', version_id, def_name,
                   'SkillOpt 定义版本回滚')
+    # 终审必修④：回滚后基线语义——基于「被回滚掉的内容」的未决候选全部
+    # 过期（base hash ≠ 回滚目标 hash）；以回滚目标为基的候选保留
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ai_skill_candidates SET status='expired', decided_at=NOW() "
+                "WHERE def_kind=%s AND def_name=%s AND status IN ('pending','validated') "
+                "  AND base_content_hash <> %s",
+                (def_kind, def_name, content_hash))
+        conn.commit()
     return jsonify({'ok': True, 'path': path, 'contentHash': content_hash})
 
 

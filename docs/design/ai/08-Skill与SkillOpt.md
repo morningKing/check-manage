@@ -302,7 +302,7 @@ POST `/ai/chat/sessions/<sid>/skills`（`ai_chat.py:1507-1524`，`write_required
 | 任务结果 | ai_chat_sessions 终态 | completed→pass；failed/error→fail；其余 uncertain |
 | 规则遵从 | action_expectations 终态核对 | 任一 failed→fail；有行且无 failed（未核对的 pre/checkpoint 行不阻塞）→pass；无行→uncertain |
 | 承诺—行动一致性 | ai_execution_step_results（lazy-fill：无行时 best-effort 调既有 ensure_diagnosis_for_session 现算） | 声称完成无工具证据（completed_claimed）→fail；无行→uncertain |
-| 技能拟合 | ai_skill_fit_results | diverged/parse_error→fail；partial→pass（summary 承载）；无行→uncertain |
+| 技能拟合 | ai_skill_fit_results | diverged/parse_error→fail；partial→uncertain（overall 计 partial，终审 T2-4b 裁定）；无行→uncertain |
 | 性能 | perf_analysis attempt_payload coverage 四段 argmax | wallMs≤0→uncertain |
 
 端点：POST/GET `/ai/chat/admin/attempts/<aid>/run-diagnosis`、GET `/ai/chat/admin/run-diagnoses?rootSessionId=`（均 admin.ai_chat_admin）。批任务 finalize 后 best-effort 自动生成（`_run_one` finally 收口，失败只 warning 不影响终态）。前端 `RunDiagnosisPanel.vue` 挂 SubtaskPerfReport 抽屉（data-testid: run-diag-panel/run-diag-generate/.rd-dim[data-status]）。
