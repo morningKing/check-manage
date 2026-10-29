@@ -117,7 +117,9 @@ async function load() {
   try {
     const resp: any = await listSkillCandidates({ status: status.value || undefined })
     const rows = resp.data?.items ?? resp.items ?? []
-    items.value = rows.map((r: any) => ({ ...r, _open: false }))
+    // 刷新后按 id 保留展开态（验证/发布后 load 重建列表，卡片不折叠）
+    const prevOpen = new Map(items.value.map((i: any) => [i.id, i._open]))
+    items.value = rows.map((r: any) => ({ ...r, _open: prevOpen.get(r.id) ?? false }))
   } finally {
     loading.value = false
   }
