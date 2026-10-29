@@ -145,6 +145,8 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="continuePara">AI 续写一段 (Ctrl+J)</el-dropdown-item>
+              <el-dropdown-item command="fullCheck">AI 检查全文</el-dropdown-item>
+              <el-dropdown-item command="summary">AI 总结全文…</el-dropdown-item>
               <el-dropdown-item command="code" divided>行内代码</el-dropdown-item>
               <el-dropdown-item command="link">链接…</el-dropdown-item>
               <el-dropdown-item command="clear">清除格式</el-dropdown-item>
@@ -197,6 +199,8 @@ const emit = defineEmits<{
   (e: 'ai-rewrite'): void
   (e: 'open-shortcuts'): void
   (e: 'print'): void
+  (e: 'full-check'): void
+  (e: 'summary'): void
 }>()
 
 const BLOCK_OPTIONS = [
@@ -356,6 +360,8 @@ function onMoreCommand(command: string): void {
   const chain = editor.chain().focus()
   switch (command) {
     case 'continuePara': chain.requestParagraphCompletion().run(); break
+    case 'fullCheck': emit('full-check'); break
+    case 'summary': emit('summary'); break
     case 'code': chain.toggleCode().run(); break
     case 'link': openLink(); break
     case 'clear': clearFormatting(editor); break

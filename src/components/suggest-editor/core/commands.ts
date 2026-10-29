@@ -65,3 +65,29 @@ export function requestCompletion(
   })
   return id
 }
+
+/** 写入一条「全文重查」命令：服务端清空块级缓存后按批重跑分析（检查要点/规则更新后用） */
+export function requestFullCheck(ydoc: Y.Doc): string {
+  const id = crypto.randomUUID()
+  ydoc.getMap(COMMANDS_MAP).set(id, {
+    id,
+    kind: "recheck",
+    status: "pending",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+  return id
+}
+
+/** 写入一条「全文摘要」命令：结果（replacement）回写给发起它的客户端对话框展示 */
+export function requestSummary(ydoc: Y.Doc): string {
+  const id = crypto.randomUUID()
+  ydoc.getMap(COMMANDS_MAP).set(id, {
+    id,
+    kind: "summarize",
+    status: "pending",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })
+  return id
+}

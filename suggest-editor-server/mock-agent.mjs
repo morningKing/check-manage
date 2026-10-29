@@ -114,6 +114,17 @@ function rewriteText(text) {
   return out
 }
 
+/** 全文摘要（用户主动发起）：固定摘要文案，E2E 用「摘要」锚定断言 */
+const MOCK_SUMMARY =
+  "摘要：本文档围绕系统改造展开，明确了执行步骤与责任人，统一了数据口径与文档模板，" +
+  "并在关键节点设置了复核与回滚条件。整体结论是改造方案可行，风险可控，建议按计划推进。"
+
+/** 改写指令行（engine 的 prompt 固定格式）；「换一种」时返回同源但可区分的变体 */
+function rewriteInstructionOf(promptText) {
+  const match = promptText.match(/【改写指令】(.*)/)
+  return match ? match[1].trim() : ""
+}
+
 function extractBlock(text, startMarker, endMarker) {
   const start = text.indexOf(startMarker)
   if (start === -1) return null
@@ -162,6 +173,19 @@ const agent = {
     // 3) 续写联想
     const completionContext = extractBlock(promptText, "<<<CONTEXT>>>", "<<<END>>>")
     if (completionContext !== null) {
+      if (promptText.includes("【总结任务】")) {
+        // 全文摘要：与一句话续写同走 <<<CONTEXT>>> 通道，按任务行区分
+        await sleep(150)
+        if (session.aborted) return { stopReason: "cancelled" }
+        await cx.notify(acp.methods.client.session.update, {
+          sessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: MOCK_SUMMARY },
+          },
+        })
+        return { stopReason: "end_turn" }
+      }
       const isParagraph = promptText.includes("【续写模式】段落")
       const completion = isParagraph ? paragraphCompletionFor() : completionFor(completionContext)
       await cx.notify(acp.methods.client.session.update, {
@@ -186,7 +210,11 @@ const agent = {
     // 2) 用户改写
     const rewriteOriginal = extractBlock(promptText, "<<<ORIGINAL>>>", "<<<END>>>")
     if (rewriteOriginal !== null) {
-      const replacement = rewriteText(rewriteOriginal)
+      let replacement = rewriteText(rewriteOriginal)
+      // 「换一种」变体：确定性 agent 需要可区分的第二种改法，追加标记供 E2E 断言
+      if (rewriteInstructionOf(promptText).includes("换一种")) {
+        replacement = `${replacement}（另一种表述）`
+      }
       const toolCallId = `mock-rewrite-${Date.now()}`
       await sleep(120)
       if (session.aborted) return { stopReason: "cancelled" }

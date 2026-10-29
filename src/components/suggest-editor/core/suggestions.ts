@@ -29,6 +29,8 @@ export interface SuggestionItem {
   mechanism?: 'builtin' | 'maps' | 'patterns' | 'whitelists' | 'presence' | 'ai'
   /** 完整性提醒：不可接受，只能忽略 */
   notice?: boolean
+  /** 用户改写的原始指令（仅 rewrite 卡有，「换一种」重发时用） */
+  instruction?: string
 }
 
 export interface SuggestionLayersApi {
@@ -44,6 +46,7 @@ interface StoredSuggestion {
   replacement?: unknown
   reason?: unknown
   severity?: unknown
+  instruction?: unknown
   relFrom?: unknown
   relTo?: unknown
 }
@@ -184,9 +187,10 @@ export function createSuggestionLayers(options: {
 
         const severity: Severity =
           stored.severity === "error" || stored.severity === "warn" ? stored.severity : "info"
+        const isRewrite = stored.kind === "rewrite"
         aiItems.push({
           id,
-          source: stored.kind === "rewrite" ? "rewrite" : "ai",
+          source: isRewrite ? "rewrite" : "ai",
           quote: String(stored.quote ?? ""),
           replacement: String(stored.replacement ?? ""),
           reason: String(stored.reason ?? ""),
@@ -195,6 +199,7 @@ export function createSuggestionLayers(options: {
           to,
           index: null,
           mechanism: "ai",
+          ...(isRewrite ? { instruction: String(stored.instruction ?? "") } : {}),
         })
       })
     }

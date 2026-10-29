@@ -6,6 +6,13 @@
  *  U4 快捷键帮助（Ctrl+/ 与「⋯」菜单两个入口）
  *  U5 AI 改写入口（顶栏按钮 + Alt+A）与新预设（扩写/纠正语病/翻译成英文…）
  *  U6 目录导航（HUD 目录弹层 + 点击滚动定位）
+ *  U7 打印 / 导出 PDF（⋯菜单 → window.print，纸面由 print CSS 负责）
+ *  U8 AI 整段续写（Ctrl+J → ghost 预览 → Tab 落正文）
+ *  U9 语气滑杆（口语↔正式连续调节）
+ *  U10 拼写检查开关（⋯菜单切换 + 刷新保持）
+ *  U11 AI 检查全文（清块级缓存重查存量）
+ *  U12 AI 总结全文（对话框 loading → 摘要 → 复制）
+ *  U13 改写卡片「换一种」（同指令重发产出变体）
  *
  * 前置：mock 栈（npm run test:e2e 的 dev:all → se:mock）——AI 改写用 mock 确定性
  * 响应（rewrite 按规则清理，「但是」→「然而」）。跑前先停生产栈：
@@ -158,7 +165,7 @@ test('U5 AI 改写入口：顶栏按钮 + Alt+A 唤起，新预设可用', async
       await aiBtn.click()
       await expect(reviseMenu).toBeVisible({ timeout: 2_000 })
     }).toPass({ timeout: 20_000 })
-    for (const label of ['扩写', '纠正语病', '翻译成英文', '改得口语化']) {
+    for (const label of ['扩写', '纠正语病', '翻译成英文', '翻译成中文', '改得口语化']) {
       await expect(reviseMenu.getByRole('button', { name: label })).toBeVisible()
     }
 
@@ -323,6 +330,88 @@ test('U10 拼写检查开关：⋯菜单切换 + 刷新保持', async ({ page })
     await page.locator('span[title="更多格式与操作"]').click()
     await page.locator('.el-dropdown-menu__item', { hasText: '拼写检查：开（点击关闭）' }).click()
     await expect(surface).toHaveAttribute('spellcheck', 'false')
+  } finally {
+    await deleteDocument(page.request, token, docId)
+  }
+})
+
+test('U11 AI 检查全文：清块级缓存重查存量，忽略过的建议重新出现', async ({ page }) => {
+  test.setTimeout(120_000)
+  const token = readSharedToken()
+  const docId = await createDocument(page.request, token, `E2E-易用-全文校对-${Date.now()}`)
+  try {
+    await openDocById(page, docId)
+    await typeAtEnd(page, '但是这次改造需要验证。')
+    // 首次分析产出 AI 卡（mock：但是→然而）
+    const aiCards = page.locator('.se-suggest-note[data-source="ai"]')
+    await expect(aiCards.first()).toBeVisible({ timeout: 30_000 })
+
+    // 忽略后卡片消失；块级缓存挡住重查，不会自动回来
+    await aiCards.first().getByRole('button', { name: '忽略' }).click()
+    await expect(aiCards).toHaveCount(0, { timeout: 10_000 })
+    await page.waitForTimeout(1500)
+    await expect(aiCards).toHaveCount(0)
+
+    // ⋯菜单 → AI 检查全文 → 确认 → 存量重查，同一建议复得
+    await page.locator('span[title="更多格式与操作"]').click()
+    await page.locator('.el-dropdown-menu__item', { hasText: 'AI 检查全文' }).click()
+    const confirmBox = page.locator('.el-message-box')
+    await confirmBox.waitFor({ state: 'visible' })
+    await confirmBox.getByRole('button', { name: '开始重查' }).click()
+    await expect(aiCards.first()).toBeVisible({ timeout: 60_000 })
+  } finally {
+    await deleteDocument(page.request, token, docId)
+  }
+})
+
+test('U12 AI 总结全文：对话框 loading → 摘要展示 → 可复制', async ({ page }) => {
+  test.setTimeout(90_000)
+  const token = readSharedToken()
+  const docId = await createDocument(page.request, token, `E2E-易用-总结-${Date.now()}`)
+  try {
+    await openDocById(page, docId)
+    await typeAtEnd(page, '本文档说明了改造方案。执行步骤明确，风险可控。')
+    await page.waitForTimeout(600)
+
+    await page.locator('span[title="更多格式与操作"]').click()
+    await page.locator('.el-dropdown-menu__item', { hasText: 'AI 总结全文' }).click()
+    const dialog = page.locator('.el-dialog', { hasText: 'AI 全文摘要' })
+    await expect(dialog).toBeVisible({ timeout: 5_000 })
+    await expect(dialog.locator('.se-summary-text')).toContainText('摘要：', { timeout: 30_000 })
+    await expect(dialog.getByRole('button', { name: '复制摘要' })).toBeVisible()
+    await expect(dialog.locator('.se-summary-hint')).toContainText('不会改动正文')
+  } finally {
+    await deleteDocument(page.request, token, docId)
+  }
+})
+
+test('U13 改写卡片「换一种」：同指令重发，产出可区分的第二种改法', async ({ page }) => {
+  test.setTimeout(120_000)
+  const token = readSharedToken()
+  const docId = await createDocument(page.request, token, `E2E-易用-换一种-${Date.now()}`)
+  try {
+    await openDocById(page, docId)
+    await typeAtEnd(page, '但是这次改造需要验证。')
+    await page.waitForTimeout(600)
+
+    const aiBtn = page.getByRole('button', { name: 'AI 改写' })
+    const reviseMenu = page.locator('.se-revise-menu')
+    await expect(async () => {
+      await selectLastParagraph(page)
+      await expect(aiBtn).toBeEnabled({ timeout: 2_000 })
+      await aiBtn.click()
+      await expect(reviseMenu).toBeVisible({ timeout: 2_000 })
+    }).toPass({ timeout: 20_000 })
+
+    await reviseMenu.getByRole('button', { name: '扩写' }).click()
+    const rewriteCards = page.locator('.se-suggest-note[data-source="rewrite"]')
+    await expect(rewriteCards.first()).toBeVisible({ timeout: 30_000 })
+
+    // 卡上「换一种」→ 同选区同指令重发 → 第二种改法（mock 变体带「另一种表述」标记）
+    await rewriteCards.first().getByRole('button', { name: '换一种' }).click()
+    await expect(
+      rewriteCards.filter({ hasText: '另一种表述' }).first(),
+    ).toBeVisible({ timeout: 30_000 })
   } finally {
     await deleteDocument(page.request, token, docId)
   }

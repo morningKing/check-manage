@@ -36,6 +36,16 @@
         接受
       </button>
       <button
+        v-if="item.source === 'rewrite' && item.instruction"
+        type="button"
+        class="se-suggest-btn"
+        title="用同一指令再改写一次，换一种改法"
+        @mousedown.prevent
+        @click.stop="emit('rerun', item)"
+      >
+        换一种
+      </button>
+      <button
         type="button"
         class="se-suggest-btn se-suggest-btn-ignore"
         @mousedown.prevent
@@ -58,6 +68,7 @@ defineProps<{
 const emit = defineEmits<{
   (e: 'accept', item: SuggestionItem): void
   (e: 'ignore', item: SuggestionItem): void
+  (e: 'rerun', item: SuggestionItem): void
   (e: 'focus', item: SuggestionItem): void
   (e: 'hover', id: string | null): void
 }>()

@@ -15,6 +15,8 @@
             @ai-rewrite="openReviseMenuAtSelection"
             @open-shortcuts="shortcutsOpen = true"
             @print="onPrint"
+            @full-check="onFullCheck"
+            @summary="openSummary"
           />
           <span class="se-status-pill">
             <i class="se-status-dot" :class="`is-${syncState}`" />
@@ -52,6 +54,7 @@
           :active-id="activeNoteId"
           @accept="onAccept"
           @ignore="onIgnore"
+          @rerun="onRerun"
           @focus="onFocus"
           @hover="onHover"
         />
@@ -114,6 +117,19 @@
           </tbody>
         </table>
       </el-dialog>
+      <el-dialog v-model="summaryOpen" title="AI 全文摘要" width="520px" append-to-body>
+        <div v-if="summaryState === 'loading'" class="se-summary-loading">
+          正在总结全文…（长文档约需数十秒，可先继续编辑）
+        </div>
+        <div v-else-if="summaryState === 'error'" class="se-summary-error">总结失败：{{ summaryError }}</div>
+        <template v-else>
+          <div class="se-summary-text">{{ summaryText }}</div>
+          <div class="se-summary-actions">
+            <button type="button" class="se-revise-menu-btn" @click="copySummary">复制摘要</button>
+            <span class="se-summary-hint">摘要只读，不会改动正文</span>
+          </div>
+        </template>
+      </el-dialog>
     </div>
     <!-- 专注模式下的浮动退出钮（顶栏整体隐藏后唯一常驻出口；Esc 同效） -->
     <button
@@ -146,7 +162,7 @@ import EditorToolbar from './EditorToolbar.vue'
 import SuggestionSidebar from './SuggestionSidebar.vue'
 import DocHud from './DocHud.vue'
 import FindReplacePanel from './FindReplacePanel.vue'
-import { COMMANDS_MAP, requestRewrite } from './core/commands'
+import { COMMANDS_MAP, requestFullCheck, requestRewrite, requestSummary } from './core/commands'
 import { CompletionGhost } from './core/completion'
 import { createSlashMenu } from './core/slash-menu'
 import { createSuggestionLayers, SUGGESTIONS_REFRESH_META, type SuggestionItem } from './core/suggestions'
@@ -157,6 +173,7 @@ import { FIGURE_EXTENSIONS, insertFigure } from './core/figure'
 import { FindReplaceHighlight } from './core/find-replace'
 import { getRules, getSnippets, uploadAttachment, type LocalCheckRule, type TextSnippet } from '@/api/suggestEditor'
 import { useAppStore } from '@/stores/app'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const props = defineProps<{ docId: string; token: string }>()
 const emit = defineEmits<{ (e: 'synced'): void }>()
@@ -261,6 +278,7 @@ const REWRITE_PRESETS = [
   { label: '扩写', instruction: '在保持原意与事实的前提下，把这段内容写得更充实、具体，补充必要的细节与说明' },
   { label: '纠正语病', instruction: '找出并纠正这段话里的语病、错别字与搭配不当，保持原意，输出修正后的文本' },
   { label: '翻译成英文', instruction: '把这段话翻译成地道、专业的英文' },
+  { label: '翻译成中文', instruction: '把这段外文翻译成准确、通顺的中文，专业术语译名规范' },
 ]
 
 /** 快捷键帮助对话框内容（Ctrl+/ 或「⋯」菜单打开） */
@@ -288,6 +306,46 @@ const toneValue = ref(2)
 const toneInstruction = computed(
   () => `把语气调整为「${TONE_LABELS[toneValue.value] ?? '中性'}」（程度 ${toneValue.value + 1}/5），保持原意与事实不变`,
 )
+
+/* ---------------- AI 全文动作（检查全文 / 总结全文） ---------------- */
+
+/** AI 检查全文：清空块级缓存重查存量（检查要点/规则更新后想让已写内容重新过一遍时用） */
+async function onFullCheck(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '将对全文所有段落重新逐批分析（每批 40 段，批间自动续跑），已忽略的建议可能重新出现。继续？',
+      'AI 检查全文',
+      { confirmButtonText: '开始重查', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return // 用户取消
+  }
+  requestFullCheck(ydoc)
+}
+
+/** AI 总结全文：结果在对话框展示（只读），loading 中可继续编辑 */
+const summaryOpen = ref(false)
+const summaryState = ref<'loading' | 'done' | 'error'>('loading')
+const summaryText = ref('')
+const summaryError = ref('')
+let mySummaryId: string | null = null
+
+function openSummary(): void {
+  summaryOpen.value = true
+  summaryState.value = 'loading'
+  summaryText.value = ''
+  summaryError.value = ''
+  mySummaryId = requestSummary(ydoc)
+}
+
+async function copySummary(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(summaryText.value)
+    ElMessage.success('摘要已复制')
+  } catch {
+    ElMessage.error('复制失败：浏览器未授权剪贴板')
+  }
+}
 
 interface AssistantStatus {
   state?: string
@@ -507,9 +565,26 @@ const commandsMap = ydoc.getMap(COMMANDS_MAP)
 const onSuggestionsChanged = () => refreshSuggestions()
 const onCommandsChanged = () => {
   let hint: string | null = null
-  for (const id of myRewriteIds) {
-    const value = commandsMap.get(id) as { kind?: unknown; status?: unknown; error?: unknown } | undefined
-    if (!value || value.kind !== 'rewrite') continue
+  for (const [id, raw] of commandsMap.entries()) {
+    const value = raw as { kind?: unknown; status?: unknown; error?: unknown; replacement?: unknown } | undefined
+    if (!value) continue
+
+    // 自己发起的全文摘要：命令状态驱动对话框
+    if (value.kind === 'summarize' && id === mySummaryId) {
+      if (value.status === 'running' || value.status === 'pending') {
+        summaryState.value = 'loading'
+      } else if (value.status === 'done' && typeof value.replacement === 'string') {
+        summaryText.value = value.replacement
+        summaryState.value = 'done'
+      } else if (value.status === 'error' || value.status === 'superseded') {
+        summaryError.value = String(value.error ?? '未知错误')
+        summaryState.value = 'error'
+      }
+      continue
+    }
+
+    if (value.kind !== 'rewrite') continue
+    if (!myRewriteIds.has(id)) continue
     if (value.status === 'pending' || value.status === 'running') hint = '改写中…'
     else if (value.status === 'error') hint = `改写失败：${String(value.error ?? '未知错误')}`
     else if (value.status === 'done') hint = '改写完成，见文档中的卡片'
@@ -679,6 +754,20 @@ function onAccept(item: SuggestionItem): void {
 }
 function onIgnore(item: SuggestionItem): void {
   suggestionLayer.api.ignore(item)
+}
+/** 改写卡「换一种」：同一选区用同一指令再发一次改写（mock/模型会给出不同结果） */
+function onRerun(item: SuggestionItem): void {
+  const current = editorRef.value
+  if (!current || item.source !== 'rewrite' || !item.instruction) return
+  const id = requestRewrite({
+    ydoc,
+    editor: current,
+    instruction: `换一种改法：${item.instruction}`,
+    from: item.from,
+    to: item.to,
+  })
+  if (id) myRewriteIds.add(id)
+  rewriteHint.value = '改写中…'
 }
 function onFocus(item: SuggestionItem): void {
   suggestionLayer.api.focus(item)

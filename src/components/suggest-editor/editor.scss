@@ -1284,6 +1284,46 @@
   }
 }
 
+/* AI 全文摘要对话框 */
+.se-summary-loading {
+  padding: 20px 0;
+  color: var(--se-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.se-summary-error {
+  padding: 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.se-summary-text {
+  padding: 12px;
+  background: #fafafa;
+  border: 1px solid var(--se-line);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.se-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.se-summary-hint {
+  color: var(--se-muted);
+  font-size: 11px;
+}
+
 /* 目录点击滚动定位：给 sticky 头部让位 */
 .se-scope .doc-surface > * {
   scroll-margin-top: 96px;

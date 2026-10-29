@@ -16,6 +16,7 @@
       :active="activeId === item.id"
       @accept="(v) => emit('accept', v)"
       @ignore="(v) => emit('ignore', v)"
+      @rerun="(v) => emit('rerun', v)"
       @focus="(v) => emit('focus', v)"
       @hover="(id) => emit('hover', id)"
     />
@@ -52,6 +53,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'accept', item: SuggestionItem): void
   (e: 'ignore', item: SuggestionItem): void
+  (e: 'rerun', item: SuggestionItem): void
   (e: 'focus', item: SuggestionItem): void
   (e: 'hover', id: string | null): void
 }>()

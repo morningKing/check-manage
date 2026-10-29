@@ -68,7 +68,27 @@ interface CompleteCommand {
   updatedAt: number
 }
 
-type CommandValue = RewriteCommand | CompleteCommand
+/** 全文重查：清空块级缓存后按批重跑分析（检查要点/规则更新后想让存量重新过一遍） */
+interface RecheckCommand {
+  id: string
+  kind: "recheck"
+  status: CommandStatus
+  createdAt: number
+  updatedAt: number
+}
+
+/** 全文摘要：结果放 replacement，前端对话框展示（只读，不改正文） */
+interface SummaryCommand {
+  id: string
+  kind: "summarize"
+  status: CommandStatus
+  replacement?: string
+  error?: string
+  createdAt: number
+  updatedAt: number
+}
+
+type CommandValue = RewriteCommand | CompleteCommand | RecheckCommand | SummaryCommand
 
 /** 简单的异步互斥：ACP 会话是回合制，同一会话不能并发跑两轮 */
 function createMutex(): <T>(task: () => Promise<T>) => Promise<T> {
@@ -515,6 +535,49 @@ async function runRewrite(state: DocState, id: string, command: RewriteCommand):
   markCommand(state, id, { status: "done", replacement, suggestionId: created[0] })
 }
 
+/** 全文重查：清空块级缓存（检查要点/规则更新后让存量重新过一遍），run() 会按 40 块/批自动续跑 */
+async function runFullCheck(state: DocState, id: string): Promise<void> {
+  state.analyzedHashes.clear()
+  setAssistantState(state.ydoc, {
+    state: "idle",
+    hint: "已发起全文重查：将按批分析全部段落，进度见下方状态",
+    error: null,
+  })
+  markCommand(state, id, { status: "done" })
+  scheduleAnalysis(state.name, 0)
+}
+
+/** 全文摘要：用续写会话（无工具）产出，结果经命令 replacement 回给前端对话框，不改正文 */
+async function runSummary(state: DocState, id: string): Promise<void> {
+  const flattened = flattenFragment(state.ydoc.getXmlFragment(FRAGMENT_NAME))
+  const text = flattened.text.trim()
+  if (!text) {
+    markCommand(state, id, { status: "error", error: "文档为空，无可总结内容" })
+    return
+  }
+  const clipped = text.length > 12_000 ? `${text.slice(0, 12_000)}\n…（超长部分已截断）` : text
+  const prompt = [
+    "【总结任务】请为下面的文档内容写一份中文摘要（100~200 字），概括核心结论与关键要点，用简洁的陈述句。",
+    "不要调用任何工具，不要解释，直接输出摘要正文。",
+    "<<<CONTEXT>>>",
+    clipped,
+    "<<<END>>>",
+  ].join("\n")
+
+  const session = await getCompletionSession(state)
+  const result = await withTimeout(
+    state.completionLock(() => session.analyze(prompt)),
+    Math.min(config.analyzeTimeoutMs, COMPLETION_TIMEOUT_MS),
+    () => session.cancel(),
+  )
+  const summary = sanitizeCompletion(result.text, 2000)
+  if (!summary) {
+    markCommand(state, id, { status: "error", error: "agent 未返回摘要" })
+    return
+  }
+  markCommand(state, id, { status: "done", replacement: summary })
+}
+
 async function runCompletion(state: DocState, id: string, command: CompleteCommand): Promise<void> {
   const session = await getCompletionSession(state)
   const paragraph = command.mode === "paragraph"
@@ -559,6 +622,8 @@ async function processCommands(state: DocState): Promise<void> {
       markCommand(state, next.id, { status: "running" } as Partial<CommandValue>)
       try {
         if (next.value.kind === "rewrite") await runRewrite(state, next.id, next.value)
+        else if (next.value.kind === "summarize") await runSummary(state, next.id)
+        else if (next.value.kind === "recheck") await runFullCheck(state, next.id)
         else await runCompletion(state, next.id, next.value)
       } catch (error) {
         markCommand(state, next.id, {
