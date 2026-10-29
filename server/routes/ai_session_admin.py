@@ -738,6 +738,7 @@ def suggestion_feedback(diagnosis_id, suggestion_id):
                 skill_name = raw.strip()
         elif isinstance(raw, dict):
             skill_name = raw.get('skillName') or None
+    candidate_id = None
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM ai_execution_diagnoses WHERE id = %s",
@@ -754,6 +755,13 @@ def suggestion_feedback(diagnosis_id, suggestion_id):
                      action, body.get('appliedValue'),
                      flask_g.current_user['userId'],
                      _json.dumps({'skillName': skill_name})))
+                # O2 联动：applied 请求可携带候选草稿（edits/fallbackText），
+                # 同事务建 pending 候选；创建失败异常上抛 → 整笔回滚（T9-4）
+                if isinstance(body.get('candidate'), dict):
+                    cand = _create_candidate_from_fit(
+                        cur, body['candidate'].get('fitResultId') or '',
+                        body['candidate'])
+                    candidate_id = cand['id']
             else:
                 cur.execute(
                     "INSERT INTO ai_suggestion_feedback "
@@ -762,7 +770,8 @@ def suggestion_feedback(diagnosis_id, suggestion_id):
                     ('sfb_' + _sec.token_hex(6), diagnosis_id, suggestion_id, action,
                      body.get('appliedValue'), flask_g.current_user['userId']))
         conn.commit()
-    return jsonify({'ok': True})
+    return jsonify({'ok': True,
+                    **({'candidateId': candidate_id} if candidate_id else {})})
 
 
 @ai_execution_admin_bp.get('/skill-suggestions/<suggestion_id>/effect')
@@ -1507,6 +1516,7 @@ def skill_def_steps_apply():
                         "WHERE def_kind = %s AND def_name = %s "
                         "AND content_hash = %s",
                         (label, def_kind, def_name, chash))
+            expire_candidates_for_def(cur, def_kind, def_name)
         conn.commit()
     log_operation('update', 'ai_skill_def_steps', out_path, None,
                   'SkillOpt 回写 fit.steps 到定义文件')
@@ -1708,3 +1718,257 @@ def run_diagnoses_list():
                       'createdAt': r[3].isoformat() if r[3] else None}
                      for r in cur.fetchall()]
     return jsonify({'items': items})
+
+
+# ── O2 技能进化候选区（spec 2026-10-26-agent-self-evolution-design §4）──
+
+def _create_candidate_from_fit(cur, fit_result_id: str, body: dict) -> dict:
+    """从拟合结果行 + 诊断 JSONB 建 pending 候选。edits/fallbackText 二选一：
+    优先诊断里的 edits，body 可显式给 fallbackText 整块降级。R2 去重：
+    同 (def, 基线, diff) 的未决候选唯一；R3：expect 收窄须 expectedRepair。"""
+    import json as _json
+    from utils.skill_candidate_eval import apply_edits, structural_guard
+    cur.execute(
+        "SELECT def_kind, def_name, def_hash, diagnosis "
+        "FROM ai_skill_fit_results WHERE id = %s", (fit_result_id,))
+    row = cur.fetchone()
+    if not row:
+        raise LookupError('拟合结果行不存在')
+    kind, name, def_hash, diag = row
+    diag = diag if isinstance(diag, dict) else {}
+    edits = body.get('edits')
+    if edits is None:
+        edits = diag.get('edits') or []
+    fallback = (body.get('fallbackText') or '').strip() or None
+    if not edits and not fallback:
+        raise ValueError('诊断无 edits 且未提供 fallbackText——请先重新诊断'
+                         '（最小 diff），或人工提供整块内容')
+    if edits and fallback:
+        raise ValueError('edits 与 fallbackText 二选一')
+    edits_hash = None
+    if edits:
+        import hashlib as _hl
+        cur.execute("SELECT content FROM ai_skill_def_versions "
+                    "WHERE def_kind=%s AND def_name=%s AND content_hash=%s",
+                    (kind, name, def_hash))
+        base_row = cur.fetchone()
+        if not base_row or not base_row[0]:
+            raise ValueError('基线版本未归档正文，无法校验 diff'
+                             '（先经 apply 路径归档一次）')
+        new_text, err = apply_edits(base_row[0], edits)
+        if err:
+            raise ValueError(f'diff 校验失败: {err}')
+        gerr = structural_guard(
+            base_row[0], new_text,
+            body.get('expectedRepair') or diag.get('expected_repair'))
+        if gerr:
+            raise ValueError(gerr)
+        # R2 去重：同一 (def, 基线, diff) 的未决候选只允许存在一个
+        edits_hash = _hl.sha256(_json.dumps(
+            edits, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        cur.execute(
+            "SELECT id FROM ai_skill_candidates "
+            "WHERE def_kind=%s AND def_name=%s AND base_content_hash=%s "
+            "  AND edits_hash=%s AND status IN ('pending','validated')",
+            (kind, name, def_hash, edits_hash))
+        dup = cur.fetchone()
+        if dup:
+            raise ValueError(f'重复候选: {dup[0]}')
+    source = {
+        'fitResultId': fit_result_id,
+        'diagnosisCause': diag.get('cause'),
+        'expectedRepair': body.get('expectedRepair')
+                          or diag.get('expected_repair') or '',
+        'possiblyHarmed': body.get('possiblyHarmed')
+                          or diag.get('possibly_harmed') or [],
+    }
+    cid = 'cand_' + secrets.token_hex(6)
+    cur.execute(
+        """
+        INSERT INTO ai_skill_candidates
+            (id, def_kind, def_name, base_content_hash, edits, edits_hash,
+             fallback_content, source, created_by)
+        VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s::jsonb, 'fit-diagnose')
+        """,
+        (cid, kind, name, def_hash, _json.dumps(edits, ensure_ascii=False),
+         edits_hash, fallback, _json.dumps(source, ensure_ascii=False)))
+    return {'id': cid, 'defKind': kind, 'defName': name,
+            'baseContentHash': def_hash, 'edits': edits,
+            'fallbackContent': fallback, 'source': source, 'status': 'pending'}
+
+
+def expire_candidates_for_def(cur, def_kind: str, def_name: str) -> None:
+    """定义被其他路径推进（apply/rollback/promote）后，未决候选全部过期——
+    base hash 不再是最新，继续放行会在 publish 时撞 409。"""
+    cur.execute(
+        "UPDATE ai_skill_candidates SET status='expired', decided_at=NOW() "
+        "WHERE def_kind=%s AND def_name=%s AND status IN ('pending','validated')",
+        (def_kind, def_name))
+
+
+@ai_execution_admin_bp.post('/skill-candidates')
+@require_permission('admin.ai_chat_admin')
+def skill_candidate_create():
+    body = request.get_json(silent=True) or {}
+    fit_result_id = (body.get('fitResultId') or '').strip()
+    if not fit_result_id:
+        return jsonify({'error': 'fitResultId 必填'}), 400
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cand = _create_candidate_from_fit(cur, fit_result_id, body)
+            conn.commit()
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        msg = str(e)
+        if msg.startswith('重复候选: '):
+            return jsonify({'error': msg,
+                            'existingId': msg.split(': ', 1)[1]}), 409
+        return jsonify({'error': msg}), 400
+    log_operation('create', 'ai_skill_candidates', cand['id'],
+                  f"{cand['defKind']}/{cand['defName']}", '技能候选创建（O2）')
+    return jsonify({'candidate': cand}), 201
+
+
+@ai_execution_admin_bp.get('/skill-candidates')
+@require_permission('admin.ai_chat_admin')
+def skill_candidate_list():
+    conds, params = [], []
+    for col, key in (('status', 'status'), ('def_kind', 'defKind'),
+                     ('def_name', 'defName')):
+        v = (request.args.get(key) or '').strip()
+        if v:
+            conds.append(f'{col} = %s')
+            params.append(v)
+    where = ('WHERE ' + ' AND '.join(conds)) if conds else ''
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, def_kind, def_name, base_content_hash, edits, "
+                "       fallback_content, source, validation, status, created_at, "
+                "       promoted_version_id "
+                f"FROM ai_skill_candidates {where} "
+                "ORDER BY created_at DESC LIMIT 100", params)
+            items = [{
+                'id': r[0], 'defKind': r[1], 'defName': r[2],
+                'baseContentHash': r[3], 'edits': r[4],
+                'fallbackContent': r[5], 'source': r[6], 'validation': r[7],
+                'status': r[8],
+                'createdAt': r[9].isoformat() if r[9] else None,
+                'promotedVersionId': r[10],
+            } for r in cur.fetchall()]
+    return jsonify({'items': items})
+
+
+@ai_execution_admin_bp.post('/skill-candidates/<cid>/validate')
+@require_permission('admin.ai_chat_admin')
+def skill_candidate_validate(cid):
+    from utils.skill_candidate_eval import run_validation
+    try:
+        v = run_validation(cid)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    log_operation('update', 'ai_skill_candidates', cid, None,
+                  f"候选双集回归: {v.get('decision')}")
+    return jsonify({'validation': v})
+
+
+@ai_execution_admin_bp.post('/skill-candidates/<cid>/promote')
+@require_permission('admin.ai_chat_admin')
+def skill_candidate_promote(cid):
+    from utils.skill_fit import register_def_version, resolve_definition_path
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT def_kind, def_name, base_content_hash, edits, "
+                "       fallback_content, status, source "
+                "FROM ai_skill_candidates WHERE id = %s", (cid,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'error': '候选不存在'}), 404
+            kind, name, base_hash, edits_raw, fallback, status, source_raw = row
+            source = source_raw if isinstance(source_raw, dict) else {}
+            if status != 'validated':
+                return jsonify(
+                    {'error': f'候选状态 {status}，仅 validated 可发布'}), 400
+            # 基线漂移防护：当前最新版本的 hash 必须仍是候选所基于的 hash
+            cur.execute(
+                "SELECT content_hash FROM ai_skill_def_versions "
+                "WHERE def_kind=%s AND def_name=%s "
+                "ORDER BY first_seen_at DESC LIMIT 1",
+                (kind, name))
+            latest = cur.fetchone()
+            if not latest or latest[0] != base_hash:
+                expire_candidates_for_def(cur, kind, name)
+                return jsonify({'error': '基线已漂移（定义被其他发布推进），'
+                                         '候选已过期，请基于新版本重建'}), 409
+            cur.execute("SELECT content FROM ai_skill_def_versions "
+                        "WHERE def_kind=%s AND def_name=%s AND content_hash=%s",
+                        (kind, name, base_hash))
+            base_row = cur.fetchone()
+            if not base_row or not base_row[0]:
+                return jsonify({'error': '基线版本未归档正文'}), 409
+            base_text = base_row[0]
+            if fallback:
+                new_text = fallback
+            else:
+                from utils.skill_candidate_eval import apply_edits
+                new_text, err = apply_edits(
+                    base_text, edits_raw if isinstance(edits_raw, list) else [])
+                if err:
+                    return jsonify({'error': f'diff 非法: {err}'}), 400
+            resolved = resolve_definition_path(kind, name, base_hash)
+            if not resolved or not resolved.get('path'):
+                return jsonify({'error': '定位不到定义文件路径'}), 404
+            path = resolved['path']
+            if not _path_in_allowed_roots(path):
+                return jsonify({'error': 'path escapes allowed roots'}), 400
+            if not os.path.isfile(path):
+                return jsonify({'error': f'定义文件不存在: {path}'}), 404
+            # pathlib 写入是 Mimosa 唯一放行形态（open-w 变量路径必拦）；
+            # newline='' 防 CRLF 毁 hash（apply 路径同规矩）
+            from pathlib import Path
+            out_path = Path(path)
+            out_path.write_text(new_text, encoding='utf-8', newline='')
+            raw = out_path.read_bytes()
+            new_hash = hashlib.sha256(raw).hexdigest()
+            register_def_version(cur, kind, name, new_hash,
+                                 content=raw.decode('utf-8'))
+            label = f'技能候选发布 {datetime.now():%Y-%m-%d %H:%M}'
+            cur.execute(
+                "SELECT id FROM ai_skill_def_versions "
+                "WHERE def_kind=%s AND def_name=%s AND content_hash=%s",
+                (kind, name, new_hash))
+            version_id = cur.fetchone()[0]
+            cur.execute("UPDATE ai_skill_def_versions SET version_label = %s "
+                        "WHERE id = %s", (label, version_id))
+            cur.execute(
+                "UPDATE ai_skill_candidates SET status='promoted', "
+                "  decided_at=NOW(), decided_by=%s, promoted_version_id=%s "
+                "WHERE id=%s",
+                (flask_g.current_user['userId'], version_id, cid))
+            expire_candidates_for_def(cur, kind, name)
+        conn.commit()
+    log_operation('update', 'ai_skill_candidates', cid, f'{kind}/{name}',
+                  f'候选发布 → 版本 {version_id}（定义文件已回写）')
+    return jsonify({'versionId': version_id, 'contentHash': new_hash,
+                    'versionLabel': label})
+
+
+@ai_execution_admin_bp.post('/skill-candidates/<cid>/reject')
+@require_permission('admin.ai_chat_admin')
+def skill_candidate_reject(cid):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_skill_candidates SET status='rejected', "
+                        "  decided_at=NOW(), decided_by=%s "
+                        "WHERE id=%s AND status IN ('pending','validated')",
+                        (flask_g.current_user['userId'], cid))
+            if cur.rowcount == 0:
+                return jsonify({'error': '候选不存在或状态不允许拒绝'}), 400
+        conn.commit()
+    log_operation('update', 'ai_skill_candidates', cid, None, '候选拒绝（O2）')
+    return jsonify({'ok': True})
