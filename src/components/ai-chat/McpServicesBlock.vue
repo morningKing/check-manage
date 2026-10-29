@@ -38,6 +38,11 @@ const anyGrouped = computed(() =>
               </li>
             </ul>
           </div>
+          <!-- 外部自定义服务：后端只回传连接状态，不回传工具清单——必须留兜底行，
+               否则分组模式下外部服务只剩名字，看起来像「被搞没了」 -->
+          <div v-if="!s.tools.length" class="mcp-tools__empty">
+            （外部服务：此处仅显示连接状态；其工具随会话注入，清单不在此展示）
+          </div>
         </template>
         <ul v-else class="mcp-tools">
           <li v-for="t in s.tools" :key="t.name">
@@ -47,7 +52,7 @@ const anyGrouped = computed(() =>
         </ul>
       </div>
     </template>
-    <div v-else class="mcp-services__empty">无法获取 MCP 服务（OpenCode 不可用）</div>
+    <div v-else class="mcp-services__empty">未获取到 MCP 服务（OpenCode 不可用，或尚未配置任何服务）</div>
   </div>
 </template>
 
