@@ -290,3 +290,29 @@ POST `/ai/chat/sessions/<sid>/skills`（`ai_chat.py:1507-1524`，`write_required
 **内置技能内容**（拟合契约的内容侧，非代码）
 
 - `skills/data-ops/SKILL.md`、`skills/trace-analyzer/SKILL.md`——frontmatter 仅 name/description，均无 `fit` 块（见 §7-12）
+
+## Agent 自我进化 P1（2026-10-28 落地，spec 2026-10-26-agent-self-evolution-design + 开源对照 oss-benchmark）
+
+### O1 统一运行诊断
+
+一次 attempt 一张结构化多维诊断（`ai_run_diagnoses`，UNIQUE(attempt_id, generator_version) 幂等 upsert），五维度固定全展示、证据缺失一律 uncertain 不冒充通过、fail 必带证据（写入前校验）：
+
+| 维度 | 来源 | 判定 |
+|---|---|---|
+| 任务结果 | ai_chat_sessions 终态 | completed→pass；failed/error→fail；其余 uncertain |
+| 规则遵从 | action_expectations 终态核对 | 任一 failed→fail；有行且无 failed（未核对的 pre/checkpoint 行不阻塞）→pass；无行→uncertain |
+| 承诺—行动一致性 | ai_execution_step_results（lazy-fill：无行时 best-effort 调既有 ensure_diagnosis_for_session 现算） | 声称完成无工具证据（completed_claimed）→fail；无行→uncertain |
+| 技能拟合 | ai_skill_fit_results | diverged/parse_error→fail；partial→pass（summary 承载）；无行→uncertain |
+| 性能 | perf_analysis attempt_payload coverage 四段 argmax | wallMs≤0→uncertain |
+
+端点：POST/GET `/ai/chat/admin/attempts/<aid>/run-diagnosis`、GET `/ai/chat/admin/run-diagnoses?rootSessionId=`（均 admin.ai_chat_admin）。批任务 finalize 后 best-effort 自动生成（`_run_one` finally 收口，失败只 warning 不影响终态）。前端 `RunDiagnosisPanel.vue` 挂 SubtaskPerfReport 抽屉（data-testid: run-diag-panel/run-diag-generate/.rd-dim[data-status]）。
+
+### O2 技能进化候选区
+
+LLM 诊断产物只进候选区（`ai_skill_candidates`），永不直接写定义文件；人工发布是唯一闸门。链路：拟合诊断（最小 diff edits + expected_repair/possibly_harmed 契约）→「生成候选」（R2：edits_hash 去重，同 (def,基线,diff) 未决候选唯一，重复 409）→ 双集回归（零 LLM：边界集=partial/diverged 近期 attempt 须改善∧恶化≤20%；保留集=fit 近期 attempt 零退化硬门槛；样本不足 2/3 → insufficient 停留 pending）→ 人工发布（回写定义文件+登记 def_versions，基线漂移 409 且未决候选自动过期）→ 回滚复用版本归档。
+
+修改分类双模（R4）：edits 触及 fit.steps 匹配面→mechanical 走双集回归；纯正文→behavioral 直接 validated（回归对它必然无变化），人工审阅后发布。R3 结构守卫：edits 禁止增删步骤 id；expect 收窄须声明 expectedRepair。R1 回灌：诊断 prompt 注入该定义最近被拒/过期候选（禁止换说法重复提交）与保留集成功行为。
+
+端点：POST/GET `/ai/chat/admin/skill-candidates`、`POST .../<cid>/validate|promote|reject`；feedback applied 可携候选草稿同事务创建。前端 `SkillCandidates.vue`（AiSkillOpt 页「进化候选」tab；data-testid: cand-validate/cand-promote/cand-reject）。E2E：`e2e/ai-full/run-diagnosis.spec.ts`、`e2e/ai-full/skill-candidates.spec.ts`（种子定义文件必须落在 config.AI_WORKSPACE_ROOT 允许根内）。
+
+安全边界（第 8 章 8.3.4 落点）：LLM 产物只写候选表；gate_policies 校验、回归门槛计算、发布端点鉴权、def_versions 归档回滚为可信根，不在进化流程可修改范围。
