@@ -58,10 +58,6 @@ graphify-out/
 # ---- Local dev scratch & runtime artifacts (not part of the project) ----
 # Root-level dev/test screenshots (docs images live under docs/ and stay tracked)
 /*.png
-# One-off local scratch scripts
-/check_disk.py
-/disk_monitor.py
-/hello.py
 # Scratch payload dumps
 msgs.json
 **/msgs.json
@@ -85,8 +81,6 @@ e2e/screenshots/
 
 # Local tooling caches & one-off personal scratch (not part of the project)
 .clawhub/
-/joinquant_strategy_v2.py
-/test_api.py
 
 # playwright 共享登录态（本地生成）
 e2e/.auth/
