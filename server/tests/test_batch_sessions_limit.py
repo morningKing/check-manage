@@ -98,7 +98,8 @@ def test_append_respects_configured_total():
              for i in range(2)]
 
     def fake_db():
-        # fetchone 次序：total 行 → MAX(batch_seq) → 每个文件 INSERT..RETURNING 一行
+        # fetchone 次序：total 行 → MAX(batch_seq) → models 行（2026-10-30
+        # 对齐多模型追加 2db0e010 新增的取数步）→ 每个文件 INSERT..RETURNING 一行
         cursor = MagicMock()
         state = {'fetches': 0}
 
@@ -108,6 +109,8 @@ def test_append_respects_configured_total():
                 return {'total': 2}
             if state['fetches'] == 2:
                 return {'m': 1}
+            if state['fetches'] == 3:
+                return {'models': None}      # 未配置多模型 → 子会话 model 置 NULL
             return {'id': f's{state["fetches"]}'}
 
         cursor.fetchone.side_effect = fetchone

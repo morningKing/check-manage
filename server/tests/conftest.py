@@ -264,6 +264,73 @@ def _bootstrap_test_db():
           f'（幂等迁移校对 {time.time() - t0:.1f}s）')
 
     _ensure_canonical_users()
+    _purge_stale_attempts()
+
+
+def _purge_stale_attempts():
+    """引导期清扫残留 attempt 行（2026-10-30，perf 慢任务榜污染修复）。
+
+    根因链：用例常种 status='running' 的 attempt 且不清理 → 下次引导时
+    2026_09_23 P1-4 孤儿清扫（迁移重放）把它们盖成 orphaned 且
+    finished_at=NOW() → 时长=started~now 的天文行永久占据
+    perf_analysis.list_slow_tasks 的「时长 DESC LIMIT 10」——任何新种子
+    （500s 量级）永远进不了榜（test_slow_tasks_carry_def_attribution 与
+    /perf/slow-tasks 端点两例因此确定性失败，实测残留 263 行）。
+
+    引导时点上任何 running/orphaned attempt 都是上一会话残留（套件约定
+    用例自含、不依赖跨会话数据）——连同子表引用一起清掉，测试库卫生
+    从此长期成立。幂等：无残留时零删除零输出。SQL 全字面量（Mimosa
+    规矩：execute 首参不拼接）。
+    """
+    import psycopg2
+    from config import DB_CONFIG
+    conn = psycopg2.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM ai_run_diagnoses WHERE attempt_id IN "
+                "(SELECT id FROM ai_execution_attempts "
+                " WHERE status IN ('orphaned','running'))")
+            n1 = cur.rowcount
+            cur.execute(
+                "DELETE FROM ai_execution_step_results WHERE attempt_id IN "
+                "(SELECT id FROM ai_execution_attempts "
+                " WHERE status IN ('orphaned','running'))")
+            n2 = cur.rowcount
+            cur.execute(
+                "DELETE FROM ai_execution_manifests WHERE attempt_id IN "
+                "(SELECT id FROM ai_execution_attempts "
+                " WHERE status IN ('orphaned','running'))")
+            n3 = cur.rowcount
+            cur.execute(
+                "DELETE FROM ai_skill_invocations WHERE attempt_id IN "
+                "(SELECT id FROM ai_execution_attempts "
+                " WHERE status IN ('orphaned','running'))")
+            n4 = cur.rowcount
+            cur.execute(
+                "DELETE FROM ai_execution_events WHERE attempt_id IN "
+                "(SELECT id FROM ai_execution_attempts "
+                " WHERE status IN ('orphaned','running'))")
+            n5 = cur.rowcount
+            cur.execute(
+                "DELETE FROM ai_skill_fit_results WHERE attempt_id IN "
+                "(SELECT id FROM ai_execution_attempts "
+                " WHERE status IN ('orphaned','running'))")
+            n6 = cur.rowcount
+            cur.execute(
+                "DELETE FROM ai_execution_prompt_snapshots WHERE attempt_id IN "
+                "(SELECT id FROM ai_execution_attempts "
+                " WHERE status IN ('orphaned','running'))")
+            n7 = cur.rowcount
+            cur.execute("DELETE FROM ai_execution_attempts "
+                        "WHERE status IN ('orphaned','running')")
+            n = cur.rowcount
+        conn.commit()
+        if n:
+            print(f'[test-db] 清扫残留 running/orphaned attempt {n} 行'
+                  f'（子表 {n1+n2+n3+n4+n5+n6+n7} 行）')
+    finally:
+        conn.close()
 
 
 def _ensure_canonical_users():
