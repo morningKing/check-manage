@@ -2,7 +2,7 @@
 
 - 日期：2026-10-31
 - 来源：用户需求「普通会话需要有 bypass 模式」；对标 Claude Code bypassPermissions
-- 状态：设计待批准
+- 状态：已实施（2026-10-31 SDD 5 任务+终审修复波收口；实施记录见 docs/superpowers/plans/2026-10-31-ai-chat-bypass-mode.md）
 
 ## 0. 范围与决策记录
 
