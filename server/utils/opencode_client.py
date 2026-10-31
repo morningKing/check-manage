@@ -83,7 +83,7 @@ class OpenCodeClient:
 
     def send_prompt_async(self, opencode_session_id: str, content: str,
                           model: str = "", directory: str = "", agent: str = "",
-                          agent_parts=None) -> None:
+                          agent_parts=None, image_parts=None) -> None:
         """Send a prompt. `model` ("<providerID>/<modelID>") is passed explicitly
         because OpenCode does NOT honor the per-directory opencode.json `model`
         field for prompt selection — without it the server falls back to its
@@ -99,8 +99,16 @@ class OpenCodeClient:
         `agent_parts` (optional): list of {name, source?} dicts; each becomes an
         OpenCode AgentPartInput {type:'agent', name, source?} appended after the
         text part, so an `@name` mention delegates to that subagent for this turn.
+
+        `image_parts` (optional): list of {name, mime, url} dicts; each becomes an
+        OpenCode file part {type:'file', mime, url} appended after the text part
+        (before agent parts). `url` is a data: URL (IMAGE_PART_MODE='dataurl',
+        see routes/ai_chat.py) or a file:// path fallback.
         """
         parts = [{"type": "text", "text": content}]
+        for img in (image_parts or []):
+            parts.append({"type": "file", "mime": img.get("mime") or "image/png",
+                          "url": img.get("url")})
         for m in (agent_parts or []):
             name = (m.get("name") or "").strip()
             if not name:

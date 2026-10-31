@@ -28,6 +28,7 @@ Routes registered:
     GET    /ai/chat/agents                list_agents
 """
 
+import base64
 import os
 import json
 import logging
@@ -1018,8 +1019,14 @@ def send_message(sid):
         mems = search_memory(user['userId'], content, limit=5)
         mem_block = render_memory_block(mems)
     prompt = _AGENT_DIRECTIVE + mem_block + content
+    image_atts = []          # (name, rel, mime) 供 dispatch 透传
     for rel in attachments:
         name = os.path.basename(rel)
+        mime = _image_mime(rel)
+        if mime:
+            stored_parts.append({'type': 'image', 'name': name, 'path': rel})
+            image_atts.append({'name': name, 'path': rel, 'mime': mime})
+            continue
         stored_parts.append({'type': 'file', 'name': name, 'path': rel})
         inlined = _read_text_attachment(workspace_path, rel)
         if inlined is not None:
@@ -1027,6 +1034,18 @@ def send_message(sid):
         else:
             abs_path = _safe_workspace_path(workspace_path, rel)
             prompt += f"\n\n[用户上传的文件 {name}，路径：{abs_path}（如需要可用工具读取）]"
+    # 图片大小闸门（Task 9）：超限直接 400，不进 dispatch。文件缺失/不可读
+    # （OSError）不拦——交给 _build_image_parts 的 file:// 降级，缺图不 500
+    # （test_image_missing_file_no_500）。
+    for img in image_atts:
+        ap_ = _safe_workspace_path(workspace_path, img['path'])
+        try:
+            oversize = ap_ and os.path.getsize(ap_) > IMAGE_MAX_BYTES
+        except OSError:
+            oversize = False
+        if oversize:
+            return jsonify({'error': 'image too large (max 5MB)',
+                            'code': 'IMAGE_TOO_LARGE'}), 400
 
     # @-mentioned files in the message text (F2): inline their contents for the
     # agent with the same text/binary handling as attachments. Agent @mentions
@@ -1135,6 +1154,7 @@ def send_message(sid):
         client.send_prompt_async(
             oc_sid, prompt.strip(), model=effective_model, directory=sess[4],
             agent=requested_agent, agent_parts=agent_mentions,
+            image_parts=_build_image_parts(workspace_path, image_atts) if image_atts else None,
         )
         if audit_attempt_id:
             execution_audit.record_event(
@@ -1151,6 +1171,7 @@ def send_message(sid):
             oc_sid = _recover_session_and_resend(
                 client, sid, sess[4], msg_id, prompt.strip(),
                 effective_model, requested_agent, agent_mentions,
+                image_parts=_build_image_parts(workspace_path, image_atts) if image_atts else None,
             )
         except _requests.RequestException as e2:
             # P0 spec §8.1: a dispatch failure must converge the turn to a
@@ -1206,8 +1227,43 @@ def _read_text_attachment(workspace_path: str, rel: str, max_bytes: int = 200_00
         return None
 
 
+IMAGE_MIMES = {'image/png': '.png', 'image/jpeg': '.jpg',
+               'image/webp': '.webp', 'image/gif': '.gif'}
+IMAGE_MAX_BYTES = 5 * 1024 * 1024
+# Task 8 spike 结论；砍掉场景本代码不存在
+IMAGE_PART_MODE = 'dataurl'   # 或 'filepath'
+
+
+def _image_mime(rel: str):
+    ext = os.path.splitext(rel)[1].lower()
+    for mime, e in IMAGE_MIMES.items():
+        if e == ext:
+            return mime
+    return None
+
+
+def _build_image_parts(workspace_path, images):
+    """images: [{name, path, mime}] → OpenCode file part 入参。URL 形态按 spike；
+    dataurl 读文件失败（缺失/权限）降级 file:// 形态，不让发消息 500。"""
+    out = []
+    for img in images:
+        abs_path = _safe_workspace_path(workspace_path, img['path'])
+        url = None
+        if IMAGE_PART_MODE == 'dataurl' and abs_path and os.path.isfile(abs_path):
+            try:
+                with open(abs_path, 'rb') as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                url = f"data:{img['mime']};base64,{b64}"
+            except OSError:
+                url = None
+        if url is None:
+            url = 'file://' + abs_path
+        out.append({'name': img['name'], 'mime': img['mime'], 'url': url})
+    return out
+
+
 def _recover_session_and_resend(client, sid, workspace_path, current_msg_id,
-                                prompt, model, agent, agent_parts):
+                                prompt, model, agent, agent_parts, image_parts=None):
     """OpenCode session 失效时：新建 session + 注入历史 + 更新绑定 + 重发。返回新的 opencode_session_id。"""
     new_oc = client.create_session(directory=workspace_path, title='恢复会话')
     history = render_history_block(sid, exclude_msg_id=current_msg_id)
@@ -1215,7 +1271,8 @@ def _recover_session_and_resend(client, sid, workspace_path, current_msg_id,
         cur = conn.cursor()
         cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s WHERE id=%s", (new_oc, sid))
     client.send_prompt_async(new_oc, (history + prompt).strip(), model=model,
-                             directory=workspace_path, agent=agent, agent_parts=agent_parts)
+                             directory=workspace_path, agent=agent, agent_parts=agent_parts,
+                             image_parts=image_parts)
     return new_oc
 
 
