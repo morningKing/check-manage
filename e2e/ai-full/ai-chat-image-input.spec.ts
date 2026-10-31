@@ -42,3 +42,23 @@ test('图片输入：粘贴入口 → 芯片 → 发送 → 气泡图片', async
     return user?.content?.some((p: any) => p.type === 'image') ? true : null
   }, { timeoutMs: 15_000, intervalMs: 1000 })
 })
+
+test('非契约图片类型：粘贴提示不支持且不产生芯片', async ({ page, request }) => {
+  // 前置段照抄主用例：建会话 → 定点清理标记 → 打开 → 等 activeId 就绪
+  const created = await api(request, 'POST', '/ai/chat/sessions', {})
+  const sid = created.json.id
+  await api(request, 'PATCH', `/ai/chat/sessions/${sid}`, { title: tag('image-input-bmp') })
+  await openChatSession(page, sid)
+  await page.waitForSelector('.composer-input textarea', { timeout: 30_000 })
+  await page.waitForSelector('.ai-chat__welcome', { state: 'detached', timeout: 30_000 })
+
+  // bmp 不在 png/jpg/jpeg/webp/gif 契约内：粘贴 → 显式 warning，不静默丢弃
+  await page.locator('.composer-input textarea').evaluate((el) => {
+    const dt = new DataTransfer()
+    dt.items.add(new File([new Uint8Array([1, 2, 3])], 'note.bmp', { type: 'image/bmp' }))
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }))
+  })
+  await expect(page.locator('.el-message').filter({ hasText: '不支持的图片格式' }))
+    .toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.attach-chip')).toHaveCount(0)
+})

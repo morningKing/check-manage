@@ -1194,14 +1194,27 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)$/i
 function isImagePath(p: string) { return IMAGE_EXT_RE.test(p) }
 
 async function uploadImageFiles(files: (File | null)[]) {
+  // 只按扩展名分流（与后端 IMAGE_MIMES 同一契约：png/jpe?g/webp/gif），
+  // 不看 f.type——否则 photo.jpeg 显示图片芯片却落成普通 file part。
+  const usable: File[] = []
+  let rejected = 0
+  for (const f of files) {
+    if (!f) continue
+    if (isImagePath(f.name)) usable.push(f)
+    else rejected++
+  }
+  // 非契约图片类型（如 bmp/HEIC）：显式提示，不再静默丢弃。全部非契约 →
+  // 只提示、不建会话不上传；混合 → 上传契约项 + 同一提示（去重：一次调用
+  // 只提示一条）。
+  if (rejected > 0) {
+    ElMessage.warning('不支持的图片格式（支持 png/jpg/jpeg/webp/gif）')
+    if (usable.length === 0) return
+  }
   // composer 在 welcome 屏也渲染：粘贴/拖拽可能先于任何会话发生，与选择器
   // 路径（onFilesPicked）对齐——先兜底建会话，否则 uploadAttachment 抛
   // 'no active session' 且无任何提示。
   if (!activeId.value) await newSession()
-  for (const f of files) {
-    // 只按扩展名分流（与后端 IMAGE_MIMES 同一契约：png/jpe?g/webp/gif），
-    // 不看 f.type——否则 photo.jpeg 显示图片芯片却落成普通 file part。
-    if (!f || !isImagePath(f.name)) continue
+  for (const f of usable) {
     try {
       await store.uploadAttachment(f)   // 内部自取 activeSessionId，落 attachments + loadFiles
     } catch { ElMessage.error('图片上传失败') }
@@ -1211,15 +1224,20 @@ async function uploadImageFiles(files: (File | null)[]) {
 function onPaste(e: ClipboardEvent) {
   const files = Array.from(e.clipboardData?.items || [])
     .filter(i => i.kind === 'file').map(i => i.getAsFile())
-  if (files.some(f => f && isImagePath(f.name))) { e.preventDefault(); void uploadImageFiles(files) }
+  // 有文件项就拦（契约图走上传；全非契约图 preventDefault + 同一 warning，
+  // 否则浏览器可能自行处理/跳转）；纯文本粘贴无文件项，不受影响。
+  if (!files.some(f => !!f)) return
+  e.preventDefault()
+  void uploadImageFiles(files)
 }
 
 function onDrop(e: DragEvent) {
+  // 无条件先拦：否则浏览器把拖入的文件当导航，整个页面被文件覆盖（终审
+  // Minor #4）。非图片文件交给 uploadImageFiles 走同一 warning。
+  e.preventDefault()
   const files = Array.from(e.dataTransfer?.files || [])
-  if (files.some(f => f && isImagePath(f.name))) {
-    e.preventDefault()
-    void uploadImageFiles(files)
-  }
+  if (files.length === 0) return
+  void uploadImageFiles(files)
 }
 
 const skillInput = ref<HTMLInputElement | null>(null)
