@@ -624,6 +624,69 @@ class TestCauseDistribution:
         assert abs(shares['idleMs'] - 850_000) <= 2_000
         assert sum(v for k, v in shares.items() if k != 'wallMs') == shares['wallMs']
 
+    def test_multi_attempt_same_session_keeps_own_windows(self, db_conn, user_id):
+        """回归钉（2026-10-31 审计）：同会话多 attempt（attempt 粒度=每次派发
+        一条）落进同一 agent 定义的任务集时，各 attempt 必须按自己的窗口聚合。
+        旧实现 windows 按 session_id 键控、后写覆盖前写——存活窗口之外的新
+        attempt 轮次/工具全被过滤（推理算 0）、旧 attempt 的区间被算进两个
+        attempt（shares 重复累计）、主导慢因张冠李戴。
+
+        种子（同一事务 NOW() 恒定 → 精确断言）：
+        - A1 窗口 [T-600,T-500]（墙钟 100s），轮 80s 无工具 → model 80 /
+          idle 20，主导 model
+        - A2 窗口 [T-400,T-300]（墙钟 100s），轮 80s 内含 bash 70s →
+          tool 70 / model 10 / idle 20，主导 tool"""
+        bid, sid = str(uuid.uuid4()), str(uuid.uuid4())
+        aid1, aid2 = str(uuid.uuid4()), str(uuid.uuid4())
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                "VALUES (%s,%s,'pf','p',1)", (bid, user_id))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id,user_id,status,batch_id,batch_seq,"
+                " opencode_session_id,workspace_path) "
+                "VALUES (%s,%s,'completed',%s,0,'oc-cause-multi','C:\\tmp\\pf')",
+                (sid, user_id, bid))
+            # attempt 粒度=每轮派发一条：(session_id, attempt_no) 唯一，须显式
+            for aid, no, s_off, f_off in ((aid1, 1, 600, 500), (aid2, 2, 400, 300)):
+                cur.execute(
+                    "INSERT INTO ai_execution_attempts (id, session_id, source_type,"
+                    " source_id, attempt_no, status, started_at, finished_at,"
+                    " effective_agent) VALUES (%s,%s,'batch',%s,%s,'completed',"
+                    " NOW() - interval '%s seconds',"
+                    " NOW() - interval '%s seconds', 'multi-a')",
+                    (aid, sid, bid, no, s_off, f_off))
+            # 轮次行：created_at 落在各自 attempt 窗口内（A1 的行在 A2 窗口外、
+            # 反之亦然——旧实现按存活窗口过滤时 A2 的行必然被丢）
+            for aid, m_off, dur in ((aid1, 590, 80_000), (aid2, 390, 80_000)):
+                cur.execute(
+                    "INSERT INTO ai_chat_messages (id, session_id, role, content,"
+                    " meta, created_at) VALUES (%s,%s,'assistant','[]'::jsonb,"
+                    " jsonb_build_object('durationMs',%s),"
+                    " NOW() - interval '%s seconds')",
+                    (f'{aid}-m0', sid, dur, m_off))
+            # A2 的工具：[T-380,T-310] ⊆ 轮窗 [T-390,+80s]；occurred_at T-360
+            # 在 A2 窗口内、A1 窗口外
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " part_id, tool, args_text, state, occurred_at, started_at,"
+                " duration_ms) VALUES ('oc-cause-multi', %s, 'p-multi', 'bash',"
+                " '{}', 'completed', NOW() - interval '360 seconds',"
+                " NOW() - interval '380 seconds', 70000)", (sid,))
+        db_conn.commit()
+        dist = definition_cause_distribution(db_conn, 'agent', 'multi-a')
+        assert dist['taskCount'] == 2
+        causes = {c['attemptId']: c['dominant'] for c in dist['taskCauses']}
+        assert causes[aid1] == 'model' and causes[aid2] == 'tool'
+        assert dist['dominantCounts'] == {'model': 1, 'tool': 1,
+                                          'wait': 0, 'idle': 0}
+        shares = dist['shares']
+        assert shares['wallMs'] == 200_000
+        assert shares['toolMs'] == 70_000
+        assert shares['modelMs'] == 90_000        # 80s(A1) + 10s(A2 净)
+        assert shares['idleMs'] == 40_000         # 20s + 20s
+        assert shares['subagentWaitMs'] == 0
+
     def test_running_attempt_excluded(self, db_conn, user_id):
         _b, _s, aid = _seed_perf(db_conn, user_id)
         with db_conn.cursor() as cur:

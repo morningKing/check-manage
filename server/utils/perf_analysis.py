@@ -551,10 +551,12 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
 
     列表口径的 modelMs 是毛值（轮内工具未拆出），聚合必须拆准四段——但不
     逐任务走 detail（每任务 2-3 查询过重）：按 session 集合三条批量查询
-    （消息/子代理/工具调用），Python 侧按各自会话窗口过滤（批量 SQL 无法
-    逐会话给窗），逐任务跑 coverage_split。轮窗锚点/子代理终点截断/工具
-    occurred_at 夹窗均与 _attempt_metrics 同口径。证据口径与下钻/概览一致
-    （skill 只认 runtime 确认调用）。SQL 字面量内联、全部 %s 参数化。"""
+    （消息/子代理/工具调用），Python 侧按 attempt 窗口归属过滤（批量 SQL
+    无法逐会话给窗；attempt 粒度=每次派发一条，同会话多 attempt 时窗口
+    字典按会话键控会互相覆盖——2026-10-31 审计修复，见 _owning_attempt），
+    逐任务跑 coverage_split。轮窗锚点/子代理终点截断/工具 occurred_at 夹窗
+    均与 _attempt_metrics 同口径。证据口径与下钻/概览一致（skill 只认
+    runtime 确认调用）。SQL 字面量内联、全部 %s 参数化。"""
     seg_keys = ('model', 'wait', 'tool', 'idle')
     zero = {'wallMs': 0, 'modelMs': 0, 'toolMs': 0, 'subagentWaitMs': 0,
             'idleMs': 0}
@@ -597,8 +599,25 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
                         'dominantCounts': {k: 0 for k in seg_keys},
                         'taskCauses': []}
             sids = [r[1] for r in rows]
-            windows = {r[1]: (_to_ms(r[2]) or 0, _to_ms(r[3]) or _now_ms())
-                       for r in rows}
+            # 每 attempt 自己的窗口（attempt 粒度=每次派发一条，同会话可有多
+            # 条——窗口归属必须按 attempt 而非会话，见 _owning_attempt）
+            by_session: dict = {}
+            window_by_aid: dict = {}
+            for aid, rsid, a_st, a_fin in rows:
+                lo = _to_ms(a_st) or 0
+                hi = _to_ms(a_fin) or _now_ms()
+                window_by_aid[aid] = (lo, hi)
+                by_session.setdefault(rsid, []).append((aid, lo, hi))
+
+            def _owning_attempt(rsid: str, ts: int):
+                """时间戳 → 包含它的 attempt 窗口（轮窗互斥，至多一个；异常
+                重叠取后派发的）。无归属返回 None——该行不进聚合（与旧实现
+                的窗外过滤同语义，只是从「唯一会话窗口」变成「逐 attempt」）。"""
+                for aid, lo, hi in by_session.get(rsid, []):
+                    if lo <= ts <= hi:
+                        return aid, lo, hi
+                return None
+
             cur.execute(
                 "SELECT session_id, created_at, meta FROM ai_chat_messages"
                 " WHERE session_id = ANY(%s) AND role = 'assistant'"
@@ -606,13 +625,15 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
             model_ivs: dict = {}
             for msid, m_created, m_meta in cur.fetchall():
                 meta = m_meta or {}
-                lo, hi = windows[msid]
                 cms = _to_ms(m_created)
-                if cms is None or not (lo <= cms <= hi):
+                if cms is None:
+                    continue
+                own = _owning_attempt(msid, cms)
+                if own is None:
                     continue
                 anchor = _iso_ms(meta['startedAt']) if meta.get('startedAt') else cms
                 dur = int(meta['durationMs'])
-                model_ivs.setdefault(msid, []).append((anchor, anchor + dur))
+                model_ivs.setdefault(own[0], []).append((anchor, anchor + dur))
             cur.execute(
                 "SELECT root_session_id, created_at, completed_at"
                 " FROM ai_chat_subtasks WHERE root_session_id = ANY(%s)"
@@ -622,10 +643,13 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
                 s_ms = _to_ms(s_created)
                 if s_ms is None:
                     continue
+                own = _owning_attempt(rsid, s_ms)
+                if own is None:
+                    continue
                 e_ms = _to_ms(s_finished)
                 if e_ms is None:
-                    e_ms = windows[rsid][1]   # 中断残留/旧数据按 attempt 终点截断
-                sub_ivs.setdefault(rsid, []).append((s_ms, e_ms))
+                    e_ms = own[2]   # 中断残留/旧数据按所属 attempt 终点截断
+                sub_ivs.setdefault(own[0], []).append((s_ms, e_ms))
             cur.execute(
                 "SELECT root_session_id, tool, started_at, duration_ms, occurred_at"
                 " FROM agent_tool_calls WHERE root_session_id = ANY(%s)"
@@ -633,22 +657,24 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
             tool_ivs: dict = {}
             task_ivs: dict = {}
             for rsid, t_tool, t_start, t_dur, t_occ in cur.fetchall():
-                lo, hi = windows[rsid]
                 occ = _to_ms(t_occ)
-                if occ is None or not (lo <= occ <= hi):
+                if occ is None:
+                    continue
+                own = _owning_attempt(rsid, occ)
+                if own is None:
                     continue
                 s_ms = int(_to_ms(t_start))
                 iv = (s_ms, s_ms + int(t_dur))
                 bucket = task_ivs if t_tool == 'task' else tool_ivs
-                bucket.setdefault(rsid, []).append(iv)
+                bucket.setdefault(own[0], []).append(iv)
     shares = dict(zero)
     counts = {k: 0 for k in seg_keys}
     causes: list = []
-    for aid, sid, _st, _fin in rows:
-        lo, hi = windows[sid]
-        cov = coverage_split(lo, hi, model_ivs.get(sid, []),
-                             sub_ivs.get(sid, []), tool_ivs.get(sid, []),
-                             task_ivs.get(sid, []))
+    for aid, _sid, _st, _fin in rows:
+        lo, hi = window_by_aid[aid]
+        cov = coverage_split(lo, hi, model_ivs.get(aid, []),
+                             sub_ivs.get(aid, []), tool_ivs.get(aid, []),
+                             task_ivs.get(aid, []))
         for k in shares:
             shares[k] += cov[k]
         if cov['wallMs'] > 0:
