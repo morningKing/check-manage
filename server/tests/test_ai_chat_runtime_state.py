@@ -6,7 +6,8 @@
   listener 活着（浏览器断开不影响 running 判定）；
 - 返回 lastMessageId 供前端增量补齐。
 """
-import sys, os
+import sys, os, uuid
+import pytest
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
 
@@ -86,3 +87,56 @@ def test_runtime_state_other_users_session_404(dev_headers):
 def test_runtime_state_requires_login():
     r = _call()
     assert r.status_code == 401
+
+
+# ── GET /sessions/running-states（侧边栏「执行中」批量指示） ──────────────
+# 契约：listener 活跃集合 ∩ 本人 active 会话——内存注册表里的他人/已删/ghost
+# id 一律不可外泄；无 listener 时短路返回空数组。
+
+@pytest.fixture
+def _running_states_rows(db_conn):
+    ids = {k: f'sess_rs_{k}_{uuid.uuid4().hex[:6]}' for k in
+           ('admin_a', 'admin_b', 'admin_closed', 'dev_a')}
+    cur = db_conn.cursor()
+    cur.execute(
+        "INSERT INTO ai_chat_sessions (id, user_id, title, status) VALUES "
+        "(%s, 'user-admin', 'rs-a', 'active'), "
+        "(%s, 'user-admin', 'rs-b', 'active'), "
+        "(%s, 'user-admin', 'rs-closed', 'closed'), "
+        "(%s, 'user-dev', 'rs-dev', 'active')",
+        (ids['admin_a'], ids['admin_b'], ids['admin_closed'], ids['dev_a']))
+    db_conn.commit()
+    yield ids
+    cur.execute("DELETE FROM ai_chat_sessions WHERE id = ANY(%s)",
+                (list(ids.values()),))
+    db_conn.commit()
+
+
+def _running_states_call(headers=None, live=None):
+    with patch('routes.ai_chat.live_listener_sids', lambda: live or set()):
+        return _client().get('/ai/chat/sessions/running-states', headers=headers)
+
+
+def test_running_states_only_own_active_sessions(_running_states_rows, admin_headers):
+    ids = _running_states_rows
+    live = set(ids.values()) | {'sess_ghost'}
+    r = _running_states_call(headers=admin_headers, live=live)
+    assert r.status_code == 200
+    assert sorted(r.get_json()['runningSessionIds']) == sorted(
+        [ids['admin_a'], ids['admin_b']])
+
+
+def test_running_states_other_user_gets_own_sessions(_running_states_rows, dev_headers):
+    ids = _running_states_rows
+    r = _running_states_call(headers=dev_headers, live=set(ids.values()))
+    assert r.get_json()['runningSessionIds'] == [ids['dev_a']]
+
+
+def test_running_states_empty_when_no_live_listeners(admin_headers):
+    r = _running_states_call(headers=admin_headers, live=set())
+    assert r.status_code == 200
+    assert r.get_json()['runningSessionIds'] == []
+
+
+def test_running_states_requires_login():
+    assert _running_states_call().status_code == 401

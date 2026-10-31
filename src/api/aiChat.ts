@@ -180,6 +180,13 @@ export function listSessions() {
   }>('/ai/chat/sessions')
 }
 
+/** 侧边栏「执行中」批量指示：当前用户回合在跑（服务端 listener 活跃）的会话 id。 */
+export function getRunningSessions() {
+  return get<{ runningSessionIds: string[] }>(
+    '/ai/chat/sessions/running-states', undefined, { silent: true },
+  )
+}
+
 // ── 会话自定义分组（轨迹分析为系统分组，不在此列） ─────────────────────
 export function listSessionGroups() {
   return get<{ groups: AiSessionGroup[] }>('/ai/chat/session-groups')

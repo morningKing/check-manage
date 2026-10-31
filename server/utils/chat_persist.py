@@ -804,3 +804,11 @@ def has_listener(sid):
     with _lock:
         t = _listeners.get(sid)
         return bool(t and t.is_alive())
+
+
+def live_listener_sids():
+    """Ids of all sessions with a live persistence listener (i.e. a turn is in
+    flight server-side). Feeds the bulk running-states endpoint: one in-memory
+    snapshot instead of per-session has_listener() calls."""
+    with _lock:
+        return {sid for sid, t in _listeners.items() if t.is_alive()}

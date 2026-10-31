@@ -1017,6 +1017,13 @@ function batchStatusLabel(s: string) {
             partial: '部分完成' } as Record<string, string>)[s] || s
 }
 
+// 侧边栏「执行中」状态图标的服务端数据源：轻量批量端点轮询。本标签页
+// streaming 即时生效，这里补的是跨标签页/刷新后仍在跑的回合（服务端真相）。
+let runningPollTimer: ReturnType<typeof setInterval> | null = null
+function stopRunningPoll() {
+  if (runningPollTimer) { clearInterval(runningPollTimer); runningPollTimer = null }
+}
+
 onMounted(async () => {
   await restoreFromQuery()
   // pre-fetch models and agents for the dropdowns (best-effort)
@@ -1024,9 +1031,12 @@ onMounted(async () => {
   fetchAgents()
   // load batch list for the unified sidebar
   batches.fetchList().then(() => batches.startListPolling()).catch(() => {})
+  store.refreshRunningSessions()
+  runningPollTimer = setInterval(() => { store.refreshRunningSessions() }, 5000)
 })
 onUnmounted(() => {
   batches.stopListPolling()
+  stopRunningPoll()
   if (_sessionSearchTimer) clearTimeout(_sessionSearchTimer)
 })
 
@@ -1495,6 +1505,7 @@ function onKey(e: Event) {
               >
                 <ElIcon class="pinned-item__pin"><Top /></ElIcon>
                 <span class="session-item__title">{{ s.title || '新会话' }}</span>
+                <ElIcon v-if="store.isSessionRunning(s.id)" class="session-item__running is-loading" title="执行中"><Loading /></ElIcon>
                 <SessionRowActions
                   :s="{ id: s.id, title: s.title, status: s.status, pinned: true }"
                   @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
@@ -1511,6 +1522,7 @@ function onKey(e: Event) {
                 @click="selectSession(s.id)"
               >
                 <span class="session-item__title">{{ s.title || '新会话' }}</span>
+                <ElIcon v-if="store.isSessionRunning(s.id)" class="session-item__running is-loading" title="执行中"><Loading /></ElIcon>
                 <SessionRowActions
                   :s="{ id: s.id, title: s.title, status: s.status }"
                   @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
@@ -1542,6 +1554,7 @@ function onKey(e: Event) {
                   @click="selectSession(s.id)"
                 >
                   <span class="session-item__title">{{ s.title || '新会话' }}</span>
+                  <ElIcon v-if="store.isSessionRunning(s.id)" class="session-item__running is-loading" title="执行中"><Loading /></ElIcon>
                   <SessionRowActions
                     :s="{ id: s.id, title: s.title, status: s.status }"
                     @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
@@ -1570,6 +1583,7 @@ function onKey(e: Event) {
                 @click="selectSession(a.id)"
               >
                 <span class="session-item__title">{{ a.title || '轨迹分析' }}</span>
+                <ElIcon v-if="store.isSessionRunning(a.id)" class="session-item__running is-loading" title="执行中"><Loading /></ElIcon>
               </div>
             </div>
           </div>
@@ -2315,6 +2329,13 @@ function onKey(e: Event) {
   // 标题占满剩余空间保持靠左：space-between 下若行首多出常驻图标（置顶 ↑），
   // 标题会被摊到中间偏右；flex:1 + min-width:0 同时保证省略号在 hover 出操作区时仍生效
   &__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  // 「执行中」状态图标：is-loading 借 EP 全局旋转动画
+  &__running {
+    flex: none;
+    margin-left: 4px;
+    font-size: 13px;
+    color: var(--el-color-primary);
+  }
   &__actions { display: none; gap: 6px; .el-icon { &:hover { color: var(--el-color-primary); } } }
   &:hover &__actions { display: flex; }
   &.is-closed { opacity: 0.55; }

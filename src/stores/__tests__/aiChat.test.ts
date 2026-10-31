@@ -8,6 +8,7 @@ import { setActivePinia, createPinia } from 'pinia'
 vi.mock('@/api/aiChat', () => ({
   createSession: vi.fn(),
   listSessions: vi.fn(),
+  getRunningSessions: vi.fn(),
   renameSession: vi.fn(),
   deleteSession: vi.fn(),
   clearSession: vi.fn(),
@@ -329,5 +330,41 @@ describe('useAiChatStore', () => {
     expect(store.sessions.find(s => s.id === 'sess_1')?.status).toBe('active')
     // active session reconnects to the fresh OpenCode context
     expect(vi.mocked(api.createEventStream).mock.calls.length).toBe(streamCallsBefore + 1)
+  })
+})
+
+describe('runningSessions（侧边栏「执行中」指示）', () => {
+  it('isSessionRunning 取本页 streaming 与服务端轮询集合的并集', async () => {
+    vi.mocked(api.getRunningSessions).mockResolvedValue({ runningSessionIds: ['sess_srv'] })
+    const store = useAiChatStore()
+    expect(store.isSessionRunning('sess_srv')).toBe(false)
+    await store.refreshRunningSessions()
+    expect(store.isSessionRunning('sess_srv')).toBe(true)
+    // 本标签页正在流式输出的回合无需等服务端轮询
+    store.streaming['sess_local'] = true
+    expect(store.isSessionRunning('sess_local')).toBe(true)
+    expect(store.isSessionRunning('sess_none')).toBe(false)
+  })
+
+  it('refreshRunningSessions 整体替换：已结束的回合随下一轮轮询收敛', async () => {
+    vi.mocked(api.getRunningSessions)
+      .mockResolvedValueOnce({ runningSessionIds: ['sess_a', 'sess_b'] })
+      .mockResolvedValue({ runningSessionIds: ['sess_a'] })
+    const store = useAiChatStore()
+    await store.refreshRunningSessions()
+    expect(store.isSessionRunning('sess_b')).toBe(true)
+    await store.refreshRunningSessions()
+    expect(store.isSessionRunning('sess_b')).toBe(false)
+    expect(store.isSessionRunning('sess_a')).toBe(true)
+  })
+
+  it('轮询失败静默保留旧集合', async () => {
+    vi.mocked(api.getRunningSessions)
+      .mockResolvedValueOnce({ runningSessionIds: ['sess_a'] })
+      .mockRejectedValueOnce(new Error('network down'))
+    const store = useAiChatStore()
+    await store.refreshRunningSessions()
+    await store.refreshRunningSessions()
+    expect(store.isSessionRunning('sess_a')).toBe(true)
   })
 })

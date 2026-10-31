@@ -10,6 +10,7 @@
 import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession,
+  getRunningSessions,
   createSessionGroup, renameSessionGroup as apiRenameSessionGroup,
   deleteSessionGroup as apiDeleteSessionGroup,
   moveSessionToGroup as apiMoveSessionToGroup,
@@ -87,6 +88,12 @@ interface State {
   /** 大纲拉取失败标记（面板行内重试；失败保留旧列表） */
   turnsError: Record<string, boolean>
   streaming: Record<string, boolean>
+  /**
+   * 服务端真相的「回合在跑」会话集合（running-states 端点轮询维护）。
+   * 本标签页的 streaming 只覆盖自己发出/订阅的回合；跨标签页、页面刷新后
+   * 仍在跑的回合只有服务端知道。侧边栏状态图标取两者并集（isSessionRunning）。
+   */
+  runningSessions: Record<string, boolean>
   reasoning: Record<string, string>
   thinking: Record<string, boolean>
   attachments: Record<string, PendingAttachment[]>
@@ -240,6 +247,7 @@ export const useAiChatStore = defineStore('aiChat', {
     turnsBySession: {} as Record<string, SessionTurn[]>,
     turnsError: {} as Record<string, boolean>,
     streaming: {},
+    runningSessions: {},
     reasoning: {},
     thinking: {},
     attachments: {},
@@ -273,6 +281,10 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     isStreaming(state): boolean {
       return state.activeSessionId ? !!state.streaming[state.activeSessionId] : false
+    },
+    /** 侧边栏「执行中」判定：本标签页在流 ＋ 服务端监听仍活的回合（并集）。 */
+    isSessionRunning(state) {
+      return (id: string) => !!(state.streaming[id] || state.runningSessions[id])
     },
     activeAttachments(state): PendingAttachment[] {
       return state.activeSessionId ? state.attachments[state.activeSessionId] ?? [] : []
@@ -339,6 +351,16 @@ export const useAiChatStore = defineStore('aiChat', {
         id: s.id, title: s.title, status: s.status,
         targetSessionId: s.targetSessionId ?? null,
       }))
+    },
+
+    /** 侧边栏状态图标的数据源：整体替换，轮询失败静默（保留旧值，下轮收敛）。 */
+    async refreshRunningSessions() {
+      try {
+        const { runningSessionIds } = await getRunningSessions()
+        const next: Record<string, boolean> = {}
+        for (const id of runningSessionIds || []) next[id] = true
+        this.runningSessions = next
+      } catch { /* 指示器尽力而为，不打扰用户 */ }
     },
 
     // ── 自定义分组 ───────────────────────────────────────────────────────

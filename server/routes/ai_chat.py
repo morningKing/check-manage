@@ -61,7 +61,7 @@ from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
 from utils import agent_ledger
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
-    has_listener,
+    has_listener, live_listener_sids,
 )
 from utils.session_token import generate_token, revoke_token
 from utils.subtask_repo import get_subtask_messages
@@ -592,6 +592,29 @@ def list_sessions():
             for r in analysis_rows
         ],
     })
+
+
+@ai_chat_bp.route('/sessions/running-states', methods=['GET'])
+@login_required
+def running_states():
+    """Bulk sidebar indicator: ids of the current user's sessions whose turn is
+    in flight right now. Same server-side criterion as the per-session
+    runtime-state endpoint (`turnStatus==='running'` ⇔ a live persistence
+    listener), intersected with the user's own active sessions — the in-memory
+    listener registry alone would leak other users' (and deleted) session ids."""
+    user = flask_g.current_user
+    live = live_listener_sids()
+    if not live:
+        return jsonify({'runningSessionIds': []})
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM ai_chat_sessions "
+            "WHERE user_id = %s AND status = 'active' AND id = ANY(%s)",
+            (user['userId'], list(live)),
+        )
+        rows = cur.fetchall()
+    return jsonify({'runningSessionIds': [r[0] for r in rows]})
 
 
 @ai_chat_bp.route('/sessions/search', methods=['GET'])
