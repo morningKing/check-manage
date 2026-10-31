@@ -1172,21 +1172,29 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)$/i
 function isImagePath(p: string) { return IMAGE_EXT_RE.test(p) }
 
 async function uploadImageFiles(files: (File | null)[]) {
+  // composer 在 welcome 屏也渲染：粘贴/拖拽可能先于任何会话发生，与选择器
+  // 路径（onFilesPicked）对齐——先兜底建会话，否则 uploadAttachment 抛
+  // 'no active session' 且无任何提示。
+  if (!activeId.value) await newSession()
   for (const f of files) {
-    if (!f || !f.type.startsWith('image/')) continue
-    await store.uploadAttachment(f)   // 内部自取 activeSessionId，落 attachments + loadFiles
+    // 只按扩展名分流（与后端 IMAGE_MIMES 同一契约：png/jpe?g/webp/gif），
+    // 不看 f.type——否则 photo.jpeg 显示图片芯片却落成普通 file part。
+    if (!f || !isImagePath(f.name)) continue
+    try {
+      await store.uploadAttachment(f)   // 内部自取 activeSessionId，落 attachments + loadFiles
+    } catch { ElMessage.error('图片上传失败') }
   }
 }
 
 function onPaste(e: ClipboardEvent) {
   const files = Array.from(e.clipboardData?.items || [])
     .filter(i => i.kind === 'file').map(i => i.getAsFile())
-  if (files.some(Boolean)) { e.preventDefault(); void uploadImageFiles(files) }
+  if (files.some(f => f && isImagePath(f.name))) { e.preventDefault(); void uploadImageFiles(files) }
 }
 
 function onDrop(e: DragEvent) {
   const files = Array.from(e.dataTransfer?.files || [])
-  if (files.some(f => f.type.startsWith('image/'))) {
+  if (files.some(f => f && isImagePath(f.name))) {
     e.preventDefault()
     void uploadImageFiles(files)
   }

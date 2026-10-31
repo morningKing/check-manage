@@ -14,6 +14,8 @@ test.setTimeout(420_000)
 test('图片输入：粘贴入口 → 芯片 → 发送 → 气泡图片', async ({ page, request }) => {
   const created = await api(request, 'POST', '/ai/chat/sessions', {})
   const sid = created.json.id
+  // dev-DB 定点清理标记（同 feedback/session-core 套件）：会话标题带 tag。
+  await api(request, 'PATCH', `/ai/chat/sessions/${sid}`, { title: tag('image-input') })
   await openChatSession(page, sid)
   await page.waitForSelector('.composer-input textarea', { timeout: 30_000 })
   // 会话激活同步：composer 不受 activeId 门控（textarea 先于 openSession 完成出现），
