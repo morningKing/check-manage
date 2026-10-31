@@ -46,6 +46,40 @@ def event_session_id(props):
     return None
 
 
+def _auto_approve_if_bypass(sid, evt, parent_oc_sid, state, directory):
+    """bypass 会话的权限询问自动放行（bypass spec 2026-10-31 §1/§2.3）。
+
+    事件时查库读 permission_mode（询问稀有，一次索引查可忽略；保证中途
+    翻转对后续询问即时生效，无缓存失同步）。归属与 reply_permission._owned
+    同款：父会话自己的询问 + 本会话委派的子代理（state['subtasks'] 已注册
+    的 child oc id）的询问都按父会话模式处理。best-effort：任何异常只落
+    日志、绝不阻断持久化主循环——失败最坏结果是回落手动权限卡（fail-open），
+    不会卡死回合。
+    """
+    try:
+        if not isinstance(evt, dict) or evt.get('event') != 'permission.asked':
+            return
+        props = (evt.get('data') or {}).get('properties') or {}
+        req_id = props.get('id')
+        if not req_id:
+            return
+        evt_sid = event_session_id(props) or props.get('sessionID') or ''
+        if evt_sid != parent_oc_sid and evt_sid not in (state.get('subtasks') or {}):
+            return
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT permission_mode FROM ai_chat_sessions WHERE id=%s",
+                        (sid,))
+            row = cur.fetchone()
+        if not row or row[0] != 'bypass':
+            return
+        get_runtime().get_client().reply_permission(req_id, 'once', directory=directory)
+        logger.info('permission auto-approved (bypass) session=%s request=%s type=%s',
+                    sid, req_id, props.get('permission') or 'unknown')
+    except Exception as e:
+        logger.warning('permission auto-approve skipped session=%s: %s', sid, e)
+
+
 def new_state():
     """Fresh per-turn accumulator. `subtasks` maps a child OpenCode sessionID
     to its own nested accumulator (see `_new_subtask_scope`), discovered
@@ -672,6 +706,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
     for evt in event_source:
         sig = apply_event(state, evt, opencode_session_id)
         _audit_capture(evt)
+        _auto_approve_if_bypass(sid, evt, opencode_session_id, state, directory)
         if sig == 'subtask':
             # 子代理相关信号可能只改了它自己的内容/状态，也可能是顶层第一次
             # 发现委托——两种情况都要把顶层重新 flatten 一遍：占位气泡的
