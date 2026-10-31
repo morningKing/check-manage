@@ -101,23 +101,28 @@ def test_image_attachment_parts(setup, tmp_path):
     ws = tmp_path / 'ws'
     (ws / 'uploads').mkdir(parents=True)
     (ws / 'uploads' / 'x.png').write_bytes(b'\x89PNG\r\n\x1a\n' + b'0' * 32)
+    (ws / 'uploads' / 'y.jpeg').write_bytes(b'\xff\xd8\xff\xe0' + b'0' * 32)
     (ws / 'uploads' / 'a.txt').write_text('hello', encoding='utf-8')
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
                                     str(ws), None, None)
     resp = client.post(
         '/ai/chat/sessions/sess_x/messages',
-        json={'content': '看图', 'attachments': ['uploads/x.png', 'uploads/a.txt']},
+        json={'content': '看图', 'attachments': ['uploads/x.png', 'uploads/a.txt',
+                                                 'uploads/y.jpeg']},
         headers=dev_h,
     )
     assert resp.status_code == 202
     args, kwargs = oc.send_prompt_async.call_args
     assert 'hello' in args[1]                       # 文本仍内联
     ip = kwargs['image_parts']
-    assert ip == [{'name': 'x.png', 'mime': 'image/png', 'url': ip[0]['url']}]
+    assert ip == [{'name': 'x.png', 'mime': 'image/png', 'url': ip[0]['url']},
+                  {'name': 'y.jpeg', 'mime': 'image/jpeg', 'url': ip[1]['url']}]
     if IMAGE_PART_MODE == 'dataurl':
         assert ip[0]['url'].startswith('data:image/png;base64,')
+        assert ip[1]['url'].startswith('data:image/jpeg;base64,')
     else:
         assert ip[0]['url'].startswith('file://')
+        assert ip[1]['url'].startswith('file://')
     # 非图片二进制走既有 file 分支，不进 image_parts
     resp = client.post(
         '/ai/chat/sessions/sess_x/messages',

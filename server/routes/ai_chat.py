@@ -1227,8 +1227,10 @@ def _read_text_attachment(workspace_path: str, rel: str, max_bytes: int = 200_00
         return None
 
 
-IMAGE_MIMES = {'image/png': '.png', 'image/jpeg': '.jpg',
-               'image/webp': '.webp', 'image/gif': '.gif'}
+# mime -> 扩展名元组：jpg/jpeg 同属 image/jpeg（前端 isImagePath 的 jpe?g
+# 与这里必须一致，否则 photo.jpeg 显示图片芯片却落成普通 file part）。
+IMAGE_MIMES = {'image/png': ('.png',), 'image/jpeg': ('.jpg', '.jpeg'),
+               'image/webp': ('.webp',), 'image/gif': ('.gif',)}
 IMAGE_MAX_BYTES = 5 * 1024 * 1024
 # Task 8 spike 结论；砍掉场景本代码不存在
 IMAGE_PART_MODE = 'dataurl'   # 或 'filepath'
@@ -1236,8 +1238,8 @@ IMAGE_PART_MODE = 'dataurl'   # 或 'filepath'
 
 def _image_mime(rel: str):
     ext = os.path.splitext(rel)[1].lower()
-    for mime, e in IMAGE_MIMES.items():
-        if e == ext:
+    for mime, exts in IMAGE_MIMES.items():
+        if ext in exts:
             return mime
     return None
 
@@ -1257,7 +1259,9 @@ def _build_image_parts(workspace_path, images):
             except OSError:
                 url = None
         if url is None:
-            url = 'file://' + abs_path
+            # abs_path 可为 None（非法路径安全解析失败）：file://+'' 降级为
+            # 占位 URL，不向上抛 TypeError 打破本函数"不让发消息 500"的约定。
+            url = 'file://' + (abs_path or '')
         out.append({'name': img['name'], 'mime': img['mime'], 'url': url})
     return out
 
@@ -1304,6 +1308,19 @@ def _render_export_parts(parts) -> str:
             lines.append(f"- 📎 {p.get('name')}")
         elif t == 'image':
             lines.append(f"- 🖼️ {p.get('name')}")
+        elif t == 'subtask_use':
+            # 委托子代理占位（chat_persist._flatten_scope 落库形状：subtaskId/
+            # agent/description/status/segmentCount）——归档不许静默丢（spec B.1）。
+            name = p.get('agent') or p.get('subtaskId') or '子代理'
+            lines.append(f"<details><summary>🧩 子代理 {name}（{p.get('status') or '未知'}）</summary>\n\n"
+                         f"{p.get('description') or ''}\n\n</details>")
+        elif t == 'error' and p.get('text'):
+            # 回合级错误留痕（chat_persist scope['error'] 落库形状 {'text'}）。
+            lines.append(f"> ⚠️ {p['text']}")
+        elif t == 'run_result':
+            # run_script 运行结果（ai_chat.run_script 落库形状）。
+            extra = '，超时' if p.get('timedOut') else ''
+            lines.append(f"- 🧾 {p.get('filename')}（exit {p.get('exitCode')}{extra}）")
     return '\n\n'.join(lines)
 
 
@@ -2477,7 +2494,9 @@ def export_session_markdown(sid):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT title FROM ai_chat_sessions WHERE id=%s", (sid,))
-        title = cur.fetchone()[0] or '会话'
+        # 所有权校验与 SELECT 之间存在 TOCTOU：会话被并发删除时 fetchone()
+        # 返回 None，直接 [0] 会 TypeError→500（查 rows 空分支同款兜底）。
+        title = (cur.fetchone() or ['会话'])[0] or '会话'
         cur.execute("SELECT role, content FROM ai_chat_messages "
                     "WHERE session_id=%s ORDER BY seq", (sid,))
         rows = [(r[0], r[1] if isinstance(r[1], list) else []) for r in cur.fetchall()]

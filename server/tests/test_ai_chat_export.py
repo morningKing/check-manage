@@ -58,7 +58,16 @@ def test_render_markdown_all_part_types():
                   {'type': 'file', 'name': 'a.csv', 'path': 'uploads/a.csv'}]),
         ('assistant', [{'type': 'text', 'text': '好的，见下表'},
                        {'type': 'tool_use', 'name': 'read_csv', 'input': {'path': 'a.csv'}},
-                       {'type': 'image', 'name': 'chart.png', 'path': 'uploads/chart.png'}]),
+                       {'type': 'image', 'name': 'chart.png', 'path': 'uploads/chart.png'},
+                       # 三类已持久化 part 不许静默丢（spec B.1）；字段形状取自
+                       # 落库点：subtask_use/error 出自 chat_persist._flatten_scope
+                       # （opencode_parts.map_part 映射后剥 'time'），run_result
+                       # 出自 routes/ai_chat.run_script。
+                       {'type': 'subtask_use', 'subtaskId': 'ses_child1', 'agent': 'explore',
+                        'description': '查找引用点', 'status': 'completed', 'segmentCount': 2},
+                       {'type': 'error', 'text': 'ProviderAuthError: 未配置 API key'},
+                       {'type': 'run_result', 'filename': 'script.py', 'exitCode': 1,
+                        'timedOut': True, 'stdout': '', 'stderr': 'boom', 'outputFiles': []}]),
     ]
     md = _render_export_markdown('测试会话', rows)
     assert md.startswith('# 测试会话')
@@ -66,6 +75,12 @@ def test_render_markdown_all_part_types():
     assert '看下 @data/a.csv' in md
     assert '<details><summary>🔧 read_csv</summary>' in md
     assert '- 📎 a.csv' in md and '- 🖼️ chart.png' in md
+    # subtask_use → 折叠块（agent 名 + 状态进 summary，description 折叠内容）
+    assert '<details><summary>🧩 子代理 explore（completed）</summary>' in md
+    assert '查找引用点' in md
+    # error → 引用行；run_result → 单行（timedOut 追加「超时」）
+    assert '> ⚠️ ProviderAuthError: 未配置 API key' in md
+    assert '- 🧾 script.py（exit 1，超时）' in md
 
 
 def test_export_filename_safety():
