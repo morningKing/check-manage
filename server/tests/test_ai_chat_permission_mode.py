@@ -187,3 +187,34 @@ def test_toggle_batch_controlled_409(setup):
     r = client.patch('/ai/chat/sessions/sess_x/permission-mode',
                      json={'mode': 'bypass'}, headers=dev_h)
     assert r.status_code == 409 and r.get_json()['code'] == 'BATCH_CONTROLLED'
+
+
+def test_toggle_backfill_failure_rolls_back(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    # mock 形状修正（对计划稿的偏差）：修复后的端点在 UPDATE 前多一次
+    # SELECT permission_mode 以取回滚基准 _prev，静态 return_value 会让该
+    # 次读取复用会话行、_row[0] 拿到 id 列 'sess_x' 而非模式值——按套件
+    # 惯例改 side_effect：第 1 次=会话行加载，第 2 次=_prev 读取（'ask'）。
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc_sess_42', 'ask', '/tmp/ws', None, None),
+        ('ask',),
+    ]
+    oc.get_messages.return_value = []
+    oc.list_permissions.side_effect = RuntimeError('oc down')
+    # mock 形状修正（对计划稿的偏差）：本文件夹具设了 TESTING=True，Flask 由此
+    # PROPAGATE_EXCEPTIONS=True——raise 会穿透 test_client 而不是折成 500 响应。
+    # 本用例要锁「报错=500 响应」语义，仅此处临时关掉传播（用完恢复）。
+    prev_prop = app.config.get('PROPAGATE_EXCEPTIONS')
+    app.config['PROPAGATE_EXCEPTIONS'] = False
+    try:
+        r = client.patch('/ai/chat/sessions/sess_x/permission-mode',
+                         json={'mode': 'bypass'}, headers=dev_h)
+    finally:
+        app.config['PROPAGATE_EXCEPTIONS'] = prev_prop
+    assert r.status_code == 500
+    updates = [c.args[0] for c in cursor.execute.call_args_list
+               if 'UPDATE ai_chat_sessions SET permission_mode' in (c.args[0] or '')]
+    assert len(updates) == 2          # 先写 bypass，失败后回滚
+    rollback = [c for c in cursor.execute.call_args_list
+                if 'UPDATE ai_chat_sessions SET permission_mode' in (c.args[0] or '')][-1]
+    assert rollback.args[1][0] == 'ask' and rollback.args[1][1] == 'sess_x'

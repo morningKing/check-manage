@@ -2435,6 +2435,8 @@ def set_permission_mode(sid):
     """会话级 bypass 开关（bypass spec 2026-10-31 §2.2）。'ask'=照常弹权限卡；
     'bypass'=监听器自动放行权限询问（once）。切到 bypass 时立即放行存量挂起
     （含本会话委派的子代理的询问，归属与 reply_permission._owned 同款）。
+    backfill 失败时回滚到原模式再 500——「报错=什么都没改」，否则 UI 回滚
+    而库已 bypass，监听器照常自动放行，用户被误导。
     批任务受控会话拒绝（其权限处置走自动拒绝链，不混）。"""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
@@ -2450,22 +2452,34 @@ def set_permission_mode(sid):
                         'code': 'BAD_MODE'}), 400
     with get_db() as conn:
         cur = conn.cursor()
+        cur.execute("SELECT permission_mode FROM ai_chat_sessions WHERE id=%s", (sid,))
+        _row = cur.fetchone()
+        _prev = (_row[0] if _row else None) or 'ask'
         cur.execute("UPDATE ai_chat_sessions SET permission_mode=%s WHERE id=%s",
                     (mode, sid))
     if mode == 'bypass':
-        client = OpenCodeClient(OPENCODE_BASE_URL)
-        kids = _child_session_agents(client, sess)
-        for q in client.list_permissions(directory=sess[4]):
-            if q.get('sessionID') != sess[2] and q.get('sessionID') not in kids:
-                continue
-            try:
-                client.reply_permission(q.get('id'), 'once', directory=sess[4])
-                logger.info('permission auto-approved (bypass toggle backfill) '
-                            'session=%s request=%s type=%s',
-                            sid, q.get('id'), q.get('permission') or 'unknown')
-            except Exception as e:
-                logger.warning('toggle backfill reply failed session=%s request=%s: %s',
-                               sid, q.get('id'), e)
+        try:
+            client = OpenCodeClient(OPENCODE_BASE_URL)
+            kids = _child_session_agents(client, sess)
+            for q in client.list_permissions(directory=sess[4]):
+                if q.get('sessionID') != sess[2] and q.get('sessionID') not in kids:
+                    continue
+                try:
+                    client.reply_permission(q.get('id'), 'once', directory=sess[4])
+                    logger.info('permission auto-approved (bypass toggle backfill) '
+                                'session=%s request=%s type=%s',
+                                sid, q.get('id'), q.get('permission') or 'unknown')
+                except Exception as e:
+                    logger.warning('toggle backfill reply failed session=%s request=%s: %s',
+                                   sid, q.get('id'), e)
+        except Exception:
+            # backfill 失败=本次切换整体失败：回滚模式，保证「报错=什么都没改」
+            # （否则 UI 回滚 ask 而库已 bypass，监听器照常自动放行，用户被误导）
+            with get_db() as conn:
+                conn.cursor().execute(
+                    "UPDATE ai_chat_sessions SET permission_mode=%s WHERE id=%s",
+                    (_prev, sid))
+            raise
     return jsonify({'sessionId': sid, 'mode': mode})
 
 

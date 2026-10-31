@@ -20,6 +20,7 @@ vi.mock('@/api/aiChat', () => ({
   listFiles: vi.fn(() => Promise.resolve({ files: [] })),
   getChanges: vi.fn(),
   setPermissionMode: vi.fn(),
+  getPendingPermission: vi.fn(),
   createEventStream: vi.fn(() => ({ close: vi.fn() })),
 }))
 
@@ -405,6 +406,21 @@ describe('permissionMode（bypass）', () => {
     await store.setPermissionMode('sess_1', 'bypass')
     expect(store.sessions[0].permissionMode).toBe('bypass')
     expect(store.pendingPermissions['sess_1']).toEqual([])   // 翻转清卡
+  })
+
+  it('setPermissionMode 失败回滚模式并触发 pending 对账', async () => {
+    const store = useAiChatStore()
+    store.sessions = [{ id: 'sess_1', title: 'T', permissionMode: 'ask' }]
+    store.pendingPermissions['sess_1'] = []
+    // loadPendingPermission 是 store action 而非 api 函数（计划稿的
+    // api.loadPendingPermission 断言不适用）——按计划备选改 spy store action，
+    // 并加验底层 api.getPendingPermission 确实按 sid 发起了对账请求。
+    const reconcile = vi.spyOn(store, 'loadPendingPermission')
+    vi.mocked(api.setPermissionMode).mockRejectedValueOnce(new Error('net'))
+    await expect(store.setPermissionMode('sess_1', 'bypass')).rejects.toThrow('net')
+    expect(store.sessions[0].permissionMode).toBe('ask')
+    expect(reconcile).toHaveBeenCalledWith('sess_1')
+    expect(api.getPendingPermission).toHaveBeenCalledWith('sess_1')
   })
 
   it('bypass 会话的 permission.asked 进 autoApproved，不进 pendingPermissions', () => {

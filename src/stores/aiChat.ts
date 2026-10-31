@@ -918,7 +918,8 @@ export const useAiChatStore = defineStore('aiChat', {
 
     /** 切换会话权限模式：乐观翻转，bypass 顺带清空挂起授权卡（服务端在翻到
      *  bypass 时已放行存量挂起，前端不跟上会出现永远答不出的死卡）；请求失败
-     *  回滚模式并上抛。 */
+     *  回滚模式并上抛，同时按服务端实况对账挂起卡——失败前被清掉的卡可能
+     *  仍挂着（含纯网络失败：服务端根本没收到切换），不能留着死卡。 */
     async setPermissionMode(sessionId: string, mode: 'ask' | 'bypass') {
       const target = this.sessions.find((s) => s.id === sessionId)
       const prev = target?.permissionMode
@@ -928,6 +929,7 @@ export const useAiChatStore = defineStore('aiChat', {
         await setPermissionMode(sessionId, mode)
       } catch (e) {
         if (target) target.permissionMode = prev
+        void this.loadPendingPermission(sessionId)   // 失败即对账：被清的卡按服务端实况恢复
         throw e
       }
     },
