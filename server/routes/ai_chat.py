@@ -24,6 +24,7 @@ Routes registered:
     POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
     POST   /ai/chat/sessions/:id/messages/:msg_id/feedback  set_message_feedback (rating 1/-1/0, 0=清除)
+    GET    /ai/chat/sessions/:id/export.md  export_session_markdown (会话归档 Markdown 下载)
     GET    /ai/chat/agents                list_agents
 """
 
@@ -32,6 +33,7 @@ import json
 import logging
 import os
 import queue
+import re
 import secrets
 import threading
 import requests
@@ -1217,6 +1219,49 @@ def _recover_session_and_resend(client, sid, workspace_path, current_msg_id,
     return new_oc
 
 
+def _export_filename(title: str) -> str:
+    """文件名安全化：替换非法字符/控制符，压缩空白，截 60 字符，加时间戳。"""
+    safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', (title or '').strip())
+    safe = re.sub(r'\s+', '_', safe).strip('._')[:60] or 'session'
+    return f"{safe}-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
+
+
+def _render_export_parts(parts) -> str:
+    lines = []
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        t = p.get('type')
+        if t == 'text' and p.get('text'):
+            lines.append(str(p['text']))
+        elif t == 'reasoning' and p.get('text'):
+            lines.append(f"<details><summary>🤔 思考过程</summary>\n\n{p['text']}\n\n</details>")
+        elif t == 'tool_use':
+            try:
+                args = json.dumps(p.get('input'), ensure_ascii=False)[:2000]
+            except (TypeError, ValueError):
+                args = ''
+            lines.append(f"<details><summary>🔧 {p.get('name') or 'tool'}</summary>\n\n"
+                         f"```json\n{args}\n```\n\n</details>")
+        elif t == 'file':
+            lines.append(f"- 📎 {p.get('name')}")
+        elif t == 'image':
+            lines.append(f"- 🖼️ {p.get('name')}")
+    return '\n\n'.join(lines)
+
+
+def _render_export_markdown(title: str, rows) -> str:
+    """rows: [(role, content_parts)] 按 seq 时序。人读归档（区别于 LLM 恢复的
+    render_history_block：那个有损、不含工具细节）。"""
+    head = (f"# {title}\n\n"
+            f"> 导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M')} ｜ 消息数：{len(rows)}\n")
+    body = []
+    for role, parts in rows:
+        who = '🧑 用户' if role == 'user' else '🤖 助手'
+        body.append(f"## {who}\n\n{_render_export_parts(parts)}")
+    return head + '\n' + '\n\n'.join(body)
+
+
 @ai_chat_bp.route('/sessions/<sid>/messages/<mid>/feedback', methods=['POST'])
 @login_required
 def set_message_feedback(sid, mid):
@@ -2362,6 +2407,29 @@ def download_file(sid):
     if not os.path.isfile(abs_path):
         return jsonify({'error': 'not found', 'code': 'FILE_NOT_FOUND'}), 404
     return send_file(abs_path, as_attachment=True, download_name=os.path.basename(abs_path))
+
+
+@ai_chat_bp.route('/sessions/<sid>/export.md', methods=['GET'])
+@login_required
+def export_session_markdown(sid):
+    """会话归档导出（2026-10-30 第一档 Feature B）。全量不截断。"""
+    from urllib.parse import quote
+    user = flask_g.current_user
+    if not _load_session_for_user(sid, user['userId']):
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT title FROM ai_chat_sessions WHERE id=%s", (sid,))
+        title = cur.fetchone()[0] or '会话'
+        cur.execute("SELECT role, content FROM ai_chat_messages "
+                    "WHERE session_id=%s ORDER BY seq", (sid,))
+        rows = [(r[0], r[1] if isinstance(r[1], list) else []) for r in cur.fetchall()]
+    md = _render_export_markdown(title, rows)
+    resp = Response(md, mimetype='text/markdown')
+    resp.headers['Content-Disposition'] = (
+        'attachment; filename="export.md"; filename*=UTF-8\'\''
+        + quote(_export_filename(title)))
+    return resp
 
 
 @ai_chat_bp.route('/sessions/<sid>/run', methods=['POST'])
