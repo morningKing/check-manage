@@ -16,6 +16,7 @@ vi.mock('@/api/aiBatchAdmin', () => ({
 }))
 
 import SubtaskPerfReport from '../SubtaskPerfReport.vue'
+import type { PerfAttemptDetail } from '@/api/aiSkills'
 
 const DETAIL = {
   attempt: {
@@ -146,6 +147,55 @@ describe('SubtaskPerfReport', () => {
     expect(md).toContain('| read | filePath=a.txt | ×3')
     expect(md).toContain('## 子代理分解（1）')
     expect(md).toContain('### general')
+  })
+
+  it('推理 Top 按净推理排序（毛 − Σ轮内已知时长调用），≥ 下界与子代理净推理', async () => {
+    const d = JSON.parse(JSON.stringify(DETAIL)) as PerfAttemptDetail
+    d.turns = [
+      { messageId: 'g1', createdAt: '2026-10-15T10:00:10', durationMs: 60_000,
+        tokensIn: 100, tokensOut: 50, preview: '毛大轮', toolCount: 1 },
+      { messageId: 'g2', createdAt: '2026-10-15T10:01:00', durationMs: 20_000,
+        tokensIn: 100, tokensOut: 50, preview: '净推理轮', toolCount: 0 },
+      { messageId: 'g3', createdAt: '2026-10-15T10:03:00', durationMs: 10_000,
+        tokensIn: 100, tokensOut: 50, preview: '缺时长轮', toolCount: 1 },
+    ]
+    // g1：毛 60s − bash 55s = 净 5s（毛大净小）；g3：轮内调用缺时长 → 下界
+    d.tools.calls = [
+      { partId: 'q1', tool: 'bash', args: 'command=slow', state: 'completed',
+        startedAt: '2026-10-15T10:00:20', durationMs: 55_000,
+        subtaskId: null, turnIndex: 0, isDelegation: false },
+      { partId: 'q2', tool: 'read', args: 'filePath=x', state: 'completed',
+        startedAt: '2026-10-15T10:03:10', durationMs: null,
+        subtaskId: null, turnIndex: 2, isDelegation: false },
+      // st1 内部 write 15s，落在其轮窗 [10:02:00, 10:02:20) → 子代理净推理 5s
+      { partId: 'q3', tool: 'write', args: 'filePath=y', state: 'completed',
+        startedAt: '2026-10-15T10:02:05', durationMs: 15_000,
+        subtaskId: 'st1', turnIndex: null, isDelegation: false },
+    ]
+    d.subTurns = { st1: [{ createdAt: '2026-10-15T10:02:00', durationMs: 20_000 }] }
+    mockPerfAttempt.mockResolvedValue(d)
+    const w = await mountReport({ attemptId: 'aid1' })
+
+    const turnRows = w.findAll('[data-test="top-turns"] .el-table__row')
+    // 净推理序：g2 20s（无工具）> g3 ≥10s > g1 5s——毛大轮不再霸榜
+    expect(turnRows[0].text()).toContain('净推理轮')
+    expect(turnRows[0].text()).toContain('20.0s')
+    expect(turnRows[1].text()).toContain('缺时长轮')
+    expect(turnRows[1].text()).toContain('≥ 10.0s')
+    expect(turnRows[2].text()).toContain('毛大轮')
+    expect(turnRows[2].text()).toContain('5.0s')
+    expect(turnRows[2].text()).toContain('1m0s')      // 轮毛列保留对照
+
+    // 子代理分解「其推理 Top 5」：毛 20s − 内部 write 15s = 净 5s（非 20s）
+    const groups = w.find('[data-test="subagent-groups"]')
+    expect(groups.text()).toContain('5.0s')
+
+    // Markdown 与页面同源
+    await w.find('[data-test="copy-md"]').trigger('click')
+    await flushPromises()
+    const md = writeText.mock.calls[0][0] as string
+    expect(md).toContain('≥ 10.0s')
+    expect(md).toContain('毛 1m0s')
   })
 
   it('batchId+sid 模式：调用子任务端点', async () => {

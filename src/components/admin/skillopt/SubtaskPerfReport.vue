@@ -74,21 +74,29 @@
           </ElTableColumn>
         </ElTable>
 
-        <!-- 推理耗时 Top 10 -->
-        <h4>推理耗时 Top 10 <span class="muted">（模型轮次）</span></h4>
+        <!-- 推理耗时 Top 10（2026-10-31 审计修复：按净推理排序，与任务分解
+             抽屉「推理」列同口径；轮毛列保留对照） -->
+        <h4>推理耗时 Top 10 <span class="muted">（净推理 = 轮毛 − 轮内工具与委派等待；轮内调用缺时长时为下界）</span></h4>
         <ElTable :data="topTurns" size="small" max-height="320" data-test="top-turns">
           <ElTableColumn type="index" width="46" />
           <ElTableColumn label="时间" width="170">
-            <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
+            <template #default="{ row }">{{ fmtTime(row.turn.createdAt) }}</template>
           </ElTableColumn>
-          <ElTableColumn label="耗时" width="90">
-            <template #default="{ row }">{{ fmtMs(row.durationMs) }}</template>
+          <ElTableColumn label="推理耗时" width="110">
+            <template #default="{ row }">
+              <span data-test="top-turn-inference">
+                {{ row.ms == null ? '-' : (row.complete ? '' : '≥ ') + fmtMs(row.ms) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="轮毛" width="100">
+            <template #default="{ row }">{{ fmtMs(row.turn.durationMs) }}</template>
           </ElTableColumn>
           <ElTableColumn label="tokens 进/出" width="130">
-            <template #default="{ row }">{{ row.tokensIn }} / {{ row.tokensOut }}</template>
+            <template #default="{ row }">{{ row.turn.tokensIn }} / {{ row.turn.tokensOut }}</template>
           </ElTableColumn>
-          <ElTableColumn label="预览" min-width="260" show-overflow-tooltip
-                         prop="preview" />
+          <ElTableColumn label="预览" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.turn.preview }}</template>
+          </ElTableColumn>
         </ElTable>
 
         <!-- 失败工具调用 -->
@@ -173,12 +181,16 @@
                 </ElTable>
               </div>
               <div>
-                <h5>其推理 Top 5</h5>
+                <h5>其推理 Top 5 <span class="muted">（净推理）</span></h5>
                 <div v-if="!g.topTurns.length" class="muted">无轮次耗时数据（旧数据）</div>
                 <ElTable v-else :data="g.topTurns" size="small" max-height="200">
                   <ElTableColumn type="index" width="42" />
-                  <ElTableColumn label="耗时" width="84">
-                    <template #default="{ row }">{{ fmtMs(row.durationMs) }}</template>
+                  <ElTableColumn label="推理" width="84">
+                    <template #default="{ row }">
+                      {{ (row.complete ? '' : '≥ ') + fmtMs(row.ms) }}</template>
+                  </ElTableColumn>
+                  <ElTableColumn label="轮毛" width="84">
+                    <template #default="{ row }">{{ fmtMs(row.grossMs) }}</template>
                   </ElTableColumn>
                   <ElTableColumn label="时间" width="160">
                     <template #default="{ row }">{{ fmtTime(row.createdAt) }}</template>
@@ -253,9 +265,47 @@ const topCalls = computed(() => allCalls.value
   .slice()
   .sort((a, b) => (b.durationMs as number) - (a.durationMs as number))
   .slice(0, TOP_N))
-const topTurns = computed(() => (detail.value?.turns ?? [])
-  .slice()
-  .sort((a, b) => (b.durationMs ?? 0) - (a.durationMs ?? 0))
+
+/** 轮次净推理 = 轮毛 − Σ轮内已知时长调用（turnIndex 归组；task 委派在减数
+ *  里 → 委派等待不算推理；子代理内部调用排除 → 不双重扣）。与任务分解抽屉
+ *  PerfTaskDetail.turnInference 同口径——此前报告按轮毛排序却标「推理耗时」，
+ *  长工具轮会被误排第一（2026-10-31 审计修复）。 */
+function turnInferenceOf(t: PerfTurn, idx: number):
+        { ms: number | null; complete: boolean } {
+  if (t.durationMs == null) return { ms: null, complete: false }
+  const mine = allCalls.value.filter(c =>
+    c.turnIndex === idx && (!c.subtaskId || c.tool === 'task'))
+  const known = mine.filter(c => c.durationMs != null)
+  const toolSum = known.reduce((a, c) => a + (c.durationMs || 0), 0)
+  return { ms: Math.max(0, t.durationMs - toolSum),
+           complete: known.length === mine.length }
+}
+
+/** 子代理内部轮次的净推理：子代理调用无 turnIndex，按轮窗
+ *  [createdAt, createdAt+durationMs) 归集该子代理自己的调用。 */
+function subTurnInferenceOf(sid: string,
+                            st: { createdAt: string; durationMs: number }):
+        { ms: number | null; complete: boolean } {
+  if (st.durationMs == null) return { ms: null, complete: false }
+  const t0 = Date.parse(st.createdAt)
+  if (!Number.isFinite(t0)) return { ms: null, complete: false }
+  const t1 = t0 + st.durationMs
+  const mine = allCalls.value.filter(c => {
+    if (c.subtaskId !== sid) return false
+    const s = c.startedAt ? Date.parse(c.startedAt) : NaN
+    return Number.isFinite(s) && s >= t0 && s < t1
+  })
+  const known = mine.filter(c => c.durationMs != null)
+  const toolSum = known.reduce((a, c) => a + (c.durationMs || 0), 0)
+  return { ms: Math.max(0, st.durationMs - toolSum),
+           complete: known.length === mine.length }
+}
+
+interface RankedTurn { turn: PerfTurn; ms: number | null; complete: boolean }
+const topTurns = computed<RankedTurn[]>(() => (detail.value?.turns ?? [])
+  .map((t, idx) => ({ turn: t, ...turnInferenceOf(t, idx) }))
+  .filter(r => r.ms != null)
+  .sort((a, b) => (b.ms as number) - (a.ms as number))
   .slice(0, TOP_N))
 const failedCalls = computed(() => allCalls.value.filter(c => c.state === 'error'))
 const repeats = computed(() => detail.value?.tools.repeats ?? [])
@@ -289,9 +339,12 @@ const subagentGroups = computed(() => {
       .sort((a, b) => (b.durationMs as number) - (a.durationMs as number))
       .slice(0, 5)
     const rep = repeatGroups(mine)
+    // 其推理 Top 5：净推理排序（毛 − 轮窗内该子代理自己的已知时长调用）
     const turns = (detail.value?.subTurns?.[st.subtaskId] ?? [])
-      .slice()
-      .sort((a, b) => b.durationMs - a.durationMs)
+      .map(t2 => ({ createdAt: t2.createdAt, grossMs: t2.durationMs,
+                    ...subTurnInferenceOf(st.subtaskId, t2) }))
+      .filter(t2 => t2.ms != null)
+      .sort((a, b) => (b.ms as number) - (a.ms as number))
       .slice(0, 5)
     return { ...st, calls: mine, topCalls: top,
              failed: mine.filter(c => c.state === 'error').length,
@@ -346,10 +399,12 @@ function buildMarkdown(): string {
     + `| ${c.state} | ${ownerOf(c)} | ${mdCell(c.args)} | ${c.startedAt ?? '-'} |`))
 
   L.push('', `## 推理耗时 Top ${TOP_N}`, '')
-  L.push('| # | 时间 | 耗时 | tokens 进/出 | 预览 |', '| --- | --- | --- | --- | --- |')
-  topTurns.value.forEach((t: PerfTurn, i) => L.push(
-    `| ${i + 1} | ${t.createdAt ?? '-'} | ${fmtMs(t.durationMs)} `
-    + `| ${t.tokensIn} / ${t.tokensOut} | ${mdCell(t.preview)} |`))
+  L.push('| # | 时间 | 推理耗时 | 轮毛 | tokens 进/出 | 预览 |',
+         '| --- | --- | --- | --- | --- | --- |')
+  topTurns.value.forEach((r, i) => L.push(
+    `| ${i + 1} | ${r.turn.createdAt ?? '-'} | `
+    + `${r.complete ? '' : '≥ '}${fmtMs(r.ms)}（毛 ${fmtMs(r.turn.durationMs)}） `
+    + `| ${r.turn.tokensIn} / ${r.turn.tokensOut} | ${mdCell(r.turn.preview)} |`))
 
   L.push('', `## 失败工具调用（${failedCalls.value.length}）`, '')
   if (!failedCalls.value.length) {
@@ -385,7 +440,8 @@ function buildMarkdown(): string {
           + `（${mdCell(c.args)}）`)
       }
       for (const t of g.topTurns) {
-        L.push(`- 推理：${fmtMs(t.durationMs)}（${t.createdAt ?? '-'}）`)
+        L.push(`- 推理：${t.complete ? '' : '≥ '}${fmtMs(t.ms)}`
+          + `（毛 ${fmtMs(t.grossMs)}，${t.createdAt ?? '-'}）`)
       }
       L.push('')
     }
