@@ -3,7 +3,7 @@
 - 日期：2026-10-30
 - 来源：同日「AI 会话页 vs Claude 差距分析」研究（spike），结论分档后用户批准做第一档
 - 对标口径：claude.ai + Claude Code
-- 状态：设计待批准
+- 状态：已实施（2026-10-31 SDD 10 任务 + 终审修复波收口；实施记录见 docs/superpowers/plans/2026-10-30-ai-chat-tier1-gaps.md）
 
 ## 0. 背景与范围
 
