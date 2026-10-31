@@ -201,11 +201,12 @@ def test_get_messages_returns_history(setup):
     # owner check：_load_session_for_user 现 SELECT 7 列（…, batch_id, orchestration_run_id）
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
                                     '/tmp/ws', None, None)
-    # history fetch：消息 SELECT 现 6 列（id, role, content, created_at, meta, seq），
-    # 默认分支 ORDER BY seq DESC（最新在前）——mock 按该序返回
+    # history fetch：消息 SELECT 现 7 列（id, role, content, created_at, meta,
+    # seq, f.rating——2026-10-30 第一档 Feature A 的 LEFT JOIN 反馈列），
+    # 默认分支 ORDER BY seq DESC（最新在前）——mock 按该序返回，rating None
     cursor.fetchall.return_value = [
-        ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None, None, 2),
-        ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None, None, 1),
+        ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None, None, 2, None),
+        ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None, None, 1, None),
     ]
     resp = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
     assert resp.status_code == 200
