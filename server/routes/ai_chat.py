@@ -23,6 +23,7 @@ Routes registered:
     POST   /ai/chat/sessions/:id/reopen   reopen_session
     POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
+    POST   /ai/chat/sessions/:id/messages/:msg_id/feedback  set_message_feedback (rating 1/-1/0, 0=清除)
     GET    /ai/chat/agents                list_agents
 """
 
@@ -1214,6 +1215,41 @@ def _recover_session_and_resend(client, sid, workspace_path, current_msg_id,
     client.send_prompt_async(new_oc, (history + prompt).strip(), model=model,
                              directory=workspace_path, agent=agent, agent_parts=agent_parts)
     return new_oc
+
+
+@ai_chat_bp.route('/sessions/<sid>/messages/<mid>/feedback', methods=['POST'])
+@login_required
+def set_message_feedback(sid, mid):
+    """消息点赞/点踩（2026-10-30 第一档 Feature A）。rating 0=清除。"""
+    user = flask_g.current_user
+    if not _load_session_for_user(sid, user['userId']):
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    body = request.get_json(force=True)
+    try:
+        rating = int(body.get('rating'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'rating must be 1/-1/0', 'code': 'BAD_RATING'}), 400
+    if rating not in (1, -1, 0):
+        return jsonify({'error': 'rating must be 1/-1/0', 'code': 'BAD_RATING'}), 400
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT role FROM ai_chat_messages WHERE id=%s AND session_id=%s",
+                    (mid, sid))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': 'message not found', 'code': 'MESSAGE_NOT_FOUND'}), 404
+        if row[0] != 'assistant':
+            return jsonify({'error': 'only assistant messages can be rated',
+                            'code': 'NOT_ASSISTANT'}), 400
+        if rating == 0:
+            cur.execute("DELETE FROM ai_chat_message_feedback WHERE message_id=%s", (mid,))
+        else:
+            cur.execute(
+                "INSERT INTO ai_chat_message_feedback (message_id, session_id, rating, updated_at) "
+                "VALUES (%s,%s,%s,NOW()) "
+                "ON CONFLICT (message_id) DO UPDATE SET rating=EXCLUDED.rating, updated_at=NOW()",
+                (mid, sid, rating))
+    return jsonify({'messageId': mid, 'rating': rating})
 
 
 @ai_chat_bp.route('/sessions/<sid>/messages', methods=['GET'])

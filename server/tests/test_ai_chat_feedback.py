@@ -41,13 +41,16 @@ def seeded(db_conn=None):
     cur.execute(
         "INSERT INTO ai_chat_sessions (id, user_id, title, status) "
         "VALUES (%s, 'user-owner', 'feedback-test', 'active')", (sid,))
-    mid = f'msg_fb_{uuid.uuid4().hex[:12]}'
-    cur.execute(
-        "INSERT INTO ai_chat_messages (id, session_id, role, content, seq) "
-        "VALUES (%s, %s, 'assistant', %s, %s)",
-        (mid, sid, '[{"type":"text","text":"fb"}]', 0))
+    ids = []
+    for i in range(3):
+        mid = f'msg_fb_{uuid.uuid4().hex[:12]}'
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content, seq) "
+            "VALUES (%s, %s, 'assistant', %s, %s)",
+            (mid, sid, '[{"type":"text","text":"fb"}]', i))
+        ids.append(mid)
     conn.commit()
-    yield {'sid': sid, 'ids': [mid]}
+    yield {'sid': sid, 'ids': ids}
     cur.execute("DELETE FROM ai_chat_message_feedback WHERE session_id = %s", (sid,))
     cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (sid,))
     cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
@@ -72,4 +75,45 @@ def test_feedback_table_and_cascade(seeded):
     conn.commit()
     cur.execute("SELECT COUNT(*) FROM ai_chat_message_feedback WHERE message_id = %s", (mid,))
     assert cur.fetchone()[0] == 0
+    conn.close()
+
+
+def test_feedback_set_switch_clear(seeded):
+    c, h = _client(), _h()
+    mid = seeded['ids'][1]
+    r = c.post(f"/ai/chat/sessions/{seeded['sid']}/messages/{mid}/feedback",
+               headers=h, json={'rating': 1})
+    assert r.status_code == 200 and r.get_json() == {'messageId': mid, 'rating': 1}
+    r = c.post(f"/ai/chat/sessions/{seeded['sid']}/messages/{mid}/feedback",
+               headers=h, json={'rating': -1})
+    assert r.status_code == 200 and r.get_json()['rating'] == -1
+    r = c.post(f"/ai/chat/sessions/{seeded['sid']}/messages/{mid}/feedback",
+               headers=h, json={'rating': 0})
+    assert r.status_code == 200 and r.get_json()['rating'] == 0
+
+
+def test_feedback_validation(seeded):
+    c, h = _client(), _h()
+    sid, mid = seeded['sid'], seeded['ids'][2]
+    assert c.post(f"/ai/chat/sessions/{sid}/messages/{mid}/feedback",
+                  headers=h, json={'rating': 2}).status_code == 400
+    assert c.post(f"/ai/chat/sessions/{sid}/messages/{mid}/feedback",
+                  headers=h, json={'rating': 'x'}).status_code == 400
+    assert c.post(f"/ai/chat/sessions/{sid}/messages/{mid}/feedback",
+                  headers=h, json={'rating': 1}).status_code == 200
+    # 消息不属于该会话
+    assert c.post("/ai/chat/sessions/other-sess/messages/" + mid + "/feedback",
+                  headers=h, json={'rating': 1}).status_code == 404
+    # 用户消息不可评
+    import psycopg2, uuid
+    from config import DB_CONFIG
+    conn = psycopg2.connect(**DB_CONFIG); cur = conn.cursor()
+    umid = f'msg_u_{uuid.uuid4().hex[:8]}'
+    cur.execute("INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                "VALUES (%s, %s, 'user', '[{\"type\":\"text\",\"text\":\"hi\"}]')", (umid, sid))
+    conn.commit()
+    r = c.post(f"/ai/chat/sessions/{sid}/messages/{umid}/feedback",
+               headers=h, json={'rating': 1})
+    assert r.status_code == 400 and r.get_json()['code'] == 'NOT_ASSISTANT'
+    cur.execute("DELETE FROM ai_chat_messages WHERE id=%s", (umid,)); conn.commit()
     conn.close()
