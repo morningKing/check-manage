@@ -2410,7 +2410,7 @@ def download_file(sid):
 
 
 @ai_chat_bp.route('/sessions/<sid>/export.md', methods=['GET'])
-@login_required
+@login_required_sse  # <a download> 直链带不了 Authorization header，兼收 ?access_token=（files/download 同款）
 def export_session_markdown(sid):
     """会话归档导出（2026-10-30 第一档 Feature B）。全量不截断。"""
     from urllib.parse import quote
