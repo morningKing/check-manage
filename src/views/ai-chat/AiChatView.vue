@@ -1293,6 +1293,19 @@ async function retryAssistantMessage(m: AiMessage) {
   try { await store.retryUserMessage(userMsg.id) } catch { ElMessage.error('重新发送失败') }
 }
 
+// 消息点赞/点踩（Feature A 第一档）：再点同侧清除；setFeedback 乐观更新，
+// 失败自动回滚并上抛 —— 这里只负责给出错误提示。
+async function onFeedback(m: AiMessage, next: 1 | -1) {
+  const sid = store.activeSessionId
+  if (!sid || streaming.value) return
+  const rating = m.rating === next ? 0 : next
+  try {
+    await store.setFeedback(sid, m.id, rating)
+  } catch {
+    ElMessage.error('反馈保存失败')
+  }
+}
+
 // 手动重新扫描「变更文件」面板。Skill 写出的新文件如果没落在某个 git 仓库里、
 // 或者扫描时刚好赶在 session.idle 之前的窗口里，可能会漏 —— 给用户一个明确的
 // "再扫一遍" 出口。
@@ -1771,11 +1784,20 @@ function onKey(e: Event) {
                     :disabled="streaming" @click="retryMessage(m)"
                   ><ElIcon><RefreshRight /></ElIcon></button>
                 </template>
-                <button
-                  v-else-if="m.role === 'assistant'"
-                  class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
-                  :disabled="streaming" @click="retryAssistantMessage(m)"
-                ><ElIcon><RefreshRight /></ElIcon></button>
+                <template v-else-if="m.role === 'assistant'">
+                  <button
+                    class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
+                    :disabled="streaming" @click="retryAssistantMessage(m)"
+                  ><ElIcon><RefreshRight /></ElIcon></button>
+                  <button class="msg__action-btn" :class="{ 'feedback-on': m.rating === 1 }"
+                    type="button" data-test="feedback-up" title="赞" aria-label="赞"
+                    @click="onFeedback(m, 1)"
+                  ><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg></button>
+                  <button class="msg__action-btn" :class="{ 'feedback-on': m.rating === -1 }"
+                    type="button" data-test="feedback-down" title="踩" aria-label="踩"
+                    @click="onFeedback(m, -1)"
+                  ><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg></button>
+                </template>
               </div>
             </div>
 
@@ -2617,6 +2639,7 @@ function onKey(e: Event) {
   border-color: var(--el-color-primary);
 }
 .msg__action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.feedback-on { color: var(--el-color-primary); }
 .ai-bubble--user :deep(.elx-bubble__content-wrapper),
 .ai-bubble--user :deep(.elx-bubble__content) {
   background: var(--el-fill-color) !important;
