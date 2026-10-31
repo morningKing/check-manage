@@ -680,6 +680,18 @@ try:
 except Exception as _e:
     logging.warning('batch multi-model migration on boot failed: %s', _e)
 
+# 消息反馈表（2026-10-30 第一档 Feature A）：点赞/点踩独立小表。随启动幂等执行。
+try:
+    import importlib.util as _ilu_mf
+    _mp_mf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'migrations', '2026_10_30_message_feedback.py')
+    _spec_mf = _ilu_mf.spec_from_file_location('_msg_feedback_boot', _mp_mf)
+    _m_mf = _ilu_mf.module_from_spec(_spec_mf)
+    _spec_mf.loader.exec_module(_m_mf)
+    _m_mf.run()
+except Exception as _e:
+    logging.warning('message feedback migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills

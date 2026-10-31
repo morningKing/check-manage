@@ -452,6 +452,17 @@ CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
 -- add for existing deployments.
 ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
 
+-- 消息点赞/点踩反馈（2026-10-30 Feature A）
+CREATE TABLE IF NOT EXISTS ai_chat_message_feedback (
+    message_id VARCHAR(100) PRIMARY KEY
+        REFERENCES ai_chat_messages(id) ON DELETE CASCADE,
+    session_id VARCHAR(100) NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    rating     SMALLINT NOT NULL CHECK (rating IN (1, -1)),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_feedback_sess
+    ON ai_chat_message_feedback(session_id);
+
 -- ==================== 子代理（subtask/subagent 委托）执行轨迹 ====================
 -- id 就是 OpenCode 自己的子会话 sessionID（ses... 格式），不发明并行的合成 id——
 -- 子代理总是先在 OpenCode 侧存在、我们才从 SubtaskPart 里发现它，跟顶层会话
