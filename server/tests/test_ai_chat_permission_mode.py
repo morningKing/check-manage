@@ -245,3 +245,59 @@ def test_toggle_backfill_failure_rolls_back(setup):
     rollback = [c for c in cursor.execute.call_args_list
                 if 'UPDATE ai_chat_sessions SET permission_mode' in (c.args[0] or '')][-1]
     assert rollback.args[1][0] == 'ask' and rollback.args[1][1] == 'sess_x'
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# GET /ai/chat/sessions/<sid>/pending-permission：bypass 自愈放行（第二道网）
+#
+# fetchone 次序（通读 get_pending_permission 全文核实）：_load_session_for_user
+# 1 次 SELECT（其后 UPDATE 不取行）→ list_permissions/_child_session_agents
+# 只碰 oc 客户端（无 DB）→ 端点内 mode 读取 1 次。故 side_effect=[会话行, 模式]。
+# ═════════════════════════════════════════════════════════════════════════════
+
+def test_pending_rehydrate_bypass_auto_replies(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None, None),  # session load
+        ('bypass',),                                                          # mode read
+    ]
+    oc.get_messages.return_value = []
+    oc.list_permissions.return_value = [
+        {'id': 'req1', 'sessionID': 'oc_sess_42', 'permission': 'external_directory'},
+        {'id': 'req2', 'sessionID': 'oc_sess_42', 'permission': 'bash'},
+    ]
+    r = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
+    assert r.status_code == 200
+    replied = [c.args[0] for c in oc.reply_permission.call_args_list]
+    assert replied == ['req1', 'req2']
+    assert r.get_json()['items'] == []
+
+
+def test_pending_rehydrate_ask_untouched(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None, None),
+        ('ask',),
+    ]
+    oc.get_messages.return_value = []
+    oc.list_permissions.return_value = [
+        {'id': 'req1', 'sessionID': 'oc_sess_42', 'permission': 'external_directory'}]
+    r = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
+    assert r.status_code == 200
+    oc.reply_permission.assert_not_called()
+    assert len(r.get_json()['items']) == 1
+
+
+def test_pending_rehydrate_bypass_reply_failure_keeps_item(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None, None),
+        ('bypass',),
+    ]
+    oc.get_messages.return_value = []
+    oc.list_permissions.return_value = [
+        {'id': 'req1', 'sessionID': 'oc_sess_42', 'permission': 'external_directory'}]
+    oc.reply_permission.side_effect = RuntimeError('oc down')
+    r = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
+    assert r.status_code == 200
+    assert len(r.get_json()['items']) == 1        # fail-open 手动卡

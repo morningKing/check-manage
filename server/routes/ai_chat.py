@@ -2373,7 +2373,11 @@ def get_pending_permission(sid):
 
     归属不止父会话自己：本会话**委派出去的子代理**（子会话）的询问同样浮
     出来——它阻塞的是父回合（父的 task 工具在等子代理返回），只认父会话 id
-    会让这类询问在 UI 上永不可见。子代理的条目带 `subtaskAgent` 标注来源。"""
+    会让这类询问在 UI 上永不可见。子代理的条目带 `subtaskAgent` 标注来源。
+
+    bypass 会话上本路径兼任第二道自动放行网（监听器 `_auto_approve_if_bypass`
+    线程死亡时的兜底）：逐条 reply 'once'，放行成功的不进响应，失败的保留
+    （fail-open 手动卡）。"""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
@@ -2395,6 +2399,35 @@ def get_pending_permission(sid):
             matches.append(q)
         elif q.get('sessionID') in kids:
             matches.append({**q, 'subtaskAgent': kids.get(q['sessionID'])})
+    # bypass 自愈放行（第二道网）：事件侧自动放行依赖持久化监听线程存活，
+    # 线程死亡/事件丢失时无人应答、回合卡死——本端点是前端重新拿挂起项的
+    # 对账必经路径，顺手补放行。单次索引读 permission_mode（同
+    # _auto_approve_if_bypass：询问稀有，保证中途翻转即时生效）。读失败按
+    # 非 bypass 处理（fail-open 回落手动卡）；reply 失败的条目保留在响应里
+    # （fail-open 手动卡，by design），成功的从响应消失（前端不落 pending）。
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT permission_mode FROM ai_chat_sessions WHERE id=%s",
+                        (sid,))
+            row = cur.fetchone()
+        bypass = bool(row) and row[0] == 'bypass'
+    except Exception:
+        logger.exception('permission_mode read failed session=%s', sid)
+        bypass = False
+    if bypass:
+        failed = []
+        for q in matches:
+            try:
+                client.reply_permission(q.get('id'), 'once', directory=sess[4])
+                logger.info('permission auto-approved (bypass rehydrate) '
+                            'session=%s request=%s type=%s',
+                            sid, q.get('id'), q.get('permission') or 'unknown')
+            except Exception as e:
+                logger.warning('bypass rehydrate reply failed session=%s request=%s: %s',
+                               sid, q.get('id'), e)
+                failed.append(q)
+        matches = failed
     return jsonify({'data': matches[0] if matches else None, 'items': matches}), 200
 
 
