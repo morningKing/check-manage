@@ -1,0 +1,9 @@
+{
+  "mode": "dataurl",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "ok": true,
+  "assistant_texts": [
+    "红色圆形"
+  ],
+  "session": "ses_e702a0cfbffe01XLC7apU7cF7V"
+}

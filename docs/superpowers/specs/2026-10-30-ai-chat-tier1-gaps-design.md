@@ -130,7 +130,16 @@ JOIN 即可。**本设计不包含**拟合口径改动。
 - 候选形态 2：`{"type": "file", "mime": "image/png", "url": "file://<workspace 内绝对路径>"}`
 
 通过判据：vision 模型回复能描述图片内容。spike 脚本与结果 JSON 落
-`docs/ai-testing/evidence/`，结论回填本节。**失败 → Feature C 整体砍掉**（用户已确认）。
+`docs/ai-testing/evidence/`。**失败 → Feature C 整体砍掉**（用户已确认）。
+
+**结论（2026-10-31 实测，闸门通过）**：两形态均可用——pinned oc serve 1.26 +
+`opencode-go/deepseek-v4.1-flash`（`capabilities.input.image=true`，平台默认模型）
+对 1×1 红色探测图均正确回复含"红"（dataurl→"红色圆形"，filepath→"纯红色图片"）。
+`IMAGE_PART_MODE = dataurl`（自包含、无文件系统路径耦合，用户上传图无需落入 oc
+serve 可读目录；filepath 实测亦通过可作 fallback）。证据：
+`image-parts-spike-20261031-104211-dataurl.json`、
+`image-parts-spike-20261031-104237-filepath.json`（`...103928-dataurl.json` 为
+spike 脚本消息信封解析 bug 修复前样本，作废留档）。Task 9/10 继续。
 
 ### C.2 后端
 
