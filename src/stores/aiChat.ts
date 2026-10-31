@@ -18,7 +18,8 @@ import {
   type AiSessionGroup,
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
-  getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
+  getMessages, sendMessage, setMessageFeedback, uploadFile, uploadSkill, listFiles, getChanges,
+  getMcpServices,
   getCommands, postCommand, abortSession, deleteFromMessage, compactSession as apiCompactSession,
   getSubtaskMessages,
   getLspFormatter,
@@ -884,6 +885,20 @@ export const useAiChatStore = defineStore('aiChat', {
       const text = target.content.find((p) => p.type === 'text')?.text ?? ''
       await this.deleteFromMessage(sid, msgId)
       if (text) await this.sendUserMessage(text)
+    },
+
+    /** 消息点赞/点踩（rating: 1|-1，0=清除）：乐观更新，失败回滚并上抛。 */
+    async setFeedback(sessionId: string, messageId: string, rating: 1 | -1 | 0) {
+      const target = this.messages[sessionId]?.find(m => m.id === messageId)
+      if (!target) return
+      const prev = target.rating ?? null
+      target.rating = rating === 0 ? null : rating
+      try {
+        await setMessageFeedback(sessionId, messageId, rating)
+      } catch (e) {
+        target.rating = prev
+        throw e
+      }
     },
 
     async uploadAttachment(file: File) {

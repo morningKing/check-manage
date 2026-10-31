@@ -69,6 +69,8 @@ export interface AiMessage {
   seq?: number
   /** 运行中插话的排队标记：true = 尚未发送给 OpenCode，等当前回合结束自动发出 */
   queued?: boolean
+  /** 点赞/点踩：1=赞 -1=踩 null=未评（服务端 LEFT JOIN 反馈表带出） */
+  rating?: number | null
 }
 
 export type AiContentPart =
@@ -250,6 +252,15 @@ export function getMessages(id: string, opts?: { since?: string; before?: string
   const qs = q.toString()
   return get<{ messages: AiMessage[]; hasMore?: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages${qs ? '?' + qs : ''}`)
+}
+
+export function setMessageFeedback(sessionId: string, messageId: string,
+                                   rating: 1 | -1 | 0) {
+  return post<{ messageId: string; rating: number }>(
+    `/ai/chat/sessions/${encodeURIComponent(sessionId)}/messages/`
+    + `${encodeURIComponent(messageId)}/feedback`,
+    { rating },
+  )
 }
 
 /** 会话大纲条目：用户输入回合投影（GET /turns）；local 标记为前端在途补尾 */

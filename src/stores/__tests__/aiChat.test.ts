@@ -15,6 +15,7 @@ vi.mock('@/api/aiChat', () => ({
   getMessages: vi.fn(),
   getTurns: vi.fn(async () => ({ turns: [] })),
   sendMessage: vi.fn(),
+  setMessageFeedback: vi.fn(),
   uploadFile: vi.fn(),
   listFiles: vi.fn(() => Promise.resolve({ files: [] })),
   getChanges: vi.fn(),
@@ -366,5 +367,25 @@ describe('runningSessions（侧边栏「执行中」指示）', () => {
     await store.refreshRunningSessions()
     await store.refreshRunningSessions()
     expect(store.isSessionRunning('sess_a')).toBe(true)
+  })
+})
+
+describe('setFeedback（消息点赞/点踩）', () => {
+  it('setFeedback 乐观更新 + 失败回滚', async () => {
+    const store = useAiChatStore()
+    store.messages['sess_1'] = [
+      { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
+    ]
+    vi.mocked(api.setMessageFeedback).mockRejectedValueOnce(new Error('net'))
+
+    await expect(store.setFeedback('sess_1', 'm1', 1)).rejects.toThrow('net')
+    expect(store.messages['sess_1'][0].rating).toBeNull()   // 回滚
+
+    vi.mocked(api.setMessageFeedback).mockResolvedValueOnce({ messageId: 'm1', rating: 1 })
+    await store.setFeedback('sess_1', 'm1', 1)
+    expect(store.messages['sess_1'][0].rating).toBe(1)
+
+    await store.setFeedback('sess_1', 'm1', 0)
+    expect(store.messages['sess_1'][0].rating).toBeNull()
   })
 })
