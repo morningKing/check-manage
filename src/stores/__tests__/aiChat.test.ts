@@ -19,6 +19,7 @@ vi.mock('@/api/aiChat', () => ({
   uploadFile: vi.fn(),
   listFiles: vi.fn(() => Promise.resolve({ files: [] })),
   getChanges: vi.fn(),
+  setPermissionMode: vi.fn(),
   createEventStream: vi.fn(() => ({ close: vi.fn() })),
 }))
 
@@ -387,5 +388,45 @@ describe('setFeedback（消息点赞/点踩）', () => {
 
     await store.setFeedback('sess_1', 'm1', 0)
     expect(store.messages['sess_1'][0].rating).toBeNull()
+  })
+})
+
+describe('permissionMode（bypass）', () => {
+  it('setPermissionMode 乐观更新、bypass 清卡、失败回滚', async () => {
+    const store = useAiChatStore()
+    store.sessions = [{ id: 'sess_1', title: 'T', permissionMode: 'ask' }]
+    store.pendingPermissions['sess_1'] = [{ id: 'r1' } as never]
+
+    vi.mocked(api.setPermissionMode).mockRejectedValueOnce(new Error('net'))
+    await expect(store.setPermissionMode('sess_1', 'bypass')).rejects.toThrow('net')
+    expect(store.sessions[0].permissionMode).toBe('ask')     // 回滚
+
+    vi.mocked(api.setPermissionMode).mockResolvedValueOnce({ sessionId: 'sess_1', mode: 'bypass' })
+    await store.setPermissionMode('sess_1', 'bypass')
+    expect(store.sessions[0].permissionMode).toBe('bypass')
+    expect(store.pendingPermissions['sess_1']).toEqual([])   // 翻转清卡
+  })
+
+  it('bypass 会话的 permission.asked 进 autoApproved，不进 pendingPermissions', () => {
+    const store = useAiChatStore()
+    store.sessions = [{ id: 'sess_1', title: 'T', permissionMode: 'bypass' }]
+    store._handleEvent('sess_1', 'permission.asked', {
+      id: 'r9', sessionID: 'oc1', permission: 'external_directory',
+    } as never)
+    expect(store.pendingPermissions['sess_1'] ?? []).toEqual([])
+    // chip 元素带请求 id：SSE 爆发/重连重放同一询问时按 id 去重，不重复堆 chip
+    expect(store.autoApproved['sess_1']).toEqual([
+      { id: 'r9', permission: 'external_directory', at: expect.any(Number) },
+    ])
+  })
+
+  it('ask 会话的 permission.asked 仍进 pendingPermissions', () => {
+    const store = useAiChatStore()
+    store.sessions = [{ id: 'sess_1', title: 'T', permissionMode: 'ask' }]
+    store._handleEvent('sess_1', 'permission.asked', {
+      id: 'r9', sessionID: 'oc1', permission: 'external_directory',
+    } as never)
+    expect(store.pendingPermissions['sess_1']).toHaveLength(1)
+    expect(store.autoApproved['sess_1']).toBeUndefined()
   })
 })

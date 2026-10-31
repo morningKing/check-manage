@@ -173,6 +173,8 @@ export interface AiGroupedSessionSummary extends AiSessionSummary {
   groupName?: string | null
   /** 置顶时间（ISO）；null/缺省=未置顶 */
   pinnedAt?: string | null
+  /** 会话级权限模式：ask=弹卡（默认）/ bypass=监听器自动放行 */
+  permissionMode?: 'ask' | 'bypass'
 }
 
 export function listSessions() {
@@ -212,6 +214,13 @@ export function moveSessionToGroup(sid: string, groupId: string | null) {
 export function pinSession(sid: string, pinned: boolean) {
   return post<{ ok: boolean; pinned: boolean }>(
     `/ai/chat/sessions/${sid}/pin`, { pinned })
+}
+
+/** 切换会话权限模式（Task 2 端点）：ask=弹卡（默认）/ bypass=监听器自动放行。
+ *  翻到 bypass 时服务端放行存量挂起询问；developer+ 门控，批受控会话 409。 */
+export function setPermissionMode(id: string, mode: 'ask' | 'bypass') {
+  return patch<{ sessionId: string; mode: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/permission-mode`, { mode })
 }
 
 /** 搜索当前用户的会话：按标题、输入文件名或消息文本匹配（见后端 search_sessions）。

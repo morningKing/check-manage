@@ -15,6 +15,7 @@ import {
   deleteSessionGroup as apiDeleteSessionGroup,
   moveSessionToGroup as apiMoveSessionToGroup,
   pinSession as apiPinSession,
+  setPermissionMode,
   type AiSessionGroup,
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
@@ -42,6 +43,8 @@ interface SessionMeta {
   id: string
   title: string
   status?: string
+  /** 会话级权限模式：ask=弹卡（默认）/ bypass=监听器自动放行（Task 2 端点） */
+  permissionMode?: 'ask' | 'bypass'
 }
 
 interface PendingAttachment {
@@ -145,6 +148,13 @@ interface State {
    * 一直挂着等应答 → 回合静默卡死（2026-10-14 实测）。
    */
   pendingPermissions: Record<string, PermissionRequest[]>
+  /**
+   * bypass 会话的「已自动放行」chip 流水：permissionMode=bypass 的会话收到
+   * permission.asked 时（后端监听器已自动放行），记成轻量提示而非授权卡片。
+   * 元素带请求 id——同一询问被 SSE 爆发/重连重放时按 id 去重。新回合开始
+   * （sendUserMessage）清空；视图可调 clearAutoApproved 主动清除。
+   */
+  autoApproved: Record<string, { id: string; permission: string; at: number }[]>
   fitSummary: Record<string, Array<{ defKind: string; defName: string; stepsTotal: number; stepsHit: number; score: number; status: string }> | null>
   /**
    * 运行中插话队列（TUI 的 mid-turn queueing）：streaming 时发送的消息不调
@@ -266,6 +276,7 @@ export const useAiChatStore = defineStore('aiChat', {
     uploadingCount: 0,
     pendingQuestion: {},
     pendingPermissions: {},
+    autoApproved: {},
     fitSummary: {},
     queuedBySession: {} as Record<string, QueuedMessage[]>,
     usageBySession: {} as Record<string, SessionUsage>,
@@ -342,7 +353,8 @@ export const useAiChatStore = defineStore('aiChat', {
   actions: {
     async loadSessions() {
       const { sessions, groups, analysisSessions } = await listSessions()
-      this.sessions = sessions.map(s => ({ id: s.id, title: s.title, status: s.status }))
+      this.sessions = sessions.map(s => ({
+        id: s.id, title: s.title, status: s.status, permissionMode: s.permissionMode }))
       this.sessionGroupId = Object.fromEntries(
         sessions.map(s => [s.id, s.groupId ?? null]))
       this.sessionPinnedAt = Object.fromEntries(
@@ -396,7 +408,7 @@ export const useAiChatStore = defineStore('aiChat', {
     async startNewSession(projectMenuId?: string) {
       const pending = (async () => {
         const meta = await createSession(projectMenuId)
-        this.sessions.unshift({ id: meta.id, title: meta.title })
+        this.sessions.unshift({ id: meta.id, title: meta.title, permissionMode: 'ask' as const })
         this.activeSessionId = meta.id
         this.messages[meta.id] = []
         this.streaming[meta.id] = false
@@ -767,6 +779,9 @@ export const useAiChatStore = defineStore('aiChat', {
       }
       if (!this.activeSessionId) throw new Error('no active session')
       const sid = this.activeSessionId
+      // 新回合开始：上一回合的 bypass 自动放行 chip 消散（若会话仍处 bypass，
+      // 本回合新的询问会重新记 chip）。
+      this.autoApproved[sid] = []
       const pending = this.attachments[sid] ?? []
       const parts: AiContentPart[] = []
       if (content) parts.push({ type: 'text', text: content })
@@ -899,6 +914,27 @@ export const useAiChatStore = defineStore('aiChat', {
         target.rating = prev
         throw e
       }
+    },
+
+    /** 切换会话权限模式：乐观翻转，bypass 顺带清空挂起授权卡（服务端在翻到
+     *  bypass 时已放行存量挂起，前端不跟上会出现永远答不出的死卡）；请求失败
+     *  回滚模式并上抛。 */
+    async setPermissionMode(sessionId: string, mode: 'ask' | 'bypass') {
+      const target = this.sessions.find((s) => s.id === sessionId)
+      const prev = target?.permissionMode
+      if (target) target.permissionMode = mode
+      if (mode === 'bypass') this.pendingPermissions[sessionId] = []
+      try {
+        await setPermissionMode(sessionId, mode)
+      } catch (e) {
+        if (target) target.permissionMode = prev
+        throw e
+      }
+    },
+
+    /** 清空 bypass 自动放行 chip（视图的「知道了」入口）。 */
+    clearAutoApproved(sessionId: string) {
+      this.autoApproved[sessionId] = []
     },
 
     async uploadAttachment(file: File) {
@@ -1378,6 +1414,18 @@ export const useAiChatStore = defineStore('aiChat', {
           const req = data as PermissionRequest
           if (!req?.id) break
           const list = this.pendingPermissions[sid] ?? (this.pendingPermissions[sid] = [])
+          // bypass 会话分流：后端监听器已在事件时查库自动放行（Task 3 钩子），
+          // 前端不弹授权卡，记成「已自动放行」chip（Task 5 渲染）。同一请求
+          // 可能被爆发/重连重放，而 bypass 路径不写 pending（下方按 id 去重
+          // 看不到旧 chip）——须对 autoApproved 亦按 id 查重，防重复堆 chip。
+          const meta = this.sessions.find((s) => s.id === sid)
+          if (meta?.permissionMode === 'bypass') {
+            if (list.some((x) => x.id === req.id)
+              || (this.autoApproved[sid] ?? []).some((c) => c.id === req.id)) break
+            const chips = this.autoApproved[sid] ?? (this.autoApproved[sid] = [])
+            chips.push({ id: req.id, permission: req.permission, at: Date.now() })
+            break
+          }
           // 同一请求可能被爆发/重连补发两次，按 id 去重
           if (list.some((x) => x.id === req.id)) break
           // 子代理发起的询问：标注来源（重水化路径由后端标注，这里补实时路径）
