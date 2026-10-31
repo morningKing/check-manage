@@ -43,6 +43,7 @@ import { activeAtToken, filterFileItems } from '@/utils/fileMentions'
 import UserMentionText from '@/components/ai-chat/UserMentionText.vue'
 import { copyText } from '@/utils/clipboard'
 import { summarizeMeta } from '@/utils/aiMeta'
+import { authParam } from '@/utils/request'
 import { useAiChatStore } from '@/stores/aiChat'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import { getStorage, setStorage, STORAGE_KEYS } from '@/utils/storage'
@@ -548,6 +549,15 @@ async function togglePin(s: { id: string }) {
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.error || '操作失败')
   }
+}
+// 导出会话 Markdown：真实链接直接下载（后端 text/markdown 附件，authParam 带鉴权）
+function exportSessionMarkdown(s: { id: string; title?: string }) {
+  const a = document.createElement('a')
+  a.href = `/api/ai/chat/sessions/${s.id}/export.md${authParam('?')}`
+  a.download = ''
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
 }
 const analysisCollapsed = ref(
   getStorage('check-manage:ai-chat:analysis-collapsed', true))
@@ -1523,7 +1533,7 @@ function onKey(e: Event) {
                   :s="{ id: s.id, title: s.title, status: s.status, pinned: true }"
                   @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
                   @close="closeSessionItem(s.id)" @reopen="reopenSessionItem(s.id)"
-                  @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)"
+                  @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)" @export="exportSessionMarkdown(s)"
                   @move="(t: string) => onMoveCommand(t, s)" @createmove="openCreateGroup(s.id)"
                 />
               </div>
@@ -1540,7 +1550,7 @@ function onKey(e: Event) {
                   :s="{ id: s.id, title: s.title, status: s.status }"
                   @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
                   @close="closeSessionItem(s.id)" @reopen="reopenSessionItem(s.id)"
-                  @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)"
+                  @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)" @export="exportSessionMarkdown(s)"
                   @move="(t: string) => onMoveCommand(t, s)" @createmove="openCreateGroup(s.id)"
                 />
               </div>
@@ -1572,7 +1582,7 @@ function onKey(e: Event) {
                     :s="{ id: s.id, title: s.title, status: s.status }"
                     @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
                     @close="closeSessionItem(s.id)" @reopen="reopenSessionItem(s.id)"
-                    @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)"
+                    @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)" @export="exportSessionMarkdown(s)"
                     @move="(t: string) => onMoveCommand(t, s)" @createmove="openCreateGroup(s.id)"
                   />
                 </div>

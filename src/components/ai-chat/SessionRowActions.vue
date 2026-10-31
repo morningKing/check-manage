@@ -12,7 +12,7 @@
 import { computed } from 'vue'
 import { ElDropdown, ElDropdownMenu, ElDropdownItem, ElIcon } from 'element-plus'
 import {
-  Top, EditPen, Close, RefreshRight, Brush, Delete, MoreFilled, FolderAdd,
+  Top, EditPen, Close, RefreshRight, Brush, Delete, Download, MoreFilled, FolderAdd,
   Folder, FolderOpened, Collection, Tickets, Timer, Monitor, DataLine, Files, Aim,
   ChatDotRound,
 } from '@element-plus/icons-vue'
@@ -28,6 +28,8 @@ const emit = defineEmits<{
   close: []
   reopen: []
   clear: []
+  /** 导出会话 Markdown（直接下载，父组件用真实链接触发） */
+  export: []
   delete: []
   /** 移动到已有分组；'__ungrouped' 表示移回未分组 */
   move: [target: string]
@@ -52,6 +54,7 @@ function onCommand(cmd: string | number | object) {
   if (key === 'close') return emit('close')
   if (key === 'reopen') return emit('reopen')
   if (key === 'clear') return emit('clear')
+  if (key === 'export') return emit('export')
   if (key === 'delete') return emit('delete')
   if (key === '__new') return emit('createmove')
   if (key === '__ungrouped') return emit('move', '__ungrouped')
@@ -82,6 +85,9 @@ function onCommand(cmd: string | number | object) {
           </ElDropdownItem>
           <ElDropdownItem command="clear">
             <ElIcon class="more-menu__icon"><Brush /></ElIcon>清空会话（清空历史和工作区文件）
+          </ElDropdownItem>
+          <ElDropdownItem command="export" divided>
+            <ElIcon class="more-menu__icon"><Download /></ElIcon>导出 Markdown
           </ElDropdownItem>
           <!-- 分组区：disabled 项作小节标题 -->
           <ElDropdownItem disabled divided>移动到分组</ElDropdownItem>
