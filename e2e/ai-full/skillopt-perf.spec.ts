@@ -32,15 +32,22 @@ with get_db() as conn:
 // agent_tool_calls 对 sessions 无 FK——会话级联清不掉工具调用行，
 // 而 (oc_session_id, part_id) 唯一索引使复跑必撞，故必须显式先清。
 const PF_CLEANUP = `
-  DELETE FROM ai_skill_invocations WHERE id IN ('pf-e2e-inv', 'pf-e2e-inv2');
-  DELETE FROM agent_tool_calls WHERE oc_session_id IN ('oc-pf-e2e', 'oc-pf-e2e-2');
-  DELETE FROM ai_chat_sessions WHERE id IN ('pf-e2e-sess', 'pf-e2e-sess2');
-  DELETE FROM ai_execution_attempts WHERE id IN ('pf-e2e-att', 'pf-e2e-att2');
-  DELETE FROM ai_chat_batches WHERE id IN ('pf-e2e-batch', 'pf-e2e-batch2');
+  DELETE FROM ai_skill_invocations WHERE id IN ('pf-e2e-inv', 'pf-e2e-inv2',
+    'pf-e2e-inv3a', 'pf-e2e-inv3b');
+  DELETE FROM agent_tool_calls WHERE oc_session_id IN ('oc-pf-e2e', 'oc-pf-e2e-2',
+    'oc-pf-e2e-3');
+  DELETE FROM ai_chat_sessions WHERE id IN ('pf-e2e-sess', 'pf-e2e-sess2',
+    'pf-e2e-sess3');
+  DELETE FROM ai_execution_attempts WHERE id IN ('pf-e2e-att', 'pf-e2e-att2',
+    'pf-e2e-att3a', 'pf-e2e-att3b');
+  DELETE FROM ai_chat_batches WHERE id IN ('pf-e2e-batch', 'pf-e2e-batch2',
+    'pf-e2e-batch3');
   DELETE FROM users WHERE id = 'pf-e2e-user';
 `
 
 test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下钻+诊断）', async ({ page }) => {
+  // 种子扩到三会话四任务 + 双下钻流程，60s 全局默认不够用
+  test.setTimeout(120_000)
   const mark = tag('perf')
   // 复跑防撞：先清可能的历史残留（上一次中断的 finally 未执行到）
   dbExec(PF_CLEANUP)
@@ -96,6 +103,38 @@ test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下
     INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, evidence_refs)
     VALUES ('pf-e2e-inv2', 'pf-e2e-sess2', 'pf-e2e-att2', 'perf-e2e-skill', '', 'runtime', 'confirmed',
             NOW() - interval '400 seconds', '[]'::jsonb);
+    -- 第三个任务：同一会话两条 attempt（attempt 粒度=每次派发一条）——回归
+    -- 2026-10-31 审计：窗口按会话键控时后写覆盖前写，B 的轮次/工具被旧窗口
+    -- 过滤 → B 的「工具主导」被误判成「模型主导」。A 模型主导（墙钟 120s），
+    -- B 工具主导（墙钟 100s，bash 70s）。
+    INSERT INTO ai_chat_batches (id, user_id, name, prompt, total)
+    VALUES ('pf-e2e-batch3', 'pf-e2e-user', '${mark}', 'p', 1);
+    INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, batch_seq, opencode_session_id, workspace_path)
+    VALUES ('pf-e2e-sess3', 'pf-e2e-user', 'completed', 'pf-e2e-batch3', 0, 'oc-pf-e2e-3', 'C:/tmp/pf-e2e-3');
+    INSERT INTO ai_execution_attempts (id, session_id, source_type, source_id, attempt_no, status, started_at, finished_at)
+    VALUES ('pf-e2e-att3a', 'pf-e2e-sess3', 'batch', 'pf-e2e-batch3', 1, 'completed',
+            NOW() - interval '620 seconds', NOW() - interval '500 seconds'),
+           ('pf-e2e-att3b', 'pf-e2e-sess3', 'batch', 'pf-e2e-batch3', 2, 'completed',
+            NOW() - interval '400 seconds', NOW() - interval '300 seconds');
+    INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, evidence_refs)
+    VALUES ('pf-e2e-inv3a', 'pf-e2e-sess3', 'pf-e2e-att3a', 'perf-e2e-skill', '', 'runtime', 'confirmed',
+            NOW() - interval '550 seconds', '[]'::jsonb),
+           ('pf-e2e-inv3b', 'pf-e2e-sess3', 'pf-e2e-att3b', 'perf-e2e-skill', '', 'runtime', 'confirmed',
+            NOW() - interval '350 seconds', '[]'::jsonb);
+    -- A：轮 80s 无工具 → model 80 / idle 40，模型推理主导；轮窗 [T-620,T-500]
+    INSERT INTO ai_chat_messages (id, session_id, role, content, meta, created_at)
+    VALUES ('pf-e2e-msg3a', 'pf-e2e-sess3', 'assistant', '[{"type":"text","text":"done"}]'::jsonb,
+            '{"durationMs":80000,"tokensInput":1000,"tokensOutput":100}'::jsonb,
+            NOW() - interval '610 seconds');
+    -- B：轮 80s 含 bash 70s → tool 70 / model 10 / idle 20，工具主导；轮窗 [T-400,T-300]
+    INSERT INTO ai_chat_messages (id, session_id, role, content, meta, created_at)
+    VALUES ('pf-e2e-msg3b', 'pf-e2e-sess3', 'assistant', '[{"type":"text","text":"done"}]'::jsonb,
+            '{"durationMs":80000,"tokensInput":1000,"tokensOutput":100}'::jsonb,
+            NOW() - interval '390 seconds');
+    INSERT INTO agent_tool_calls (oc_session_id, root_session_id, part_id,
+      tool, args_text, state, occurred_at, started_at, duration_ms) VALUES
+    ('oc-pf-e2e-3', 'pf-e2e-sess3', 'pt3', 'bash', '{}', 'completed',
+     NOW() - interval '360 seconds', NOW() - interval '380 seconds', 70000);
   `)
   try {
     await gotoWithAuth(page, PAGE)
@@ -105,18 +144,21 @@ test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下
     const defItem = page.locator('.perf-def-item').filter({ hasText: 'perf-e2e-skill' })
     await expect(defItem).toBeVisible({ timeout: 15_000 })
     await defItem.click()
-    // 慢因分布块：两个任务两种主导（工具/引擎间隙），四段堆叠条与芯片可见
+    // 慢因分布块：四个任务三种主导（工具×2/引擎间隙/模型推理），芯片计数正确
+    // ——同会话双 attempt（第三个任务）各自归自己的窗口，B 工具主导不被
+    // 旧窗口吞掉（2026-10-31 审计回归）
     await expect(page.locator('[data-test="cause-dist-block"]')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('[data-test="cause-bar"]')).toBeVisible()
-    await expect(page.locator('[data-test="cause-chip-tool"]')).toContainText('工具 1 个')
+    await expect(page.locator('[data-test="cause-chip-tool"]')).toContainText('工具 2 个')
     await expect(page.locator('[data-test="cause-chip-idle"]')).toContainText('引擎间隙 1 个')
-    // 未筛选：任务表两行；点「引擎间隙」芯片 → 只剩 idle 主导的任务一列不剩、
-    // 任务二独留；再点取消恢复两行
-    expect(await page.locator('.perf-view .el-table__row').count()).toBe(2)
+    await expect(page.locator('[data-test="cause-chip-model"]')).toContainText('模型推理 1 个')
+    // 未筛选：任务表四行；点「引擎间隙」芯片 → 只剩 idle 主导的任务二；
+    // 再点取消恢复四行
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(4)
     await page.locator('[data-test="cause-chip-idle"]').click()
     expect(await page.locator('.perf-view .el-table__row').count()).toBe(1)
     await page.locator('[data-test="cause-chip-idle"]').click()
-    expect(await page.locator('.perf-view .el-table__row').count()).toBe(2)
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(4)
     await expect(page.locator('[data-test="perf-trend"]')).toBeVisible({ timeout: 10_000 })
     // 任务表首行（ElTable row-click 打开下钻；点「工具」主导行=带 bash 的任务一，
     // 其下钻才有工具耗时聚合表可断言）
@@ -127,6 +169,19 @@ test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下
     await expect(page.locator('[data-test="tool-perf-table"]')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('[data-test="tool-perf-table"]')).toContainText('bash')
     await screenshot(page, 'skillopt-perf-seeded-drilldown')
+    // 修复2 真实链路：完整性能报告「推理耗时 Top」按净推理（毛 − Σ轮内工具）
+    // ——B 的轮毛 80s 内含 bash 70s → 推理 10.0s（修复前按毛 1m20s 呈现）
+    // 页面上另有一个隐藏的「运行详情」抽屉——关闭/计数都必须限定本抽屉
+    const detailDrawer = page.locator('.el-drawer').filter({ hasText: '任务耗时分解' })
+    await detailDrawer.locator('.el-drawer__close-btn').click()
+    await expect(detailDrawer).toHaveCount(0)
+    await page.locator('.perf-view .el-table__row').filter({ hasText: '1m40s' }).click()
+    await expect(page.locator('[data-test="cov-model"]')).toBeVisible({ timeout: 10_000 })
+    await page.locator('[data-test="open-full-report"]').click()
+    const topTurns = page.locator('[data-test="top-turns"]')
+    await expect(topTurns).toBeVisible({ timeout: 10_000 })
+    await expect(topTurns).toContainText('10.0s')      // 净推理 = 80s − bash 70s
+    await expect(topTurns).toContainText('1m20s')      // 轮毛列对照
   } finally {
     dbExec(PF_CLEANUP)
   }
