@@ -117,3 +117,15 @@ def test_feedback_validation(seeded):
     assert r.status_code == 400 and r.get_json()['code'] == 'NOT_ASSISTANT'
     cur.execute("DELETE FROM ai_chat_messages WHERE id=%s", (umid,)); conn.commit()
     conn.close()
+
+
+def test_messages_response_carries_rating(seeded):
+    """get_messages LEFT JOIN 反馈表：assistant 消息带出 rating，无反馈 null。"""
+    c, h = _client(), _h()
+    sid = seeded['sid']
+    c.post(f"/ai/chat/sessions/{sid}/messages/{seeded['ids'][0]}/feedback",
+           headers=h, json={'rating': -1})
+    r = c.get(f"/ai/chat/sessions/{sid}/messages", headers=h)
+    by_id = {m['id']: m for m in r.get_json()['messages']}
+    assert by_id[seeded['ids'][0]]['rating'] == -1
+    assert by_id[seeded['ids'][1]]['rating'] is None

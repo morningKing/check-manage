@@ -1276,9 +1276,11 @@ def get_messages(sid):
         cur = conn.cursor()
         if since:
             cur.execute(
-                "SELECT id, role, content, created_at, meta, seq FROM ai_chat_messages "
-                "WHERE session_id = %s AND id > %s "
-                "ORDER BY created_at ASC",
+                "SELECT m.id, m.role, m.content, m.created_at, m.meta, m.seq, f.rating "
+                "FROM ai_chat_messages m "
+                "LEFT JOIN ai_chat_message_feedback f ON f.message_id = m.id "
+                "WHERE m.session_id = %s AND m.id > %s "
+                "ORDER BY m.created_at ASC",
                 (sid, since),
             )
             rows = cur.fetchall()
@@ -1286,16 +1288,20 @@ def get_messages(sid):
         else:
             if before:
                 cur.execute(
-                    "SELECT id, role, content, created_at, meta, seq FROM ai_chat_messages "
-                    "WHERE session_id = %s AND seq < %s "
-                    "ORDER BY seq DESC LIMIT %s",
+                    "SELECT m.id, m.role, m.content, m.created_at, m.meta, m.seq, f.rating "
+                    "FROM ai_chat_messages m "
+                    "LEFT JOIN ai_chat_message_feedback f ON f.message_id = m.id "
+                    "WHERE m.session_id = %s AND m.seq < %s "
+                    "ORDER BY m.seq DESC LIMIT %s",
                     (sid, before, limit + 1),
                 )
             else:
                 cur.execute(
-                    "SELECT id, role, content, created_at, meta, seq FROM ai_chat_messages "
-                    "WHERE session_id = %s "
-                    "ORDER BY seq DESC LIMIT %s",
+                    "SELECT m.id, m.role, m.content, m.created_at, m.meta, m.seq, f.rating "
+                    "FROM ai_chat_messages m "
+                    "LEFT JOIN ai_chat_message_feedback f ON f.message_id = m.id "
+                    "WHERE m.session_id = %s "
+                    "ORDER BY m.seq DESC LIMIT %s",
                     (sid, limit + 1),
                 )
             rows = cur.fetchall()
@@ -1307,7 +1313,7 @@ def get_messages(sid):
         'messages': [
             {'id': r[0], 'role': r[1], 'content': r[2],
              'createdAt': r[3].isoformat() if r[3] else None,
-             'meta': r[4], 'seq': r[5]}
+             'meta': r[4], 'seq': r[5], 'rating': r[6]}
             for r in rows
         ],
         'hasMore': has_more,
