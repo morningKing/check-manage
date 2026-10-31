@@ -161,7 +161,10 @@ export async function openChatSession(page: Page, sessionId: string): Promise<vo
     for (const [k, v] of Object.entries(entries)) localStorage.setItem(k, v)
   }, auth)
   await page.goto(`/ai-chat?session=${sessionId}`)
-  await page.waitForSelector('.ai-chat__main, .ai-chat', { timeout: 20_000 })
+  // 20s → 60s：worker 首个用例的全新 browser context 冷加载（Chromium 无代码
+  // 缓存 + 每条新连接建连开销）实测可超 20s，同一 worker 内越靠后越快——等待
+  // 的元素不变，只放宽环境延迟预算（2026-10-31 遗留清理波实测）。
+  await page.waitForSelector('.ai-chat__main, .ai-chat', { timeout: 60_000 })
 }
 
 export async function screenshot(page: Page, name: string): Promise<string> {

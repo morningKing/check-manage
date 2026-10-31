@@ -27,7 +27,11 @@ test('bypass：external_directory 询问自动放行，无卡、chip 出现、�
   await page.goto(`/ai-chat?session=${sid}`)
   const input = page.getByPlaceholder(/给 AI 助手发消息/)
   await input.waitFor({ state: 'visible', timeout: 60_000 })
-  await expect(page.locator('[data-test="bypass-toggle"]')).toContainText('Bypass')
+  // 显式 60s：worker 首个用例的冷 context 上，会话打开链路（列表加载+open+
+  // SSE）可超默认 5s——本用例跑在 worker 第一位，实测两次波次均卡在这。
+  // 等待的元素与文本不变，只放宽环境延迟预算（2026-10-31 遗留清理波实测）。
+  await expect(page.locator('[data-test="bypass-toggle"]'))
+    .toContainText('Bypass', { timeout: 60_000 })
 
   await input.fill(
     '必须真的调用 read 工具读取文件 C:\\Windows\\System32\\drivers\\etc\\hosts '
