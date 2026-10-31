@@ -19,6 +19,7 @@ Routes registered:
     POST   /ai/chat/sessions/:id/questions/:req_id/reject  reject_question
     GET    /ai/chat/sessions/:id/pending-permission  get_pending_permission
     POST   /ai/chat/sessions/:id/permissions/:req_id/reply  reply_permission
+    PATCH  /ai/chat/sessions/:id/permission-mode  set_permission_mode (ask|bypass 开关)
     POST   /ai/chat/sessions/:id/close    close_session
     POST   /ai/chat/sessions/:id/reopen   reopen_session
     POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
@@ -2422,6 +2423,46 @@ def reply_permission(sid, request_id):
         return jsonify({'error': 'permission not found', 'code': 'PERMISSION_NOT_FOUND'}), 404
     client.reply_permission(request_id, response, directory=sess[4])
     return jsonify({'ok': True}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/permission-mode', methods=['PATCH'])
+@write_required
+def set_permission_mode(sid):
+    """会话级 bypass 开关（bypass spec 2026-10-31 §2.2）。'ask'=照常弹权限卡；
+    'bypass'=监听器自动放行权限询问（once）。切到 bypass 时立即放行存量挂起
+    （含本会话委派的子代理的询问，归属与 reply_permission._owned 同款）。
+    批任务受控会话拒绝（其权限处置走自动拒绝链，不混）。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if _execution_controlled(sess):
+        return jsonify({'error': '批任务受控会话不支持切换 bypass 模式',
+                        'code': 'BATCH_CONTROLLED'}), 409
+    body = request.get_json(force=True) or {}
+    mode = body.get('mode')
+    if mode not in ('ask', 'bypass'):
+        return jsonify({'error': "mode must be 'ask' or 'bypass'",
+                        'code': 'BAD_MODE'}), 400
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET permission_mode=%s WHERE id=%s",
+                    (mode, sid))
+    if mode == 'bypass':
+        client = OpenCodeClient(OPENCODE_BASE_URL)
+        kids = _child_session_agents(client, sess)
+        for q in client.list_permissions(directory=sess[4]):
+            if q.get('sessionID') != sess[2] and q.get('sessionID') not in kids:
+                continue
+            try:
+                client.reply_permission(q.get('id'), 'once', directory=sess[4])
+                logger.info('permission auto-approved (bypass toggle backfill) '
+                            'session=%s request=%s type=%s',
+                            sid, q.get('id'), q.get('permission') or 'unknown')
+            except Exception as e:
+                logger.warning('toggle backfill reply failed session=%s request=%s: %s',
+                               sid, q.get('id'), e)
+    return jsonify({'sessionId': sid, 'mode': mode})
 
 
 @ai_chat_bp.route('/sessions/<sid>/messages/<msg_id>', methods=['DELETE'])
