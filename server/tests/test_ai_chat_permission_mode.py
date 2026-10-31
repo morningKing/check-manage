@@ -301,3 +301,34 @@ def test_pending_rehydrate_bypass_reply_failure_keeps_item(setup):
     r = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
     assert r.status_code == 200
     assert len(r.get_json()['items']) == 1        # fail-open 手动卡
+
+
+def test_toggle_bypass_backfill_covers_kids(setup):
+    """toggle backfill 覆盖 kids 正向：_child_session_agents 从父会话消息流的
+    task 工具 part（state.metadata.sessionId + state.input.subagent_type）识别
+    出本会话委派的子代理 oc_kid，挂在其名下的询问同样被自动放行（负向已由
+    test_toggle_bypass_backfills_pending 的 req2='oc_child_x' 他人会话覆盖）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    # fetchone 次序（通读 set_permission_mode 全文）：_load_session_for_user
+    # 1 次 → _prev 读取 1 次。bypass 分支不回滚，共 2 次。
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None, None),
+        ('ask',),
+    ]
+    # _child_session_agents 扫描形状（ai_chat.py ~:2345 _scan）：assistant 消息
+    # 的 parts 里，state.metadata.sessionId/sessionID 记为子会话 id，
+    # state.input.subagent_type 记为 agent 名。
+    oc.get_messages.return_value = [
+        {'info': {'role': 'assistant'}, 'parts': [
+            {'type': 'tool',
+             'state': {'metadata': {'sessionId': 'oc_kid'},
+                       'input': {'subagent_type': 'general'}}},
+        ]},
+    ]
+    oc.list_permissions.return_value = [
+        {'id': 'reqk', 'sessionID': 'oc_kid', 'permission': 'bash'},
+    ]
+    r = client.patch('/ai/chat/sessions/sess_x/permission-mode',
+                     json={'mode': 'bypass'}, headers=dev_h)
+    assert r.status_code == 200 and r.get_json() == {'sessionId': 'sess_x', 'mode': 'bypass'}
+    oc.reply_permission.assert_called_once_with('reqk', 'once', directory='/tmp/ws')

@@ -96,8 +96,15 @@ def test_export_route_auth_and_content(seeded):
     r = c.get(f"/ai/chat/sessions/{seeded['sid']}/export.md", headers=h)
     assert r.status_code == 200
     assert 'attachment' in r.headers.get('Content-Disposition', '')
+    # 下载头完整性：mimetype text/markdown + RFC 5987 UTF-8 文件名（前端
+    # <a download> 与浏览器命名都吃这两个头）
+    assert 'text/markdown' in r.headers.get('Content-Type', '')
+    assert "filename*=UTF-8''" in r.headers['Content-Disposition']
     body = r.get_data(as_text=True)
     assert body.startswith('# ')
+    # 正文含 seeded 消息文本（fixture 播 3 条 assistant，content parts
+    # text='fb'——_render_export_parts 原样落行）
+    assert 'fb' in body
     # 越权
     assert c.get("/ai/chat/sessions/other-sess/export.md", headers=h).status_code == 404
 

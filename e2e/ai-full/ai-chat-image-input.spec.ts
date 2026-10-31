@@ -28,7 +28,11 @@ test('图片输入：粘贴入口 → 芯片 → 发送 → 气泡图片', async
     dt.items.add(new File([new Uint8Array(buf)], 'probe.png', { type: 'image/png' }))
     el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }))
   }, Array.from(PNG))
-  await expect(page.locator('.attach-chip', { hasText: 'probe.png' })).toBeVisible()
+  // 显式 15s：本机 vite dev 首连（新 TCP 连接首个请求）实测 2-4s 响应，粘贴
+  // →上传→chip 链路跨 1-2 个新连接，默认 5s 会与建立连接的延迟竞速（实测
+  // 两次 CI 波次均 4.6-5s+ 边缘翻车；warm 连接后同端点仅 14-51ms）。
+  await expect(page.locator('.attach-chip', { hasText: 'probe.png' }))
+    .toBeVisible({ timeout: 15_000 })
 
   // ② 发送（真实模型栈；不依赖模型"看懂"图，只断言链路）
   await page.locator('.composer-input textarea').fill('看看这张图')
@@ -36,6 +40,10 @@ test('图片输入：粘贴入口 → 芯片 → 发送 → 气泡图片', async
 
   // ③ user 气泡出现图片；服务端 parts 含 image 类型
   await expect(page.locator('.msg-image').first()).toBeVisible({ timeout: 60_000 })
+  // ElImage 渲染 <div class="el-image msg-image"><img class="el-image__inner">：
+  // 图片真实解码完成（probe.png 是 1×1，naturalWidth=1）——防 src 404/占位假绿
+  await expect(page.locator('.msg-image img').first())
+    .toHaveJSProperty('naturalWidth', 1, { timeout: 15_000 })
   await waitFor(async () => {
     const r = await api(request, 'GET', `/ai/chat/sessions/${sid}/messages`)
     const user = (r.json?.messages || []).filter((m: any) => m.role === 'user').pop()

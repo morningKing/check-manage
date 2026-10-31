@@ -149,3 +149,26 @@ def test_image_missing_file_no_500(setup, tmp_path):
     assert resp.status_code == 202
     _, kwargs = oc.send_prompt_async.call_args
     assert kwargs['image_parts'][0]['url'].startswith('file://')
+
+
+def test_image_too_large_400(setup, tmp_path):
+    """超 IMAGE_MAX_BYTES 的图片：400 + code IMAGE_TOO_LARGE，不进 dispatch。
+
+    阈值语义（routes/ai_chat.py 闸门处）：`os.path.getsize(ap_) >
+    IMAGE_MAX_BYTES` 严格大于——5MB 整不拦，略超 1 字节即拦。造 8 字节 PNG
+    魔数 + 5MB 填充 = 5MB+8B，落在拦截区间。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    ws = tmp_path / 'ws3'
+    (ws / 'uploads').mkdir(parents=True)
+    (ws / 'uploads' / 'big.png').write_bytes(
+        b'\x89PNG\r\n\x1a\n' + b'0' * (5 * 1024 * 1024))
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
+                                    str(ws), None, None)
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': '看图', 'attachments': ['uploads/big.png']},
+        headers=dev_h,
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()['code'] == 'IMAGE_TOO_LARGE'
+    oc.send_prompt_async.assert_not_called()        # 超限不进 dispatch

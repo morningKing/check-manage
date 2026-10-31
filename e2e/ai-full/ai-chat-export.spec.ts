@@ -50,6 +50,11 @@ test('会话导出：更多菜单 → 下载 md 含标题与正文', async ({ pa
   const fs = await import('node:fs')
   const md = fs.readFileSync(path!, 'utf-8')
   expect(md).toContain(`# ${title}`)
-  expect(md).toContain('EXP')
+  // 模型回复文本落在助手节内：助手节存在，且 'EXP'（EXPT 回复的前缀）出现在
+  // 助手节标题之后——从助手节起找首个 EXP（用户 prompt 里也有「EXPT」字样，
+  // 全文首个出现在用户节，不能拿它当回复证据），防回复文本丢失的假绿
+  const aiIdx = md.indexOf('## 🤖 助手')
+  expect(aiIdx).toBeGreaterThan(-1)
+  expect(md.indexOf('EXP', aiIdx)).toBeGreaterThan(aiIdx)
   expect(md).toContain('## 🧑 用户')
 })
