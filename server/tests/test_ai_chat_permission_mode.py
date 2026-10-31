@@ -189,6 +189,33 @@ def test_toggle_batch_controlled_409(setup):
     assert r.status_code == 409 and r.get_json()['code'] == 'BATCH_CONTROLLED'
 
 
+def test_toggle_terminal_batch_child_409(setup):
+    """终态批子会话同样 409：batch/编排子会话（含终态）的 continue 走批 worker
+    权限链（自动拒绝 asks），bypass 开关对其一律拒绝——不受
+    _execution_controlled 仅覆盖非终态（pending/running/paused）的局限。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'completed',
+                                    '/tmp/ws', 'batch_x', None)
+    r = client.patch('/ai/chat/sessions/sess_x/permission-mode',
+                     json={'mode': 'bypass'}, headers=dev_h)
+    assert r.status_code == 409 and r.get_json()['code'] == 'BATCH_CONTROLLED'
+
+
+def test_clear_resets_permission_mode(setup):
+    """clear 原地重置：permission_mode 一并回默认 'ask'（新 OpenCode 会话
+    不应继承旧会话的 bypass——上下文已清空，自动放行语义随之失效）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
+                                    '/tmp/ws', None, None)
+    oc.delete_session.return_value = None
+    r = client.post('/ai/chat/sessions/sess_x/clear', headers=dev_h)
+    assert r.status_code == 200
+    clear_updates = [c for c in cursor.execute.call_args_list
+                     if 'UPDATE ai_chat_sessions' in (c.args[0] or '')]
+    assert any('permission_mode' in c.args[0] and "'ask'" in c.args[0]
+               for c in clear_updates)
+
+
 def test_toggle_backfill_failure_rolls_back(setup):
     client, cursor, oc, dev_h, _, _ = setup
     # mock 形状修正（对计划稿的偏差）：修复后的端点在 UPDATE 前多一次

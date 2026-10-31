@@ -2437,12 +2437,15 @@ def set_permission_mode(sid):
     （含本会话委派的子代理的询问，归属与 reply_permission._owned 同款）。
     backfill 失败时回滚到原模式再 500——「报错=什么都没改」，否则 UI 回滚
     而库已 bypass，监听器照常自动放行，用户被误导。
-    批任务受控会话拒绝（其权限处置走自动拒绝链，不混）。"""
+    批/编排子会话（含终态）一律拒绝：非终态由 worker 独家驱动，终态的
+    continue 走批 worker、其权限链自动拒绝 asks——bypass 对它们都是误导。"""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    if _execution_controlled(sess):
+    # _execution_controlled 只覆盖非终态（pending/running/paused）；批/编排
+    # 子会话终态（completed/failed/...）也要拒——sess[5]=batch_id, sess[6]=orchestration_run_id
+    if _execution_controlled(sess) or bool(sess[5] or sess[6]):
         return jsonify({'error': '批任务受控会话不支持切换 bypass 模式',
                         'code': 'BATCH_CONTROLLED'}), 409
     body = request.get_json(force=True) or {}
@@ -2682,7 +2685,8 @@ def clear_session(sid):
 
     与可逆的 close、不可逆的 delete 不同——clear 原地重置：删旧 OpenCode 会话、
     rmtree 工作区并重建脚手架、重新签发 token、新建 OpenCode 会话、删光消息，
-    最后置 active。仅本人；archived/deleted 状态不可清空。"""
+    最后置 active。permission_mode 一并重置为 ask（上下文清空=全新会话，
+    不继承旧会话的 bypass）。仅本人；archived/deleted 状态不可清空。"""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
@@ -2725,7 +2729,8 @@ def clear_session(sid):
         cur.execute("DELETE FROM ai_chat_subtasks WHERE root_session_id = %s", (sid,))
         cur.execute(
             "UPDATE ai_chat_sessions SET opencode_session_id = %s, status = 'active', "
-            "workspace_path = %s WHERE id = %s AND user_id = %s",
+            "permission_mode = 'ask', workspace_path = %s "
+            "WHERE id = %s AND user_id = %s",
             (new_oc, workspace_path, sid, user['userId']),
         )
     log_operation('update', 'ai_chat_session', sid, sid, '清空会话')

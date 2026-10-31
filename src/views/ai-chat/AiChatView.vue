@@ -2092,17 +2092,23 @@ function onKey(e: Event) {
 
       <!-- 用量状态条（F1）：模型 ｜ 上下文水位线 ｜ 累计 token/费用；:key 让切换
            会话时重置「稍后」静音状态。bypass 开关钮同排置于状态条左侧（spec
-           2026-10-31 §2.4）：guest 不可见、批受控禁用。 -->
+           2026-10-31 §2.4）：guest 不可见、批受控禁用。批子会话（含终态）
+           一并禁用——continue 走批 worker 权限链（自动拒绝 asks），bypass
+           对它们是误导（后端终审修复同款语义）。 -->
       <div v-if="activeId" class="status-row">
         <button
           v-if="!isGuest"
           class="bypass-toggle" :class="{ 'bypass-toggle--on': permissionMode === 'bypass' }"
           type="button" data-test="bypass-toggle"
-          :disabled="batchControlled"
-          :title="permissionMode === 'bypass'
-            ? 'Bypass 开启：工具权限询问自动放行，点击切回确认模式'
-            : 'Bypass 模式：自动放行工具权限询问（developer+，仅本会话生效）'"
-          :aria-label="`权限模式 ${permissionMode === 'bypass' ? 'bypass（自动放行）' : 'ask（逐次确认）'}`"
+          :disabled="batchControlled || batchTerminal"
+          :title="batchControlled || batchTerminal
+            ? '批任务子会话不适用 bypass 模式'
+            : permissionMode === 'bypass'
+              ? 'Bypass 开启：工具权限询问自动放行，点击切回确认模式'
+              : 'Bypass 模式：自动放行工具权限询问（developer+，仅本会话生效）'"
+          :aria-label="batchControlled || batchTerminal
+            ? '批任务子会话不适用 bypass 模式'
+            : `权限模式 ${permissionMode === 'bypass' ? 'bypass（自动放行）' : 'ask（逐次确认）'}`"
           @click="onToggleBypass"
         ><ElIcon><component :is="permissionMode === 'bypass' ? Unlock : Lock" /></ElIcon>
           {{ permissionMode === 'bypass' ? 'Bypass' : 'Ask' }}</button>

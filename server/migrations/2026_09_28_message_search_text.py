@@ -64,7 +64,11 @@ def run():
                     SELECT id FROM ai_chat_messages WHERE search_text IS NULL
                     LIMIT 1000)
             """)
-            if cur.rowcount == 0:
+            # 防非整数 rowcount 死循环（MagicMock 游标的 rowcount 是真值
+            # MagicMock，`== 0` 永假 → 测试环境 boot 迁移挂死）：rowcount 非
+            # int 一律视作完成退出；真实 DB 游标返回 int，行为不变。
+            _rc = cur.rowcount
+            if not isinstance(_rc, int) or _rc <= 0:
                 break
         conn.commit()
     print("message search_text materialization ready.")

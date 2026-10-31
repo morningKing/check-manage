@@ -11,6 +11,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from auth import create_token
 
+# app 导入必须在模块顶层完成（先于 setup fixture 内的任何 db.get_db 打补丁）：
+# 若在 fixture 打完 mock 补丁后才首次 import app，启动迁移会在 MagicMock 游标
+# 上跑 2026_09_28_message_search_text 的存量回填 while True 循环——rowcount 是
+# 真值 MagicMock、`== 0` 永假 → 收集即死循环挂起（单跑本文件复现，见
+# 2026-10-31 终审 followup）。顶层导入命中 conftest sessionstart 引导后的
+# 真实 casemanage_test 库，boot 迁移对真库幂等跑一次，之后 fixture 复用
+# sys.modules 缓存，不再触发启动逻辑。
+from app import app  # noqa: E402
+
 
 def _make_mock_db(mock_conn):
     @contextmanager
@@ -63,7 +72,6 @@ def setup(mock_conn, mock_cursor, tmp_path):
     from utils import chat_persist
     chat_persist._listeners.clear()
 
-    from app import app
     app.config['TESTING'] = True
     dev = create_token({'id': 'user-1', 'username': 'dev', 'role': 'developer'})
     guest = create_token({'id': 'user-2', 'username': 'g', 'role': 'guest'})
