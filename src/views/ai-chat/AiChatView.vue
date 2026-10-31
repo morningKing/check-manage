@@ -1232,8 +1232,12 @@ function onPaste(e: ClipboardEvent) {
 }
 
 function onDrop(e: DragEvent) {
-  // 无条件先拦：否则浏览器把拖入的文件当导航，整个页面被文件覆盖（终审
-  // Minor #4）。非图片文件交给 uploadImageFiles 走同一 warning。
+  // 文本拖放（types 无 'Files'）直接放行走浏览器默认插入——本 handler 挂在
+  // composer card 上，会截获 textarea 冒泡上来的 drop，无条件 preventDefault
+  // 会把「拖选中文本进输入框」的默认插入一并取消（评审确认回归）。
+  if (!e.dataTransfer?.types?.includes('Files')) return
+  // 文件拖放无条件先拦：否则浏览器把拖入的文件当导航，整个页面被文件覆盖
+  // （终审 Minor #4）。非图片文件交给 uploadImageFiles 走同一 warning。
   e.preventDefault()
   const files = Array.from(e.dataTransfer?.files || [])
   if (files.length === 0) return
