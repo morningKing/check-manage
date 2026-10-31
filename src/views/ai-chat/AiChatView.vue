@@ -6,9 +6,10 @@ import {
   ElDrawer, ElTag, ElDialog,
   ElDropdown, ElDropdownMenu, ElDropdownItem,
   ElSelect, ElOption, ElRadioGroup, ElRadioButton,
+  ElImage,
 } from 'element-plus'
 import {
-  Plus, Top, EditPen, Close, Document, Loading,
+  Plus, Top, EditPen, Close, Document, Loading, Picture,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
   ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
   DataAnalysis, FolderAdd,
@@ -1164,6 +1165,33 @@ async function onFilesPicked(e: Event) {
   ;(e.target as HTMLInputElement).value = ''
 }
 
+// 图片输入三入口（粘贴/拖拽/选择器）中的粘贴与拖拽：与 onFilesPicked 共用
+// store.uploadAttachment 同一上传通路，不新造第二条。仅图片类型会被上传。
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)$/i
+
+function isImagePath(p: string) { return IMAGE_EXT_RE.test(p) }
+
+async function uploadImageFiles(files: (File | null)[]) {
+  for (const f of files) {
+    if (!f || !f.type.startsWith('image/')) continue
+    await store.uploadAttachment(f)   // 内部自取 activeSessionId，落 attachments + loadFiles
+  }
+}
+
+function onPaste(e: ClipboardEvent) {
+  const files = Array.from(e.clipboardData?.items || [])
+    .filter(i => i.kind === 'file').map(i => i.getAsFile())
+  if (files.some(Boolean)) { e.preventDefault(); void uploadImageFiles(files) }
+}
+
+function onDrop(e: DragEvent) {
+  const files = Array.from(e.dataTransfer?.files || [])
+  if (files.some(f => f.type.startsWith('image/'))) {
+    e.preventDefault()
+    void uploadImageFiles(files)
+  }
+}
+
 const skillInput = ref<HTMLInputElement | null>(null)
 
 function handleAddMenu(cmd: string) {
@@ -1773,6 +1801,14 @@ function onKey(e: Event) {
                         @preview="onMentionPreview"
                       />
                     </template>
+                    <!-- user 气泡：image part（图片附件，后端 stored parts type=image）渲染为可预览图片 -->
+                    <template v-else-if="p.type === 'image'">
+                      <ElImage
+                        class="msg-image" :src="downloadFileUrl(activeId!, p.path)"
+                        :alt="p.name" fit="cover"
+                        :preview-src-list="[downloadFileUrl(activeId!, p.path)]" hide-on-click-modal
+                      />
+                    </template>
                   </template>
                 </template>
               </Bubble>
@@ -2039,10 +2075,11 @@ function onKey(e: Event) {
       <div class="ai-chat__composer">
         <CommandPalette :items="activePalette" :active-index="activeIndex" :prefix="mentionToken ? '@' : '/'" @select="acceptItem" />
         <div class="composer-inner">
-          <div class="composer-card">
+          <div class="composer-card" @dragover.prevent @drop="onDrop">
             <div v-if="attachments.length" class="composer-attachments">
               <span v-for="a in attachments" :key="a.path" class="attach-chip">
-                <ElIcon><Document /></ElIcon>{{ a.name }}
+                <ElIcon v-if="isImagePath(a.path)"><Picture /></ElIcon>
+                <ElIcon v-else><Document /></ElIcon>{{ a.name }}
                 <ElIcon class="attach-chip__x" @click="store.removeAttachment(a.path)"><Close /></ElIcon>
               </span>
             </div>
@@ -2058,6 +2095,7 @@ function onKey(e: Event) {
               @keydown="onKey"
               @click="syncCursor"
               @keyup="syncCursor"
+              @paste="onPaste"
             />
             <div class="composer-bar">
               <div class="composer-bar__left">
@@ -2720,6 +2758,7 @@ function onKey(e: Event) {
   background: var(--el-fill-color-light); border-radius: 4px; font-size: 13px;
 }
 .attach-chip__x { cursor: pointer; &:hover { color: var(--el-color-danger); } }
+.msg-image { max-width: 240px; max-height: 180px; border-radius: 8px; }
 .batch-bar {
   max-width: 780px;
   margin: 0 auto;
