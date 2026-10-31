@@ -692,6 +692,19 @@ try:
 except Exception as _e:
     logging.warning('message feedback migration on boot failed: %s', _e)
 
+# 会话级权限模式列（2026-10-31 bypass spec §2.1）。幂等加列；新迁移必须在此
+# 显式注册（init_db 自动扫描只覆盖全新库，见护栏测试）。
+try:
+    import importlib.util as _ilu_pm
+    _mp_pm = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'migrations', '2026_10_31_session_permission_mode.py')
+    _spec_pm = _ilu_pm.spec_from_file_location('_session_permission_mode_boot', _mp_pm)
+    _m_pm = _ilu_pm.module_from_spec(_spec_pm)
+    _spec_pm.loader.exec_module(_m_pm)
+    _m_pm.run()
+except Exception as _e:
+    logging.warning('session permission_mode migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
