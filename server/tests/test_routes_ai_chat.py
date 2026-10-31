@@ -530,18 +530,18 @@ def test_delete_session_cleans_everything(setup):
 
 def test_list_sessions_returns_user_sessions(setup):
     """SQL selects (id, title, last_active_at, batch_id, batch_input_file,
-    status, group_id, pinned_at) so that batch-children get synthesized
-    "[批] <file>" titles. The mock row must match that 8-tuple shape (the
-    group query returns (id, name, icon, created_at, count) rows)."""
+    status, group_id, pinned_at, permission_mode) so that batch-children get
+    synthesized "[批] <file>" titles. The mock row must match that 9-tuple
+    shape (the group query returns (id, name, icon, created_at, count) rows)."""
     from datetime import datetime
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchall.side_effect = [
         # sessions: (id, title, last_active_at, batch_id, batch_input_file,
-        #            status, group_id, pinned_at)
+        #            status, group_id, pinned_at, permission_mode)
         [('sess_a', '会话A', datetime(2026, 9, 1, 10, 0, 0), None, None,
-          'active', None, None),                                # regular session
+          'active', None, None, 'ask'),                         # regular session
          ('sess_b', None, datetime(2026, 9, 1, 9, 0, 0), 'batch-1',
-          'uploads/req-A.txt', 'active', None, None)],          # batch child → synthesized title
+          'uploads/req-A.txt', 'active', None, None, 'ask')],   # batch child → synthesized title
         [],  # trace_analysis sessions
         [('g1', '历史会话', 'Folder', datetime(2026, 8, 1, 0, 0, 0), 0)],  # groups
     ]
@@ -553,6 +553,7 @@ def test_list_sessions_returns_user_sessions(setup):
     assert body['sessions'][1]['title'] == '[批] req-A.txt'
     assert body['sessions'][0]['status'] == 'active'
     assert body['sessions'][0]['lastActiveAt'] == '2026-09-01T10:00:00'
+    assert body['sessions'][0]['permissionMode'] == 'ask'
     assert body['groups'][0]['name'] == '历史会话'
 
 

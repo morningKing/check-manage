@@ -539,7 +539,7 @@ def list_sessions():
         _maybe_bucket_legacy_sessions(cur, user['userId'])
         cur.execute(
             "SELECT id, title, last_active_at, batch_id, batch_input_file, "
-            "       status, group_id, pinned_at "
+            "       status, group_id, pinned_at, permission_mode "
             "FROM ai_chat_sessions "
             "WHERE user_id = %s "
             "  AND status IN ('active', 'closed') "
@@ -581,7 +581,11 @@ def list_sessions():
              'status': r[5],
              'groupId': r[6],
              'groupName': gname.get(r[6]),
-             'pinnedAt': r[7].isoformat() if r[7] else None}
+             'pinnedAt': r[7].isoformat() if r[7] else None,
+             # 会话级权限模式（bypass spec §2.4）：前端 store 据此恢复开关钮
+             # 状态与 bypass 自动放行 chip 流；列 DEFAULT 'ask' 不应为 NULL，
+             # 兜底 'ask' 防 NULL 穿透到前端类型。
+             'permissionMode': r[8] or 'ask'}
             for r in rows
         ],
         'groups': groups,

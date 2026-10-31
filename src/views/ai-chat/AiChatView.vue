@@ -14,6 +14,7 @@ import {
   ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
   DataAnalysis, FolderAdd,
   Folder, FolderOpened, Collection, Timer, Monitor, DataLine, Files, Aim,
+  Lock, Unlock,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -47,6 +48,7 @@ import { summarizeMeta } from '@/utils/aiMeta'
 import { authParam } from '@/utils/request'
 import { useAiChatStore } from '@/stores/aiChat'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
+import { useAuthStore } from '@/stores/auth'
 import { getStorage, setStorage, STORAGE_KEYS } from '@/utils/storage'
 import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
@@ -67,6 +69,7 @@ const FilePreviewDialog = defineAsyncComponent(() => import('@/components/common
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
+const authStore = useAuthStore()
 // Must be captured synchronously in setup(): calling useRoute() inside the
 // async onMounted callback (after an await) loses the setup context, inject()
 // returns undefined and route.query throws — silently swallowed, leaving the
@@ -870,6 +873,25 @@ const batchTerminal = computed(() =>
 // 运行中也允许发送（进插话队列，回合结束后自动发出），只要求有内容或附件。
 const canSend = computed(() =>
   !batchControlled.value && !!(input.value.trim() || attachments.value.length))
+
+// ---- bypass 模式（spec 2026-10-31 §2.4 前端落点）----
+const isGuest = computed(() => authStore.isGuest)
+const permissionMode = computed(() =>
+  store.sessions.find((s) => s.id === activeId.value)?.permissionMode ?? 'ask')
+const autoApprovedChips = computed(() =>
+  activeId.value ? store.autoApproved[activeId.value] ?? [] : [])
+
+async function onToggleBypass() {
+  const sid = activeId.value
+  if (!sid) return
+  const next = permissionMode.value === 'bypass' ? 'ask' : 'bypass'
+  try {
+    await store.setPermissionMode(sid, next)
+    ElMessage.success(next === 'bypass' ? 'Bypass 已开启：权限询问将自动放行' : '已切回确认模式')
+  } catch {
+    ElMessage.error('权限模式切换失败')
+  }
+}
 
 // ---- Artifacts (Claude-style file preview + version history) ----
 // Group artifacts by filename across the whole session. Named files (the fence
@@ -2069,15 +2091,29 @@ function onKey(e: Event) {
         </span>
 
       <!-- 用量状态条（F1）：模型 ｜ 上下文水位线 ｜ 累计 token/费用；:key 让切换
-           会话时重置「稍后」静音状态。 -->
-      <ContextStatusBar
-        v-if="activeId"
-        :key="activeId"
-        :usage="activeUsage"
-        :model-label="modelLabel"
-        :context-limit="contextLimit"
-        @compact="onCompact"
-      />
+           会话时重置「稍后」静音状态。bypass 开关钮同排置于状态条左侧（spec
+           2026-10-31 §2.4）：guest 不可见、批受控禁用。 -->
+      <div v-if="activeId" class="status-row">
+        <button
+          v-if="!isGuest"
+          class="bypass-toggle" :class="{ 'bypass-toggle--on': permissionMode === 'bypass' }"
+          type="button" data-test="bypass-toggle"
+          :disabled="batchControlled"
+          :title="permissionMode === 'bypass'
+            ? 'Bypass 开启：工具权限询问自动放行，点击切回确认模式'
+            : 'Bypass 模式：自动放行工具权限询问（developer+，仅本会话生效）'"
+          :aria-label="`权限模式 ${permissionMode === 'bypass' ? 'bypass（自动放行）' : 'ask（逐次确认）'}`"
+          @click="onToggleBypass"
+        ><ElIcon><component :is="permissionMode === 'bypass' ? Unlock : Lock" /></ElIcon>
+          {{ permissionMode === 'bypass' ? 'Bypass' : 'Ask' }}</button>
+        <ContextStatusBar
+          :key="activeId"
+          :usage="activeUsage"
+          :model-label="modelLabel"
+          :context-limit="contextLimit"
+          @compact="onCompact"
+        />
+      </div>
 
       <!-- 输入区：统一圆角卡片（Claude 风格） -->
       <div class="ai-chat__composer">
@@ -2090,6 +2126,15 @@ function onKey(e: Event) {
                 <ElIcon v-else><Document /></ElIcon>{{ a.name }}
                 <ElIcon class="attach-chip__x" @click="store.removeAttachment(a.path)"><Close /></ElIcon>
               </span>
+            </div>
+            <!-- bypass 自动放行流水（spec 2026-10-31 §2.4）：一问一 chip，点击整行清除 -->
+            <div v-if="autoApprovedChips.length" class="auto-approved" data-test="auto-approved-chip">
+              <span
+                v-for="(c, i) in autoApprovedChips" :key="`${c.at}-${i}`"
+                class="auto-approved__chip"
+                title="bypass 模式已自动放行该权限询问；点击清除"
+                @click="store.clearAutoApproved(activeId!)"
+              >⚡ 已自动放行 {{ c.permission }}</span>
             </div>
             <ElInput
               ref="composerInputEl"
@@ -2798,6 +2843,30 @@ function onKey(e: Event) {
 .batch-bar--completed .batch-bar__status { color: var(--el-color-success); }
 .batch-bar--failed .batch-bar__status { color: var(--el-color-danger); }
 .batch-bar .spin { animation: spin 1s linear infinite; }
+/* bypass 开关钮 + 用量状态条同一行（spec 2026-10-31 §2.4） */
+.status-row {
+  max-width: 780px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.status-row > .ctx-bar { flex: 1; min-width: 0; }
+.bypass-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  flex: none; padding: 2px 8px; font-size: 12px; line-height: 18px;
+  border-radius: 10px; border: 1px solid var(--el-border-color);
+  background: var(--el-fill-color-light); color: var(--el-text-color-secondary);
+  cursor: pointer; white-space: nowrap;
+  &:hover:not(:disabled) { color: var(--el-color-primary); border-color: var(--el-color-primary-light-5); }
+  &:disabled { cursor: not-allowed; opacity: 0.5; }
+}
+.bypass-toggle--on {
+  color: var(--el-color-warning);
+  border-color: var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-9);
+}
 .ai-chat__composer {
   padding: 8px 16px 18px;
   position: relative;
@@ -2831,6 +2900,14 @@ function onKey(e: Event) {
   line-height: 1.6;
 }
 .composer-attachments { margin-bottom: 4px; }
+/* bypass 自动放行 chip 行（spec 2026-10-31 §2.4） */
+.auto-approved { margin-bottom: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.auto-approved__chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 8px; font-size: 12px; line-height: 18px; border-radius: 10px;
+  background: var(--el-color-warning-light-9); color: var(--el-color-warning);
+  cursor: pointer;
+}
 .composer-bar {
   display: flex;
   align-items: center;
