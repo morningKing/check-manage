@@ -1693,9 +1693,18 @@ class BatchWorker:
                 if self._maybe_gate_retry(sid, gate, batch_id=batch_id,
                                           generation=generation):
                     return
-                self._mark_failed(sid, batch_id, error=err, generation=generation,
-                                  gate_status='failed', gate_error=err,
-                                  fencing_token=fencing_token)
+                # 用户裁定（2026-11-01）：核对不过不终局——会话照常 completed、
+                # 计入批次 done 桶；门禁失败明细照旧落库（gate_status='failed'
+                # + gate_error），由既有 UI 徽标/弹窗呈现（AdminChildGate 弹窗、
+                # 批管理行内徽标只读 gate_status，不依赖 session.status）。
+                # 两个通知保持 ok=False（与 completed 的不对称是有意的）：
+                # _notify_scan 的消费者 on_child_finished 与 _notify_child_done
+                # 的铃铛都无「completed 但门禁未过」的承载（成功分支不带
+                # error/gate 字段）——ok=True 会丢门禁失败可见性，且扫描侧会
+                # 把未核对的结果当成功回写数据行。
+                self._mark_done(sid, batch_id, last_preview=preview,
+                                generation=generation, gate_status='failed',
+                                gate_error=err, fencing_token=fencing_token)
                 self._notify_scan(session_row, None, ok=False)
                 self._notify_child_done(
                     session_row, False, elapsed=time.monotonic() - turn_start,

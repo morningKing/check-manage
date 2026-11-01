@@ -595,6 +595,59 @@ def test_gate_evaluated_audit_event_written(db_conn, user_id, monkeypatch,
     assert payload['failClosed'] is True
 
 
+def test_gate_failed_completes_with_gate_error(db_conn, user_id, monkeypatch,
+                                               tmp_path):
+    """用户裁定（2026-11-01）：动作门禁「核对不过」不再把批子会话置为
+    failed——会话照常 completed 并计入批次 done 桶；门禁失败明细照旧落库
+    （gate_status='failed' + gate_error），由既有管理面徽标/弹窗呈现。
+    fail-closed 路径（登记失败/不完整/账本不健康 → inconclusive）不在本
+    用例覆盖范围，另行保持 _mark_failed 语义。"""
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+    root = tmp_path
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    checks = [{'name': 'c1', 'tool': 'w', 'args_pattern': 'x'}]
+    bid, sids = _seed_batch(db_conn, user_id, 1, batch_checks=checks, root=tmp_path)
+    _fake_opencode(monkeypatch)
+    _clear_other_pending(db_conn, bid)
+    w = BatchWorker()
+    # 核对不过：登记成功（applicable=registered=1，不进 fail-closed），
+    # 核对结论 failed（模拟账本核对命中 0/1）。
+    monkeypatch.setattr(
+        BatchWorker, '_check_action_gate',
+        lambda self, sid, **kw: {'status': 'failed', 'expected': 1,
+                                 'results': [{'name': 'c1', 'kind': 'ledger',
+                                              'status': 'failed', 'evidence': 0,
+                                              'min_count': 1,
+                                              'tool': 'w', 'args_pattern': 'x'}]})
+    claimed = w._claim_pending_sessions(limit=1)
+    w._run_one(claimed[0])
+    sid = claimed[0]['id']
+    row = _child(db_conn, sid)
+    assert row['status'] == 'completed'
+    assert row['gate_status'] == 'failed'
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT gate_error FROM ai_chat_sessions WHERE id = %s", (sid,))
+        gate_error = cur.fetchone()[0]
+        status, done, failed, total = _batch(db_conn, bid)
+    assert gate_error and gate_error.startswith('action_gate:')
+    # 批次聚合看到的是 done 桶（completed），不是 failed
+    assert done == 1 and failed == 0
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT payload FROM ai_execution_events "
+            "WHERE session_id = %s AND event_type = 'gate.evaluated' "
+            "ORDER BY event_seq DESC LIMIT 1", (sid,))
+        prow = cur.fetchone()
+    assert prow is not None
+    payload = prow[0] if not isinstance(prow[0], dict) else prow[0]
+    if isinstance(payload, str):
+        import json as _json
+        payload = _json.loads(payload)
+    assert payload['gateStatus'] == 'failed'
+    assert payload['failClosed'] is False
+
+
 def test_run_one_completes_without_checks(db_conn, user_id, monkeypatch, tmp_path):
     """无生效 checks → 门禁 skipped，正常 completed。"""
     from utils.batch_engine import BatchWorker
