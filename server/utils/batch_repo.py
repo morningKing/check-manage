@@ -1790,7 +1790,7 @@ def get_children_progress(batch_id: str) -> list[dict]:
                 cur.execute(
                     "SELECT id, batch_seq, batch_input_file, status, "
                     "execution_generation, retry_count, error_message, "
-                    "gate_status, last_active_at "
+                    "gate_status, gate_error, last_active_at "
                     "FROM ai_chat_sessions WHERE batch_id = %s "
                     "AND deleted_at IS NULL ORDER BY batch_seq", (batch_id,))
                 rows = [dict(r) for r in cur.fetchall()]
@@ -1806,6 +1806,11 @@ def get_children_progress(batch_id: str) -> list[dict]:
                 'retryCount': r['retry_count'] or 0,
                 'retryable': not terminal,
                 'lastProgressAt': r['last_active_at'].isoformat() if r.get('last_active_at') else None,
+                # 评审跟进（2026-11-01）：核对不过的子会话以 completed 收口、
+                # error_message 为 NULL——children 增量携带 gateStatus/gateError
+                # （命名对齐 child.status 事件流），恢复门禁失败外部可见性。
+                'gateStatus': r.get('gate_status'),
+                'gateError': r.get('gate_error'),
                 'error': {
                     'code': 'GATE_INCONCLUSIVE' if r.get('gate_status') == 'inconclusive' else None,
                     'message': r.get('error_message'),

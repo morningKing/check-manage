@@ -1281,6 +1281,34 @@ def test_batch_out_children_array(db_conn, user_id, gap_open_client):
         _cleanup_open_batch(db_conn, bid, kid)
 
 
+def test_batch_out_children_gate_fields(db_conn, user_id, gap_open_client):
+    """评审跟进（2026-11-01）：门禁「核对不过」子会话以 completed 收口后，
+    error.message（error_message）为 NULL——对外 children[] 必须增量携带
+    gateStatus/gateError（命名对齐 child.status 事件流），恢复门禁失败的
+    外部可见性；既有字段不动（向后兼容）。"""
+    key, kid = _seed_open_key(db_conn, user_id)
+    bid, sids = _seed_open_batch(db_conn, user_id, kid, ['g.csv'])
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ai_chat_sessions SET status='completed', "
+                "  gate_status='failed', gate_error=%s WHERE id=%s",
+                ('action_gate: c1(需 w ~ x,实际命中 0/1)', sids[0]))
+        db_conn.commit()
+        r = gap_open_client.get(f'{OPEN_BASE}/{bid}', headers={'X-API-Key': key})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        child = r.get_json()['children'][0]
+        assert child['status'] == 'completed'
+        assert child['gateStatus'] == 'failed'
+        assert child['gateError'] == 'action_gate: c1(需 w ~ x,实际命中 0/1)'
+        # 既有 error 结构不变：completed 不带 code/retryable，message 仍读
+        # error_message（本路径为 NULL——文案已归 gateError）
+        assert child['error'] == {'code': None, 'message': None,
+                                  'retryable': False}
+    finally:
+        _cleanup_open_batch(db_conn, bid, kid)
+
+
 # ---------------------------------------------------------------------------
 # P1-A2b：扫描产物导入 data_files 的 file_import effect 补漏
 # ---------------------------------------------------------------------------
