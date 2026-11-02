@@ -154,7 +154,9 @@ def test_messages_passthrough_four_fields(client, mock_conn, mock_cursor):
         resp = client.get(f'{BASE}/session/messages?t={VALID_T}')
     assert resp.status_code == 200
     body = resp.get_json()
+    # 性能快改批 ④：接管页轮询窗口 500→100（get_child_messages 显式传参）
     assert gm.call_args.args == ('s1',)
+    assert gm.call_args.kwargs == {'limit': 100}
     assert body['childStatus'] == 'needs_review'
     assert body['total'] == 9 and body['truncated'] is True
     assert body['messages'][0] == {'id': 'm1', 'role': 'user', 'content': 'hi',
@@ -162,6 +164,85 @@ def test_messages_passthrough_four_fields(client, mock_conn, mock_cursor):
     assert body['messages'][1]['createdAt'] is None
     for m in body['messages']:
         assert set(m) == {'id', 'role', 'content', 'createdAt'}
+
+
+def test_messages_repo_default_limit_stays_500_for_open_api():
+    """Open API（open_api_batches 子任务消息端点）走 get_child_messages 默认
+    limit——对外契约不随接管页瘦身（性能快改批 ④ 只影响接管路由）。"""
+    import inspect
+    from utils import batch_repo
+    default = inspect.signature(
+        batch_repo.get_child_messages).parameters['limit'].default
+    assert default == 500
+
+
+def test_messages_real_db_window_capped_at_100(client, mock_conn, mock_cursor):
+    """真库链路（性能快改批 ④）：105 条消息的子会话，接管页每 3s 的轮询
+    payload 必须封顶 100 条——此前 500 条全 content 是多观看者场景的线性
+    放大器。仅打桩令牌解析，消息读取走真实 DB（app 夹具会把 get_db 绑定
+    泄漏成一次性 mock，本用例直接把两处绑定指到真实连接的 contextmanager）。"""
+    import psycopg2
+    import uuid
+    from config import DB_CONFIG
+
+    @contextmanager
+    def _real_db():
+        conn = psycopg2.connect(**DB_CONFIG)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    conn = psycopg2.connect(**DB_CONFIG)
+    cur = conn.cursor()
+    uid, bid, sid = (f'tk_wa_{uuid.uuid4().hex[:8]}' for _ in range(3))
+    try:
+        cur.execute(
+            "INSERT INTO users (id, username, password_hash, display_name, role) "
+            "VALUES (%s, 'tk_wa_user', 'x', 'TK WA', 'developer') "
+            "ON CONFLICT (id) DO NOTHING", (uid,))
+        cur.execute(
+            "INSERT INTO ai_chat_batches (id, user_id, name, prompt, status) "
+            "VALUES (%s, %s, 'takeover-win-test', 'p', 'running')", (bid, uid))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, title, status, "
+            "batch_id, batch_seq) "
+            "VALUES (%s, %s, 'win-test', 'running', %s, 1)", (sid, uid, bid))
+        for i in range(105):
+            cur.execute(
+                "INSERT INTO ai_chat_messages (id, session_id, role, content, seq) "
+                "VALUES (%s, %s, 'assistant', %s, %s)",
+                (f'{sid}:m{i:03d}', sid, f'[{{"type":"text","text":"m{i}"}}]', i))
+        conn.commit()
+
+        with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+                   return_value=_tok(session_id=sid, batch_id=bid,
+                                     child_status='running')), \
+             patch('utils.batch_repo.get_db', _real_db), \
+             patch('routes.external_takeover.get_db', _real_db):
+            resp = client.get(f'{BASE}/session/messages?t={VALID_T}')
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert len(body['messages']) == 100, (
+            '接管页轮询窗口必须封顶 100 条（性能快改批 ④）')
+        assert body['total'] == 105
+        assert body['truncated'] is True
+        # 最新的 100 条（m5..m104）、时序正序、childStatus 现读库
+        assert body['messages'][0]['content'][0]['text'] == 'm5'
+        assert body['messages'][-1]['content'][0]['text'] == 'm104'
+        assert body['childStatus'] == 'running'
+    finally:
+        cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+        cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+        conn.commit()
+        conn.close()
 
 
 def _send_patches(mock_conn, tok, status, owner=None):

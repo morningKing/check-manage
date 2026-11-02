@@ -109,7 +109,10 @@ def takeover_messages():
     if denied:
         return denied
     r = g.takeover
-    msgs = batch_repo.get_child_messages(r['session_id'])
+    # 性能快改批 ④：接管页每 3s 轮询本端点，窗口 500→100 条——多观看者
+    # 场景下 500 条全 content 是 payload 线性放大器；repo 默认 limit=500
+    # 不动（Open API 子任务消息端点共用，对外契约不变）。
+    msgs = batch_repo.get_child_messages(r['session_id'], limit=100)
     return jsonify({
         'childStatus': _child_status_fresh(),
         'messages': [
