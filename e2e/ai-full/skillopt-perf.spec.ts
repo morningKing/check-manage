@@ -8,6 +8,7 @@ import { test, expect } from '@playwright/test'
 import { gotoWithAuth, tag, screenshot } from './helpers'
 import {
   adminToken, createBatch, uploadStaging, waitBatchTerminal, cleanupBatch,
+  API,
 } from './batch/batch-helpers'
 import { execFileSync } from 'node:child_process'
 
@@ -33,20 +34,23 @@ with get_db() as conn:
 // 而 (oc_session_id, part_id) 唯一索引使复跑必撞，故必须显式先清。
 const PF_CLEANUP = `
   DELETE FROM ai_skill_invocations WHERE id IN ('pf-e2e-inv', 'pf-e2e-inv2',
-    'pf-e2e-inv3a', 'pf-e2e-inv3b');
+    'pf-e2e-inv3a', 'pf-e2e-inv3b', 'pf-e2e-inv4a', 'pf-e2e-inv4b',
+    'pf-e2e-inv5a');
   DELETE FROM agent_tool_calls WHERE oc_session_id IN ('oc-pf-e2e', 'oc-pf-e2e-2',
     'oc-pf-e2e-3');
   DELETE FROM ai_chat_sessions WHERE id IN ('pf-e2e-sess', 'pf-e2e-sess2',
-    'pf-e2e-sess3');
+    'pf-e2e-sess3', 'pf-e2e-sess4', 'pf-e2e-sess5');
   DELETE FROM ai_execution_attempts WHERE id IN ('pf-e2e-att', 'pf-e2e-att2',
-    'pf-e2e-att3a', 'pf-e2e-att3b');
+    'pf-e2e-att3a', 'pf-e2e-att3b', 'pf-e2e-att4a', 'pf-e2e-att4b',
+    'pf-e2e-att5a', 'pf-e2e-att5b');
   DELETE FROM ai_chat_batches WHERE id IN ('pf-e2e-batch', 'pf-e2e-batch2',
-    'pf-e2e-batch3');
+    'pf-e2e-batch3', 'pf-e2e-batch4', 'pf-e2e-batch5');
   DELETE FROM users WHERE id = 'pf-e2e-user';
 `
 
 test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下钻+诊断）', async ({ page }) => {
-  // 种子扩到三会话四任务 + 双下钻流程，60s 全局默认不够用
+  // 种子扩到五会话六 run（含 run 口径：人工接管剔除/自动恢复链合并）+
+  // 双下钻流程，60s 全局默认不够用
   test.setTimeout(120_000)
   const mark = tag('perf')
   // 复跑防撞：先清可能的历史残留（上一次中断的 finally 未执行到）
@@ -135,6 +139,38 @@ test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下
       tool, args_text, state, occurred_at, started_at, duration_ms) VALUES
     ('oc-pf-e2e-3', 'pf-e2e-sess3', 'pt3', 'bash', '{}', 'completed',
      NOW() - interval '360 seconds', NOW() - interval '380 seconds', 70000);
+    -- 端到端 run 口径（2026-11-02）：第四个任务 = send run + 人工接管轮
+    -- （无链 continue root，带 runtime 调用证据——旧口径会把它当独立样本，
+    -- 新口径整条剔除）；第五个任务 = send + 自动重试链（parent 串链），
+    -- 链墙钟跨两 attempt（重排队间隙计入）。
+    INSERT INTO ai_chat_batches (id, user_id, name, prompt, total)
+    VALUES ('pf-e2e-batch4', 'pf-e2e-user', '${mark}', 'p', 1);
+    INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, batch_seq, opencode_session_id, workspace_path)
+    VALUES ('pf-e2e-sess4', 'pf-e2e-user', 'completed', 'pf-e2e-batch4', 0, 'oc-pf-e2e-4', 'C:/tmp/pf-e2e-4');
+    INSERT INTO ai_execution_attempts (id, session_id, source_type, source_id, status, started_at, finished_at)
+    VALUES ('pf-e2e-att4a', 'pf-e2e-sess4', 'batch', 'pf-e2e-batch4', 'completed',
+            NOW() - interval '560 seconds', NOW() - interval '470 seconds');
+    INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, evidence_refs)
+    VALUES ('pf-e2e-inv4a', 'pf-e2e-sess4', 'pf-e2e-att4a', 'perf-e2e-skill', '', 'runtime', 'confirmed',
+            NOW() - interval '520 seconds', '[]'::jsonb);
+    INSERT INTO ai_execution_attempts (id, session_id, source_type, source_id, attempt_no, operation, status, started_at, finished_at)
+    VALUES ('pf-e2e-att4b', 'pf-e2e-sess4', 'batch', 'pf-e2e-batch4', 2, 'continue', 'completed',
+            NOW() - interval '80 seconds', NOW() - interval '10 seconds');
+    INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, evidence_refs)
+    VALUES ('pf-e2e-inv4b', 'pf-e2e-sess4', 'pf-e2e-att4b', 'perf-e2e-skill', '', 'runtime', 'confirmed',
+            NOW() - interval '50 seconds', '[]'::jsonb);
+    INSERT INTO ai_chat_batches (id, user_id, name, prompt, total)
+    VALUES ('pf-e2e-batch5', 'pf-e2e-user', '${mark}', 'p', 1);
+    INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, batch_seq, opencode_session_id, workspace_path)
+    VALUES ('pf-e2e-sess5', 'pf-e2e-user', 'completed', 'pf-e2e-batch5', 0, 'oc-pf-e2e-5', 'C:/tmp/pf-e2e-5');
+    INSERT INTO ai_execution_attempts (id, session_id, source_type, source_id, attempt_no, operation, parent_attempt_id, status, started_at, finished_at)
+    VALUES ('pf-e2e-att5a', 'pf-e2e-sess5', 'batch', 'pf-e2e-batch5', 1, 'send', NULL, 'completed',
+            NOW() - interval '540 seconds', NOW() - interval '440 seconds'),
+           ('pf-e2e-att5b', 'pf-e2e-sess5', 'batch', 'pf-e2e-batch5', 2, 'continue', 'pf-e2e-att5a', 'completed',
+            NOW() - interval '80 seconds', NOW() - interval '10 seconds');
+    INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, evidence_refs)
+    VALUES ('pf-e2e-inv5a', 'pf-e2e-sess5', 'pf-e2e-att5a', 'perf-e2e-skill', '', 'runtime', 'confirmed',
+            NOW() - interval '500 seconds', '[]'::jsonb);
   `)
   try {
     await gotoWithAuth(page, PAGE)
@@ -144,21 +180,22 @@ test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下
     const defItem = page.locator('.perf-def-item').filter({ hasText: 'perf-e2e-skill' })
     await expect(defItem).toBeVisible({ timeout: 15_000 })
     await defItem.click()
-    // 慢因分布块：四个任务三种主导（工具×2/引擎间隙/模型推理），芯片计数正确
-    // ——同会话双 attempt（第三个任务）各自归自己的窗口，B 工具主导不被
-    // 旧窗口吞掉（2026-10-31 审计回归）
+    // 慢因分布块：六个 run 四种主导样本（工具×2/引擎间隙×3/模型推理×1），
+    // 芯片计数正确——同会话双 attempt（第三个任务）各自归自己的窗口，B 工具
+    // 主导不被旧窗口吞掉（2026-10-31 审计回归）；run 口径下任务四的 send run
+    // 在列、人工接管轮 att4b 不占行（2026-11-02）
     await expect(page.locator('[data-test="cause-dist-block"]')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('[data-test="cause-bar"]')).toBeVisible()
     await expect(page.locator('[data-test="cause-chip-tool"]')).toContainText('工具 2 个')
-    await expect(page.locator('[data-test="cause-chip-idle"]')).toContainText('引擎间隙 1 个')
+    await expect(page.locator('[data-test="cause-chip-idle"]')).toContainText('引擎间隙 3 个')
     await expect(page.locator('[data-test="cause-chip-model"]')).toContainText('模型推理 1 个')
-    // 未筛选：任务表四行；点「引擎间隙」芯片 → 只剩 idle 主导的任务二；
-    // 再点取消恢复四行
-    expect(await page.locator('.perf-view .el-table__row').count()).toBe(4)
+    // 未筛选：任务表六行；点「引擎间隙」芯片 → 三行（任务二/任务四 run/
+    // 任务五链 run）；再点取消恢复六行
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(6)
     await page.locator('[data-test="cause-chip-idle"]').click()
-    expect(await page.locator('.perf-view .el-table__row').count()).toBe(1)
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(3)
     await page.locator('[data-test="cause-chip-idle"]').click()
-    expect(await page.locator('.perf-view .el-table__row').count()).toBe(4)
+    expect(await page.locator('.perf-view .el-table__row').count()).toBe(6)
     await expect(page.locator('[data-test="perf-trend"]')).toBeVisible({ timeout: 10_000 })
     // 任务表首行（ElTable row-click 打开下钻；点「工具」主导行=带 bash 的任务一，
     // 其下钻才有工具耗时聚合表可断言）
@@ -182,6 +219,29 @@ test('性能分析：DB 播种任务在视图中渲染（慢因分布+趋势+下
     await expect(topTurns).toBeVisible({ timeout: 10_000 })
     await expect(topTurns).toContainText('10.0s')      // 净推理 = 80s − bash 70s
     await expect(topTurns).toContainText('1m20s')      // 轮毛列对照
+    // 端到端 run 口径 API 断言（真链路直连后端，绕 vite 代理）：
+    // 任务四的报告 = send run（att4a）——人工接管轮 att4b 不顶掉报告，
+    // 且「人工接管 1 轮未计入」计数可见；任务五 = 链合并视图（链墙钟跨两
+    // attempt，anchor=链末成员）
+    const tk = await adminToken()
+    const hdrs = { Authorization: `Bearer ${tk}` }
+    const r4 = await fetch(
+      `${API}/ai/chat/admin/batches/pf-e2e-batch4/sessions/pf-e2e-sess4/perf`,
+      { headers: hdrs })
+    expect(r4.ok).toBeTruthy()
+    const d4 = await r4.json()
+    expect(d4.attempt.attemptId).toBe('pf-e2e-att4a')
+    expect(d4.attempt.excludedManualRounds).toBe(1)
+    expect(Math.abs(d4.attempt.wallMs - 90_000)).toBeLessThanOrEqual(1_000)
+    const r5 = await fetch(
+      `${API}/ai/chat/admin/batches/pf-e2e-batch5/sessions/pf-e2e-sess5/perf`,
+      { headers: hdrs })
+    expect(r5.ok).toBeTruthy()
+    const d5 = await r5.json()
+    expect(d5.attempt.attemptId).toBe('pf-e2e-att5b')
+    expect(d5.attempt.chain.map((c: { attemptId: string }) => c.attemptId))
+      .toEqual(['pf-e2e-att5a', 'pf-e2e-att5b'])
+    expect(Math.abs(d5.attempt.wallMs - 530_000)).toBeLessThanOrEqual(1_000)
   } finally {
     dbExec(PF_CLEANUP)
   }
