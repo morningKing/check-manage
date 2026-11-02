@@ -578,7 +578,8 @@ class _SessionTimeout(Exception):
     卡死检测（question 挂起、MCP 服务无响应等都落在这里）；其余情况是达到
     SESSION_TIMEOUT_SEC 硬上限。"""
 
-    def __init__(self, seconds: int, reason: str = 'timeout'):
+    def __init__(self, seconds: int, reason: str = 'timeout',
+                 diagnosis: dict | None = None):
         if reason == 'stalled (no progress)':
             msg = (f'AI 会话已 {seconds} 秒没有任何新进展（既无新文本输出，也没有工具调用在执行），'
                    f'可能是模型响应卡住、上游服务异常或网络问题，请重试该会话')
@@ -591,6 +592,27 @@ class _SessionTimeout(Exception):
         super().__init__(msg)
         self.seconds = seconds
         self.reason = reason
+        # 判定现场快照（_stall_diagnosis 构建）：触发瞬间最后一条消息的
+        # finish/running_tool/工具 part 状态 + pending question/permission
+        # 计数。事后区分「provider 真死 / 轮询看不见 / ask 挂起没被自动拒」
+        # 的一手证据——error_message 只剩最后一次，事件才留逐次记录。
+        self.diagnosis = diagnosis or {}
+
+
+def _format_diagnosis(d: dict) -> str:
+    """诊断 dict → 单行紧凑文本（error_message 尾部可读后缀）。全防御式：
+    任何缺键/畸形都不抛——诊断是为失败路径服务的，不能再炸失败路径。"""
+    try:
+        tools = ','.join(f"{t.get('name')}:{t.get('status')}"
+                         for t in (d.get('toolParts') or [])
+                         if isinstance(t, dict))
+        return (f"lastMsg={d.get('lastMsgId')} finish={d.get('finish')} "
+                f"runningTool={d.get('runningTool')} tools=[{tools}] "
+                f"pendingQ={d.get('pendingQuestions')} "
+                f"pendingP={d.get('pendingPermissions')} "
+                f"msgs={d.get('msgCount')}")
+    except Exception:  # noqa: BLE001
+        return ''
 
 
 class _TurnFailed(Exception):
@@ -1739,11 +1761,29 @@ class BatchWorker:
         except (_SessionTimeout, _TurnFailed) as e:
             # 可重试类失败（停滞/工具卡死/部分 provider 错误）先自动重新排队；
             # 预算用尽或不属于白名单才落 failed。
-            if self._is_retryable(e) and self._maybe_auto_retry(
-                    sid, generation=generation):
+            retried = self._is_retryable(e) and self._maybe_auto_retry(
+                sid, generation=generation)
+            # 停滞/卡死每次尝试都落一条 child.stall 事件（含判定现场）——
+            # error_message 只保留最后一次，事件是逐次重试原因的唯一持久证据。
+            diag = getattr(e, 'diagnosis', None)
+            if isinstance(e, _SessionTimeout) and diag and batch_id:
+                from utils import batch_events as _batch_events
+                _batch_events.append_event(
+                    batch_id, 'child.stall',
+                    aggregate_type='session', aggregate_id=sid,
+                    execution_generation=generation,
+                    payload={'session_id': sid, 'reason': e.reason,
+                             'seconds': e.seconds,
+                             'action': 'auto_retry' if retried else 'failed',
+                             'diagnosis': diag})
+            if retried:
                 return
             # 两者都已自带可读原因，直接落库；不要加 `{type}: ` 前缀，那对用户是噪音。
             err = str(e)[:500]
+            if diag:
+                tail = _format_diagnosis(diag)
+                if tail:
+                    err = f'{err}\n【诊断】{tail}'
             self._mark_failed(sid, batch_id, error=err, generation=generation,
                               fencing_token=fencing_token)
             self._notify_scan(session_row, None, ok=False)
@@ -2705,16 +2745,22 @@ class BatchWorker:
                         tool_stall_start = now   # 子代理还活着：顺延等待
                     else:
                         # 卡死的工具调用：先 abort（别让 OpenCode 继续空转烧
-                        # token）再失败，带着可读原因。
+                        # token）再失败，带着可读原因与判定现场。
                         try:
                             opencode_client.abort_session(oc_session_id, directory=directory)
                         except Exception:
                             traceback.print_exc()
-                        raise _SessionTimeout(int(now - tool_stall_start),
-                                              reason='tool stuck')
+                        raise _SessionTimeout(
+                            int(now - tool_stall_start), reason='tool stuck',
+                            diagnosis=self._stall_diagnosis(
+                                msgs, baseline_ids, last_sig,
+                                directory, oc_session_id))
             elif now - last_progress_at > self.STALL_TIMEOUT_SEC:
-                raise _SessionTimeout(int(now - last_progress_at),
-                                      reason='stalled (no progress)')
+                raise _SessionTimeout(
+                    int(now - last_progress_at),
+                    reason='stalled (no progress)',
+                    diagnosis=self._stall_diagnosis(
+                        msgs, baseline_ids, last_sig, directory, oc_session_id))
             time.sleep(self.POLL_INTERVAL_SEC)
         raise _SessionTimeout(self.SESSION_TIMEOUT_SEC)
 
@@ -2738,6 +2784,63 @@ class BatchWorker:
                         tool_sig.append((p.get('name'), p.get('status'),
                                          p.get('output_len') or 0))
         return (count, total_text, tuple(tool_sig))
+
+    def _stall_diagnosis(self, msgs: list, baseline_ids: set | None,
+                         last_sig, directory: str,
+                         oc_session_id: str) -> dict:
+        """STALL / 工具卡死触发瞬间的判定现场快照。
+
+        回答三问（事后区分「provider 真死 / 平台轮询看不见 / ask 挂起没被
+        自动拒」的一手证据）：当时最后一条 assistant 消息长什么样（finish/
+        running_tool/工具 part 状态）、有没有 pending question/permission、
+        最后一次进度签名是什么。纯读取 + 防御式 REST 计数——诊断绝不能再
+        炸失败路径本身，任何异常都降级为缺键。"""
+        d: dict = {}
+        try:
+            d['msgCount'] = len(msgs)
+            for m in reversed(msgs):
+                if m.get('role') != 'assistant':
+                    continue
+                if baseline_ids and m.get('id') in baseline_ids:
+                    continue  # continue 模式：上一回合的旧消息不算本轮现场
+                d['lastMsgId'] = m.get('id')
+                d['finish'] = m.get('finish')
+                d['runningTool'] = bool(m.get('running_tool'))
+                err = m.get('error')
+                if err:
+                    d['msgError'] = (err.get('name')
+                                     if isinstance(err, dict) else str(err))
+                parts = [p for p in (m.get('content') or [])
+                         if isinstance(p, dict) and p.get('type') == 'tool_use']
+                d['toolParts'] = [{'name': p.get('name'), 'status': p.get('status')}
+                                  for p in parts[-5:]]   # 最近 5 个，防长尾
+                break
+            if last_sig is not None:
+                d['sig'] = str(last_sig)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        # pending ask 计数走独立端点（消息列表里看不到），连同正在跑的
+        # 子代理会话一起扫——子代理的提问挂起的是父回合的 task 工具。
+        accepted = {oc_session_id}
+        try:
+            accepted |= set(self._running_task_children(msgs, baseline_ids))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            qs = opencode_client.list_questions(directory=directory) or []
+            d['pendingQuestions'] = sum(
+                1 for q in qs
+                if isinstance(q, dict) and q.get('sessionID') in accepted)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            ps = opencode_client.list_permissions(directory=directory) or []
+            d['pendingPermissions'] = sum(
+                1 for p in ps
+                if isinstance(p, dict) and p.get('sessionID') in accepted)
+        except Exception:  # noqa: BLE001
+            pass
+        return d
 
     @staticmethod
     def _content_from_parts(parts, subtask_status: dict | None = None,
