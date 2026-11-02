@@ -1217,13 +1217,15 @@ class TestEndToEndRunScope:
                               parent_id=aid1, start_off=50, end_off=10)
         m = load_attempt_metrics(db_conn, aid2)
         assert m['attemptId'] == aid2
-        assert m['wallMs'] == 590_000            # 600s → 10s（含 50s 恢复间隙）
+        # 600s → 10s（含 50s 恢复间隙）；两条 attempt 种子跨事务取 NOW()
+        # 有毫秒级漂移（同 test_coverage_delegation 先例，±1s 容差）
+        assert abs(m['wallMs'] - 590_000) <= 1_000
         assert m['runAnchorAttemptId'] == aid2
         assert [c['attemptId'] for c in m['chain']] == [aid1, aid2]
         assert m['excludedManualRounds'] == 0
         # 请求链首成员：同一合并窗口，身份保持请求值
         m1 = load_attempt_metrics(db_conn, aid1)
-        assert m1['attemptId'] == aid1 and m1['wallMs'] == 590_000
+        assert m1['attemptId'] == aid1 and abs(m1['wallMs'] - 590_000) <= 1_000
         assert m1['runAnchorAttemptId'] == aid2
 
     def test_manual_continue_run_excluded_from_aggregates(self, db_conn, user_id):
@@ -1285,7 +1287,8 @@ class TestEndToEndRunScope:
         概览分母不计——与单 attempt 时代语义一致。"""
         bid, sid, aid1 = _seed_perf(db_conn, user_id)
         _seed_followup(db_conn, bid, sid, no=2, operation='continue',
-                       parent_id=aid1, start_off=50, end_off=None)
+                       status='running', parent_id=aid1, start_off=50,
+                       end_off=None)
         tasks = list_definition_tasks(db_conn, 'skill', 'stock-analysis')
         assert len(tasks) == 1 and tasks[0]['status'] == 'running'
         assert definition_p50(db_conn, 'skill', 'stock-analysis') is None
@@ -1300,7 +1303,7 @@ class TestEndToEndRunScope:
         dist = definition_cause_distribution(db_conn, 'skill', 'stock-analysis')
         assert dist['taskCount'] == 1
         assert dist['taskCauses'][0] == {'attemptId': aid2, 'dominant': 'idle'}
-        assert dist['shares']['wallMs'] == 590_000
+        assert abs(dist['shares']['wallMs'] - 590_000) <= 1_000
 
     def test_slow_tasks_chain_wall_and_anchor(self, db_conn, user_id):
         """慢任务 Top 按 run 墙钟排序/展示，归属键=anchor。链墙钟(590s)
@@ -1310,7 +1313,7 @@ class TestEndToEndRunScope:
                               parent_id=aid1, start_off=50, end_off=10)
         slow = list_slow_tasks(db_conn, limit=10)
         hit = next(t for t in slow if t['attemptId'] == aid2)
-        assert hit['wallMs'] == 590_000
+        assert abs(hit['wallMs'] - 590_000) <= 1_000
         assert hit['defKind'] == 'skill' and hit['defName'] == 'stock-analysis'
 
 
@@ -1339,7 +1342,7 @@ class TestChildPerfRunScope:
                           headers=admin_h)
         body = r.get_json()
         assert body['attempt']['attemptId'] == aid2     # anchor=链末成员
-        assert body['attempt']['wallMs'] == 590_000
+        assert abs(body['attempt']['wallMs'] - 590_000) <= 1_000
         assert len(body['attempt']['chain']) == 2
 
     def test_latest_send_root_still_wins_without_chain(self, db_conn, user_id,

@@ -198,6 +198,37 @@ describe('SubtaskPerfReport', () => {
     expect(md).toContain('毛 1m0s')
   })
 
+  it('端到端 run 口径注记：链+人工剔除显示、单派发不显示（页面与 Markdown 同源）', async () => {
+    // 单派发无剔除：不显示口径行
+    mockPerfAttempt.mockResolvedValue(DETAIL)
+    let w = await mountReport({ attemptId: 'aid1' })
+    expect(w.find('[data-test="run-scope-note"]').exists()).toBe(false)
+
+    // 自动恢复链 2 轮 + 人工接管 1 轮剔除
+    const d = JSON.parse(JSON.stringify(DETAIL)) as PerfAttemptDetail
+    d.attempt.chain = [
+      { attemptId: 'aid0', operation: 'send', status: 'recovering',
+        startedAt: '2026-10-15T10:00:00', finishedAt: '2026-10-15T10:02:00' },
+      { attemptId: 'aid1', operation: 'continue', status: 'completed',
+        startedAt: '2026-10-15T10:03:00', finishedAt: '2026-10-15T10:05:00' },
+    ]
+    d.attempt.runAnchorAttemptId = 'aid1'
+    d.attempt.excludedManualRounds = 1
+    mockPerfAttempt.mockResolvedValue(d)
+    w = await mountReport({ attemptId: 'aid1' })
+    const note = w.find('[data-test="run-scope-note"]')
+    expect(note.exists()).toBe(true)
+    expect(note.text()).toContain('2 轮派发连续计入')
+    expect(note.text()).toContain('人工接管 1 轮未计入')
+
+    // Markdown 与页面同源
+    await w.find('[data-test="copy-md"]').trigger('click')
+    await flushPromises()
+    const md = writeText.mock.calls[0][0] as string
+    expect(md).toContain(
+      '- 口径：端到端含自动恢复：2 轮派发连续计入；人工接管 1 轮未计入')
+  })
+
   it('batchId+sid 模式：调用子任务端点', async () => {
     mockChildPerf.mockResolvedValue(DETAIL)
     const w = await mountReport({ batchId: 'b1', sid: 'sid1' })

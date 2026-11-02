@@ -331,10 +331,22 @@ export interface PerfSkillAgg {
   durationMs: number | null
 }
 
+/** 端到端 run 的链明细（2026-11-02）：attempt 链逐成员（时间序）。 */
+export interface PerfAttemptChainEntry {
+  attemptId: string; operation: string; status: string
+  startedAt: string | null; finishedAt: string | null
+}
+
 export interface PerfAttemptDetail {
   attempt: PerfTaskEntry & {
     requestedModel?: string | null; effectiveModel?: string | null
     batchReuseAgents?: string[] | null
+    /** 端到端 run 口径（2026-11-02）：链收口 attempt 与链明细；
+     *  孤立 attempt（人工轮直查）时缺省。 */
+    runAnchorAttemptId?: string
+    chain?: PerfAttemptChainEntry[]
+    /** 被剔除的人工接管轮数（无链 continue root 及其后代） */
+    excludedManualRounds?: number
   }
   coverage: { wallMs: number; modelMs: number; subagentWaitMs: number; idleMs: number;
               toolMs: number }

@@ -71,6 +71,12 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# 自动重排队原因白名单（_close_attempt_for_requeue 落 attempt.error_code）。
+# perf 分析的端到端 run 口径据此区分「自动恢复续跑」与「人工接管续跑」
+# （后者 parent_attempt_id 恒 NULL）。_consume_parent_attempt 兜底查库同用。
+AUTO_REQUEUE_CODES = ('AUTO_RETRY', 'GATE_RETRY', 'RECONCILE_REQUEUE')
+
+
 def _fmt_elapsed(secs: float) -> str:
     """把耗时秒数格式化为「X 分 Y 秒」/「Y 秒」（与交互式长任务通知一致）。"""
     s = max(0, int(secs))
@@ -855,7 +861,8 @@ class BatchWorker:
         self._lock = threading.Lock()
         self._dispatcher: threading.Thread | None = None
         # F9：重排前的旧 attempt id（session_id -> attempt_id），下一次
-        # create_attempt 以 parent_attempt_id 串链。
+        # create_attempt 以 parent_attempt_id 串链。跨重启由
+        # _consume_parent_attempt 查库兜底（最新 recovering + 白名单）。
         self._parent_attempt: dict = {}
         # P0 单实例租约（spec §5.3）：持lease才跑 dispatcher 与 _restart_audit。
         self._lease_owner: str | None = None
@@ -1542,7 +1549,7 @@ class BatchWorker:
             audit_attempt_id = execution_audit.create_attempt(
                 session_id=sid, source_type=_src_type, source_id=batch_id,
                 operation='continue' if is_continue else 'send',
-                parent_attempt_id=self._parent_attempt.pop(sid, None),
+                parent_attempt_id=self._consume_parent_attempt(sid),
                 requested_agent=agent, effective_agent=agent,
                 agent_resolution=('batch_default' if agent else 'unknown'),
                 requested_model=model, effective_model=model,
@@ -1977,6 +1984,35 @@ class BatchWorker:
             session_id, 'recovering', error_code=reason)
         if closed:
             self._parent_attempt[session_id] = closed
+
+    def _consume_parent_attempt(self, session_id: str):
+        """下一次 create_attempt 的 parent_attempt_id（端到端 run 口径判据，
+        2026-11-02）：优先消费内存字典（_close_attempt_for_requeue 记录）；
+        字典未命中（worker 重启丢失）回落查库——仅当**最新一条** attempt 为
+        status='recovering' 且 error_code 属自动重排队白名单才可作链父。
+        必须限「最新一条」：自动重试已收敛（末条 completed）后的人工
+        continue 不得串上更早的 recovering 旧链。"""
+        parent = self._parent_attempt.pop(session_id, None)
+        if parent:
+            return parent
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id FROM ai_execution_attempts "
+                        "WHERE session_id = %s AND attempt_no = "
+                        "  (SELECT MAX(attempt_no) FROM ai_execution_attempts "
+                        "    WHERE session_id = %s) "
+                        "AND status = 'recovering' "
+                        "AND error_code = ANY(%s)",
+                        (session_id, session_id,
+                         list(AUTO_REQUEUE_CODES)))
+                    row = cur.fetchone()
+            return row[0] if row else None
+        except Exception as e:      # 审计链兜底失败不阻断派发（_safe 惯例）
+            logger.warning('parent attempt fallback lookup failed sid=%s: %s',
+                           session_id, e)
+            return None
 
     def _maybe_gate_retry(self, session_id: str, gate: dict,
                           batch_id: str | None = None,

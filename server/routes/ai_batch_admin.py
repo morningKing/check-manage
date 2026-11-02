@@ -106,27 +106,36 @@ def child_gate(batch_id, sid):
 @ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/perf')
 @require_permission('admin.ai_chat_admin')
 def child_perf(batch_id, sid):
-    """子任务性能报告（管理面只读）：解析该子会话**最新一次**执行 attempt，
-    返回与 /ai/chat/admin/perf/attempts/<aid> 同形状的 payload（概要/轮次/
-    子代理/逐调用明细/重复/失败计数）——批任务排障视角的性能报告出口
-    （2026-10-15 需求：工具耗时 Top 到参数/推理 Top/失败/重复调用）。
+    """子任务性能报告（管理面只读）：端到端 run 口径（2026-11-02）——解析
+    该子会话**最新一条 send-root run**（attempt 链，自动恢复续跑合并、人工
+    接管轮剔除，见 perf_analysis.resolve_session_runs），返回与
+    /ai/chat/admin/perf/attempts/<aid> 同形状的 payload（概要/轮次/子代理/
+    逐调用明细/重复/失败计数），附带 chain（链明细）与 excludedManualRounds
+    （未计入的人工轮数）——批任务排障视角的性能报告出口（2026-10-15 需求：
+    工具耗时 Top 到参数/推理 Top/失败/重复调用）。
 
-    无执行记录（未跑过/attempt 未落库）→ 200 {'attempt': None, 'empty': True}，
-    前端显示空态，不当作错误。"""
+    无 included run（全人工/无执行记录/attempt 未落库）→ 回落最新 attempt
+    的单 attempt 视图；完全没有执行记录 → 200 {'attempt': None, 'empty':
+    True}，前端显示空态，不当作错误。"""
     sess = admin_get_child_session(batch_id, sid)
     if sess is None:
         return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
     from db import get_db
-    from utils.perf_analysis import attempt_payload
+    from utils.perf_analysis import attempt_payload, resolve_session_runs
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM ai_execution_attempts WHERE session_id = %s "
-                "ORDER BY started_at DESC NULLS LAST LIMIT 1", (sid,))
-            row = cur.fetchone()
-    if not row:
+            runs = resolve_session_runs(cur, [sid]).get(sid) or []
+            if runs:
+                anchor_id = runs[-1]['anchor']['id']   # 最新 run 的链末成员
+            else:
+                cur.execute(
+                    "SELECT id FROM ai_execution_attempts WHERE session_id = %s "
+                    "ORDER BY started_at DESC NULLS LAST LIMIT 1", (sid,))
+                row = cur.fetchone()
+                anchor_id = row[0] if row else None
+    if not anchor_id:
         return jsonify({'attempt': None, 'empty': True})
-    payload = attempt_payload(get_db, row[0])
+    payload = attempt_payload(get_db, anchor_id)
     if payload is None:
         return jsonify({'attempt': None, 'empty': True})
     return jsonify(payload)

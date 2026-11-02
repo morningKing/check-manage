@@ -41,6 +41,10 @@
           <span v-if="!detail.tools.durationAvailable">
             · 该任务工具耗时未采集（旧数据），Top 排名不可用</span>
         </div>
+        <div v-if="runScopeNote" class="subtask-perf__tokens muted"
+             data-test="run-scope-note">
+          {{ runScopeNote }}
+        </div>
 
         <!-- 最慢工具调用 Top 10 -->
         <h4>最慢工具调用 Top 10 <span class="muted">（含「开子代理」委派等待）</span></h4>
@@ -310,6 +314,19 @@ const topTurns = computed<RankedTurn[]>(() => (detail.value?.turns ?? [])
 const failedCalls = computed(() => allCalls.value.filter(c => c.state === 'error'))
 const repeats = computed(() => detail.value?.tools.repeats ?? [])
 
+/** 端到端 run 口径注记（2026-11-02）：链上多轮派发（含自动恢复，重排队
+ *  间隙计入）或存在被剔除的人工接管轮时提示口径；单派发无剔除不显示。 */
+const runScopeNote = computed<string | null>(() => {
+  const chain = detail.value?.attempt.chain
+  const manual = detail.value?.attempt.excludedManualRounds ?? 0
+  const parts: string[] = []
+  if (chain && chain.length > 1) {
+    parts.push(`端到端含自动恢复：${chain.length} 轮派发连续计入`)
+  }
+  if (manual > 0) parts.push(`人工接管 ${manual} 轮未计入`)
+  return parts.length ? parts.join('；') : null
+})
+
 const agentBySubtask = computed<Record<string, string>>(() => {
   const m: Record<string, string> = {}
   for (const st of detail.value?.subtasks ?? []) {
@@ -380,6 +397,7 @@ function buildMarkdown(): string {
   L.push(`- 会话：${d.attempt.sessionId}`)
   L.push(`- 执行：${d.attempt.attemptId}（${d.attempt.status}）`)
   L.push(`- 时间：${d.attempt.startedAt ?? '-'} → ${d.attempt.finishedAt ?? '-'}`)
+  if (runScopeNote.value) L.push(`- 口径：${runScopeNote.value}`)
   L.push('', '## 概要', '')
   L.push('| 指标 | 值 |', '| --- | --- |')
   L.push(`| 墙钟 | ${fmtMs(cov.value.wallMs)} |`)

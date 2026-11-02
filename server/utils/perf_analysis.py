@@ -123,11 +123,167 @@ def _open_conn(db_ctx):
     return ctx() if callable(ctx) else ctx
 
 
-_ATTEMPT_SQL = (
-    "SELECT a.id, a.session_id, a.source_type, a.source_id, a.status,"
-    " a.started_at, a.finished_at, a.requested_model, a.effective_model "
-    "FROM ai_execution_attempts a WHERE a.id = %s"
-    " AND a.source_type <> 'kefu'")
+# ---- 端到端 run 口径（2026-11-02）----
+# 性能分析只算「端到端一次性」耗时：run = 一条 attempt 链（root =
+# parent_attempt_id IS NULL + 全部 parent 后代），链墙钟 = root.started →
+# 末成员.finished——自动恢复续跑（AUTO_RETRY/GATE_RETRY/RECONCILE_REQUEUE
+# 串链，见 batch_engine.AUTO_REQUEUE_CODES）连同重排队间隙计入；人工接管
+# （无链 continue root）及其后续整条 run 剔除。判据根基：parent_attempt_id
+# 只有批引擎自动重排队才写（batch_engine._close_attempt_for_requeue → 下一次
+# create_attempt 串链，跨重启由 _consume_parent_attempt 查库兜底）；人工
+# continue 的 attempt 恒 NULL。交互会话每次 send 自成 run（口径不变）。
+# 实现注记：SQL 一律字面量内联在 execute 调用处、参数全 %s（SQL 常量经
+# 变量中转进 execute 会被静态扫描误判为拼接——同 _MSG_SQL 上方注记）。
+
+
+def resolve_session_runs(cur, session_ids) -> dict:
+    """会话集 → 端到端 run（链）解析。返回 {session_id: [run, ...]}，run 按
+    根起点升序，键：sessionId / root / members / anchor / excludedRounds。
+
+    - members 时间序；anchor = 链末成员（run 的收口 attempt：聚合行的
+      attemptId/状态/model 取它）；
+    - root operation='continue' 的 run = 人工接管/人工续跑 → 整条剔除，
+      成员数累计进本会话各 run 的 excludedRounds（供展示「另有 M 轮人工
+      接管未计入」）；
+    - kefu / 未派发（started_at NULL）不产生 run。"""
+    ids = [s for s in dict.fromkeys(session_ids) if s]
+    if not ids:
+        return {}
+    cur.execute(
+        "SELECT id, session_id, source_type, source_id, parent_attempt_id,"
+        " attempt_no, operation, status, started_at, finished_at,"
+        " requested_model, effective_model, effective_agent"
+        " FROM ai_execution_attempts"
+        " WHERE session_id = ANY(%s) AND source_type <> 'kefu'"
+        " AND started_at IS NOT NULL"
+        " ORDER BY session_id, started_at, attempt_no", (ids,))
+    cols = [d[0] for d in cur.description]
+    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    by_parent: dict = {}
+    for r in rows:
+        if r['parent_attempt_id']:
+            by_parent.setdefault(r['parent_attempt_id'], []).append(r)
+    out: dict = {}
+    for r in rows:
+        sid = r['session_id']
+        if sid in out:
+            continue
+        sess_rows = [x for x in rows if x['session_id'] == sid]
+        roots = [x for x in sess_rows if not x['parent_attempt_id']]
+        excluded = 0
+        runs = []
+        for root in roots:
+            members, stack, seen = [], [root], {root['id']}
+            while stack:
+                node = stack.pop()
+                members.append(node)
+                for child in by_parent.get(node['id'], []):
+                    if child['id'] not in seen:
+                        seen.add(child['id'])
+                        stack.append(child)
+            members.sort(key=lambda m: (m['started_at'], m['attempt_no']))
+            if root['operation'] == 'continue':
+                excluded += len(members)
+                continue
+            runs.append({'sessionId': sid, 'root': root, 'members': members,
+                         'anchor': members[-1], 'excludedRounds': 0})
+        if excluded:
+            for run in runs:
+                run['excludedRounds'] = excluded
+        out[sid] = runs
+    return out
+
+
+def _run_attempt_row(run: dict) -> dict:
+    """run → _attempt_metrics 的 attempt 行形态（窗口拉通到链跨度；
+    身份/状态/model 取 anchor）。"""
+    anchor, root = run['anchor'], run['root']
+    return {'id': anchor['id'], 'session_id': run['sessionId'],
+            'source_type': anchor['source_type'],
+            'source_id': anchor['source_id'], 'status': anchor['status'],
+            'started_at': root['started_at'],
+            'finished_at': anchor['finished_at'],
+            'requested_model': anchor.get('requested_model'),
+            'effective_model': anchor.get('effective_model')}
+
+
+def _run_chain_out(run: dict) -> list:
+    """run → 响应侧 chain 明细（时间序）。"""
+    return [{'attemptId': m['id'], 'operation': m['operation'],
+             'status': m['status'], 'startedAt': _iso(m['started_at']),
+             'finishedAt': _iso(m['finished_at'])} for m in run['members']]
+
+
+def _matched_attempt_ids(cur, kind: str, name: str, attempt_ids: list) -> set:
+    """定义证据的成员级命中集（skill 只认 runtime 确认调用——与既有归因
+    口径一致；agent 认 effective_agent；其余 kind 认 manifest）。"""
+    if not attempt_ids:
+        return set()
+    if kind == 'skill':
+        cur.execute(
+            "SELECT attempt_id FROM ai_skill_invocations"
+            " WHERE source = 'runtime' AND skill_name = %s"
+            " AND attempt_id = ANY(%s)", (name, attempt_ids))
+    elif kind == 'agent':
+        cur.execute(
+            "SELECT id FROM ai_execution_attempts"
+            " WHERE effective_agent = %s AND id = ANY(%s)",
+            (name, attempt_ids))
+    else:
+        cur.execute(
+            "SELECT attempt_id FROM ai_execution_manifests"
+            " WHERE kind = %s AND name = %s AND attempt_id = ANY(%s)",
+            (kind, name, attempt_ids))
+    return {r[0] for r in cur.fetchall()}
+
+
+def _definition_run_set(db_ctx, kind: str, name: str, limit: int) -> list:
+    """定义 → 端到端 run 集（证据口径不变：run 内任一成员 attempt 命中即算
+    该定义跑过）。两步走：候选会话用既有 per-attempt 证据 WHERE（会话首
+    attempt 时间倒序，3 倍缓冲——人工 run 剔除后按 run 收敛）；会话全量
+    attempt 解析 run 后按成员证据精确过滤。返回按根起点倒序截取 limit。"""
+    cand_limit = min(1000, max(limit * 3, 60))
+    with _open_conn(db_ctx) as conn:
+        with conn.cursor() as cur:
+            if kind == 'skill':
+                cur.execute((
+                    "SELECT a.session_id FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    " AND EXISTS (SELECT 1 FROM ai_skill_invocations i"
+                    "   WHERE i.attempt_id = a.id AND i.skill_name = %s"
+                    "   AND i.source = 'runtime')"
+                    " GROUP BY a.session_id"
+                    " ORDER BY MIN(a.started_at) DESC NULLS LAST LIMIT %s"),
+                    (name, cand_limit))
+            elif kind == 'agent':
+                cur.execute((
+                    "SELECT a.session_id FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    " AND a.effective_agent = %s"
+                    " GROUP BY a.session_id"
+                    " ORDER BY MIN(a.started_at) DESC NULLS LAST LIMIT %s"),
+                    (name, cand_limit))
+            else:
+                cur.execute((
+                    "SELECT a.session_id FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    " AND EXISTS (SELECT 1 FROM ai_execution_manifests m"
+                    "   WHERE m.attempt_id = a.id AND m.kind = %s"
+                    "   AND m.name = %s)"
+                    " GROUP BY a.session_id"
+                    " ORDER BY MIN(a.started_at) DESC NULLS LAST LIMIT %s"),
+                    (kind, name, cand_limit))
+            cand = [r[0] for r in cur.fetchall()]
+            if not cand:
+                return []
+            flat = [r for runs in resolve_session_runs(cur, cand).values()
+                    for r in runs]
+            matched = _matched_attempt_ids(
+                cur, kind, name, [m['id'] for r in flat for m in r['members']])
+            runs = [r for r in flat
+                    if any(m['id'] in matched for m in r['members'])]
+    runs.sort(key=lambda r: r['root']['started_at'], reverse=True)
+    return runs[:limit]
 
 # 定义→任务的证据口径（2026-10-11 归因修复）。旧口径 EXISTS(manifest
 # kind+name) 把「清单里出现过」当「用过」：派发时全部启用技能都会被补录
@@ -386,128 +542,124 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
     return out
 
 
-def _list_metrics(db_ctx, sql: str, params: tuple, *, with_detail: bool) -> list:
-    out = []
-    with _open_conn(db_ctx) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params)
-            cols = [d[0] for d in cur.description]
-            for r in cur.fetchall():
-                out.append(_attempt_metrics(cur, dict(zip(cols, r)),
-                                            with_detail=with_detail))
-    return out
-
-
 def load_attempt_metrics(db_ctx, attempt_id: str):
-    """单任务全指标（detail），不存在返回 None。db_ctx 可注入（测试）。"""
+    """单任务全指标（detail，端到端 run 口径），不存在返回 None。db_ctx 可
+    注入（测试）。attempt 属于某条 included run（链）→ 返回链合并指标
+    （窗口=root→anchor，附带 chain / excludedManualRounds / runAnchor
+    AttemptId，attemptId 保持请求值）；孤立 attempt（人工轮直查/无链）→
+    单 attempt 视图。kefu → None。"""
     with _open_conn(db_ctx) as conn:
         with conn.cursor() as cur:
-            cur.execute(_ATTEMPT_SQL, (attempt_id,))
+            cur.execute(
+                "SELECT a.id, a.session_id, a.source_type, a.source_id, a.status,"
+                " a.started_at, a.finished_at, a.requested_model, a.effective_model "
+                "FROM ai_execution_attempts a WHERE a.id = %s"
+                " AND a.source_type <> 'kefu'", (attempt_id,))
             row_ = cur.fetchone()
             if not row_:
                 return None
             cols = [d[0] for d in cur.description]
-            return _attempt_metrics(cur, dict(zip(cols, row_)), with_detail=True)
+            row = dict(zip(cols, row_))
+            run = next((r for r in resolve_session_runs(
+                            cur, [row['session_id']]).get(
+                            row['session_id'], [])
+                        if any(m['id'] == attempt_id for m in r['members'])),
+                       None)
+            if run is None:
+                return _attempt_metrics(cur, row, with_detail=True)
+            m = _attempt_metrics(cur, _run_attempt_row(run), with_detail=True)
+            m['attemptId'] = attempt_id      # 身份保持请求值，anchor 另见下
+            m['runAnchorAttemptId'] = run['anchor']['id']
+            m['chain'] = _run_chain_out(run)
+            m['excludedManualRounds'] = run['excludedRounds']
+            return m
 
 
 def list_definition_tasks(db_ctx, kind: str, name: str, limit: int = 50) -> list:
-    """定义→任务列表（证据口径见上方注释块）。kind 按 URL 维度在 Python
-    侧选 SQL（skill/agent/其他各一条），kind/name 全部 %s 参数化。"""
-    if kind == 'skill':
-        return _list_metrics(db_ctx, (
-            "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
-            " a.finished_at FROM ai_execution_attempts a"
-            " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-            " AND EXISTS (SELECT 1 FROM ai_skill_invocations i"
-            "   WHERE i.attempt_id = a.id AND i.skill_name = %s"
-            "   AND i.source = 'runtime')"
-            " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
-            (name, limit), with_detail=False)
-    if kind == 'agent':
-        return _list_metrics(db_ctx, (
-            "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
-            " a.finished_at FROM ai_execution_attempts a"
-            " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-            " AND a.effective_agent = %s"
-            " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
-            (name, limit), with_detail=False)
-    return _list_metrics(db_ctx, (
-        "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
-        " a.finished_at FROM ai_execution_attempts a"
-        " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-        " AND EXISTS (SELECT 1 FROM ai_execution_manifests m"
-        "   WHERE m.attempt_id = a.id AND m.kind = %s AND m.name = %s)"
-        " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
-        (kind, name, limit), with_detail=False)
+    """定义→任务列表（端到端 run 口径：一行 = 一次端到端执行链，attemptId
+    = 链末成员 anchor；证据口径见 _definition_run_set）。"""
+    runs = _definition_run_set(db_ctx, kind, name, limit)
+    if not runs:
+        return []
+    out = []
+    with _open_conn(db_ctx) as conn:
+        with conn.cursor() as cur:
+            for run in runs:
+                out.append(_attempt_metrics(cur, _run_attempt_row(run),
+                                            with_detail=False))
+    return out
 
 
 def definition_p50(db_ctx, kind: str, name: str) -> int | None:
-    """该定义已完结任务的墙钟 P50（毫秒）；无已完结任务返回 None。
+    """该定义已完结「端到端 run」的墙钟 P50（毫秒）；无已完结 run 返回 None。
 
-    单条 SQL 只取墙钟列（list_definition_tasks 的证据过滤/kefu 过滤形态
-    + 完结过滤），供诊断端点热路径用——替代全量 definition_overview
-    （D×200×2-3 查询）。"""
-    with _open_conn(db_ctx) as conn:
-        with conn.cursor() as cur:
-            if kind == 'skill':
-                cur.execute((
-                    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
-                    " FROM ai_execution_attempts a"
-                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-                    "   AND a.finished_at IS NOT NULL"
-                    " AND EXISTS (SELECT 1 FROM ai_skill_invocations i"
-                    "   WHERE i.attempt_id = a.id AND i.skill_name = %s"
-                    "   AND i.source = 'runtime')"), (name,))
-            elif kind == 'agent':
-                cur.execute((
-                    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
-                    " FROM ai_execution_attempts a"
-                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-                    "   AND a.finished_at IS NOT NULL"
-                    " AND a.effective_agent = %s"), (name,))
-            else:
-                cur.execute((
-                    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
-                    " FROM ai_execution_attempts a"
-                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-                    "   AND a.finished_at IS NOT NULL"
-                    " AND EXISTS (SELECT 1 FROM ai_execution_manifests m"
-                    "   WHERE m.attempt_id = a.id AND m.kind = %s"
-                    "   AND m.name = %s)"), (kind, name))
-            walls = sorted(int(r[0]) for r in cur.fetchall())
+    原「单条 SQL 直查 attempt 墙钟」的热路径优化在 run 口径下失效（样本 =
+    链），改走统一解析（候选会话 SQL + Python 归并），与任务列表/概览
+    同源——P50 必须与 outlier_vs_peers 比较对象同口径。"""
+    runs = _definition_run_set(db_ctx, kind, name, 200)
+    walls = sorted(_to_ms(r['anchor']['finished_at'])
+                   - _to_ms(r['root']['started_at'])
+                   for r in runs if r['anchor']['finished_at'] is not None)
     return _percentile(walls, 0.5) if walls else None
 
 
 def list_slow_tasks(db_ctx, limit: int = 10) -> list:
+    """慢任务 Top（端到端 run 口径）：已完结 run 按链墙钟倒序，一行 = 一次
+    端到端执行链（attemptId = anchor）。归属：run 内最早 runtime 确认调用
+    的 skill 优先，否则（anchor 起倒序首个）effective_agent；两者皆无的
+    run 无法诚实归因，不收录。候选池按收口时间倒序封顶（防全库扫描）。"""
     out = []
     with _open_conn(db_ctx) as conn:
         with conn.cursor() as cur:
-            # 归属列：runtime 确认调用的 skill（最早一次）优先，否则有效代理；
-            # 只收录可诚实归因的 attempt。旧实现按 manifests 字母序 LIMIT 1
-            # 恒判 agent。kind/name 全部参数化，SQL 字面量内联。
             cur.execute((
-                "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
-                " a.finished_at,"
-                " (SELECT i.skill_name FROM ai_skill_invocations i"
-                "   WHERE i.attempt_id = a.id AND i.source = 'runtime'"
-                "   ORDER BY i.invoked_at LIMIT 1) AS skill_name,"
-                " a.effective_agent "
-                "FROM ai_execution_attempts a "
-                "WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-                "   AND a.finished_at IS NOT NULL "
+                "SELECT a.session_id FROM ai_execution_attempts a"
+                " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                "   AND a.finished_at IS NOT NULL"
                 "   AND (EXISTS (SELECT 1 FROM ai_skill_invocations i"
                 "     WHERE i.attempt_id = a.id AND i.source = 'runtime')"
-                "     OR a.effective_agent IS NOT NULL) "
-                "ORDER BY EXTRACT(EPOCH FROM (a.finished_at - a.started_at))"
-                " DESC LIMIT %s"), (limit,))
-            cols = [d[0] for d in cur.description]
-            for r in cur.fetchall():
-                row = dict(zip(cols, r))
-                m = _attempt_metrics(cur, row, with_detail=False)
-                if row.get('skill_name'):
-                    m['defKind'], m['defName'] = 'skill', row['skill_name']
+                "     OR a.effective_agent IS NOT NULL)"
+                " GROUP BY a.session_id"
+                " ORDER BY MAX(a.finished_at) DESC LIMIT %s"),
+                (min(1000, max(limit * 20, 200)),))
+            cand = [r[0] for r in cur.fetchall()]
+            if not cand:
+                return []
+            flat = [r for runs in resolve_session_runs(cur, cand).values()
+                    for r in runs]
+            finished = [r for r in flat
+                        if r['anchor']['finished_at'] is not None]
+            finished.sort(key=lambda r: (_to_ms(r['anchor']['finished_at'])
+                                         - _to_ms(r['root']['started_at'])),
+                          reverse=True)
+            top = finished[:limit]
+            if not top:
+                return []
+            # 归因：run 成员的 runtime 确认调用（每 attempt 首个），链上
+            # 时间序首个命中的 skill 即全链最早调用
+            cur.execute(
+                "SELECT attempt_id, skill_name FROM ai_skill_invocations"
+                " WHERE source = 'runtime' AND attempt_id = ANY(%s)"
+                " ORDER BY invoked_at", ([m['id'] for r in top
+                                          for m in r['members']],))
+            skill_by_attempt: dict = {}
+            for aid_, sname in cur.fetchall():
+                skill_by_attempt.setdefault(aid_, sname)
+            for run in top:
+                skill = next((skill_by_attempt[m['id']]
+                              for m in run['members']
+                              if m['id'] in skill_by_attempt), None)
+                if not skill:
+                    agent = next((m.get('effective_agent')
+                                  for m in reversed(run['members'])
+                                  if m.get('effective_agent')), None)
+                    if not agent:
+                        continue      # 无法诚实归因（同旧口径不收录）
+                m = _attempt_metrics(cur, _run_attempt_row(run),
+                                     with_detail=False)
+                if skill:
+                    m['defKind'], m['defName'] = 'skill', skill
                 else:
-                    m['defKind'], m['defName'] = 'agent', row.get('effective_agent')
+                    m['defKind'], m['defName'] = 'agent', agent
                 out.append(m)
     return out
 
@@ -546,73 +698,46 @@ def definition_overview(db_ctx) -> list:
 
 def definition_cause_distribution(db_ctx, kind: str, name: str,
                                   limit: int = 200) -> dict:
-    """定义级慢因分布（2026-10-26）：已完结任务的四段覆盖加总（shares）、
-    逐任务主导慢因计数（dominantCounts）与归属清单（taskCauses）。
+    """定义级慢因分布（2026-10-26；2026-11-02 切端到端 run 口径）：已完结
+    run 的四段覆盖加总（shares）、逐 run 主导慢因计数（dominantCounts）与
+    归属清单（taskCauses，键 = anchor，与任务表行同源——PerfView 点击筛选
+    依赖两处 attemptId 一致）。
 
-    列表口径的 modelMs 是毛值（轮内工具未拆出），聚合必须拆准四段——但不
-    逐任务走 detail（每任务 2-3 查询过重）：按 session 集合三条批量查询
-    （消息/子代理/工具调用），Python 侧按 attempt 窗口归属过滤（批量 SQL
-    无法逐会话给窗；attempt 粒度=每次派发一条，同会话多 attempt 时窗口
-    字典按会话键控会互相覆盖——2026-10-31 审计修复，见 _owning_attempt），
-    逐任务跑 coverage_split。轮窗锚点/子代理终点截断/工具 occurred_at 夹窗
-    均与 _attempt_metrics 同口径。证据口径与下钻/概览一致（skill 只认
-    runtime 确认调用）。SQL 字面量内联、全部 %s 参数化。"""
+    窗口 = 链跨度（root.started → anchor.finished，自动恢复计入）。列表
+    口径的 modelMs 是毛值（轮内工具未拆出），聚合必须拆准四段——但不逐
+    run 走 detail（每 run 2-3 查询过重）：按 session 集合三条批量查询
+    （消息/子代理/工具调用），Python 侧按 run 窗口归属过滤（批量 SQL 无法
+    逐会话给窗；同会话多 run 时窗口逐 run 键控互斥归属，见 _owning_run），
+    逐 run 跑 coverage_split。轮窗锚点/子代理终点截断/工具 occurred_at 夹窗
+    均与 _attempt_metrics 同口径。证据口径与任务表一致（skill 只认 runtime
+    确认调用）。SQL 字面量内联、全部 %s 参数化。"""
     seg_keys = ('model', 'wait', 'tool', 'idle')
     zero = {'wallMs': 0, 'modelMs': 0, 'toolMs': 0, 'subagentWaitMs': 0,
             'idleMs': 0}
+    runs = [r for r in _definition_run_set(db_ctx, kind, name, limit)
+            if r['anchor']['finished_at'] is not None]
+    if not runs:
+        return {'taskCount': 0, 'shares': dict(zero),
+                'dominantCounts': {k: 0 for k in seg_keys},
+                'taskCauses': []}
     with _open_conn(db_ctx) as conn:
         with conn.cursor() as cur:
-            if kind == 'skill':
-                cur.execute((
-                    "SELECT a.id, a.session_id, a.started_at, a.finished_at"
-                    " FROM ai_execution_attempts a"
-                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-                    "   AND a.finished_at IS NOT NULL"
-                    " AND EXISTS (SELECT 1 FROM ai_skill_invocations i"
-                    "   WHERE i.attempt_id = a.id AND i.skill_name = %s"
-                    "   AND i.source = 'runtime')"
-                    " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
-                    (name, limit))
-            elif kind == 'agent':
-                cur.execute((
-                    "SELECT a.id, a.session_id, a.started_at, a.finished_at"
-                    " FROM ai_execution_attempts a"
-                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-                    "   AND a.finished_at IS NOT NULL"
-                    " AND a.effective_agent = %s"
-                    " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
-                    (name, limit))
-            else:
-                cur.execute((
-                    "SELECT a.id, a.session_id, a.started_at, a.finished_at"
-                    " FROM ai_execution_attempts a"
-                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-                    "   AND a.finished_at IS NOT NULL"
-                    " AND EXISTS (SELECT 1 FROM ai_execution_manifests m"
-                    "   WHERE m.attempt_id = a.id AND m.kind = %s"
-                    "   AND m.name = %s)"
-                    " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
-                    (kind, name, limit))
-            rows = cur.fetchall()
-            if not rows:
-                return {'taskCount': 0, 'shares': dict(zero),
-                        'dominantCounts': {k: 0 for k in seg_keys},
-                        'taskCauses': []}
-            sids = [r[1] for r in rows]
-            # 每 attempt 自己的窗口（attempt 粒度=每次派发一条，同会话可有多
-            # 条——窗口归属必须按 attempt 而非会话，见 _owning_attempt）
+            # 每 run 自己的窗口（交互会话逐 send 一条 run，同会话可多条——
+            # 窗口归属必须按 run 而非会话）
             by_session: dict = {}
             window_by_aid: dict = {}
-            for aid, rsid, a_st, a_fin in rows:
-                lo = _to_ms(a_st) or 0
-                hi = _to_ms(a_fin) or _now_ms()
+            for run in runs:
+                aid = run['anchor']['id']
+                lo = _to_ms(run['root']['started_at']) or 0
+                hi = _to_ms(run['anchor']['finished_at']) or _now_ms()
                 window_by_aid[aid] = (lo, hi)
-                by_session.setdefault(rsid, []).append((aid, lo, hi))
+                by_session.setdefault(run['sessionId'], []).append((aid, lo, hi))
+            sids = list(by_session)
 
-            def _owning_attempt(rsid: str, ts: int):
-                """时间戳 → 包含它的 attempt 窗口（轮窗互斥，至多一个；异常
-                重叠取后派发的）。无归属返回 None——该行不进聚合（与旧实现
-                的窗外过滤同语义，只是从「唯一会话窗口」变成「逐 attempt」）。"""
+            def _owning_run(rsid: str, ts: int):
+                """时间戳 → 包含它的 run 窗口（窗互斥，至多一个；异常重叠取
+                后派发的）。无归属返回 None——该行不进聚合（人工 run 的行
+                落在 included 窗外，天然剔除）。"""
                 for aid, lo, hi in by_session.get(rsid, []):
                     if lo <= ts <= hi:
                         return aid, lo, hi
@@ -628,7 +753,7 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
                 cms = _to_ms(m_created)
                 if cms is None:
                     continue
-                own = _owning_attempt(msid, cms)
+                own = _owning_run(msid, cms)
                 if own is None:
                     continue
                 anchor = _iso_ms(meta['startedAt']) if meta.get('startedAt') else cms
@@ -643,12 +768,12 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
                 s_ms = _to_ms(s_created)
                 if s_ms is None:
                     continue
-                own = _owning_attempt(rsid, s_ms)
+                own = _owning_run(rsid, s_ms)
                 if own is None:
                     continue
                 e_ms = _to_ms(s_finished)
                 if e_ms is None:
-                    e_ms = own[2]   # 中断残留/旧数据按所属 attempt 终点截断
+                    e_ms = own[2]   # 中断残留/旧数据按所属 run 终点截断
                 sub_ivs.setdefault(own[0], []).append((s_ms, e_ms))
             cur.execute(
                 "SELECT root_session_id, tool, started_at, duration_ms, occurred_at"
@@ -660,7 +785,7 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
                 occ = _to_ms(t_occ)
                 if occ is None:
                     continue
-                own = _owning_attempt(rsid, occ)
+                own = _owning_run(rsid, occ)
                 if own is None:
                     continue
                 s_ms = int(_to_ms(t_start))
@@ -670,7 +795,8 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
     shares = dict(zero)
     counts = {k: 0 for k in seg_keys}
     causes: list = []
-    for aid, _sid, _st, _fin in rows:
+    for run in runs:
+        aid = run['anchor']['id']
         lo, hi = window_by_aid[aid]
         cov = coverage_split(lo, hi, model_ivs.get(aid, []),
                              sub_ivs.get(aid, []), tool_ivs.get(aid, []),
@@ -683,7 +809,7 @@ def definition_cause_distribution(db_ctx, kind: str, name: str,
             dominant = max(seg_ms, key=lambda k: seg_ms[k])
             counts[dominant] += 1
             causes.append({'attemptId': aid, 'dominant': dominant})
-    return {'taskCount': len(rows), 'shares': shares,
+    return {'taskCount': len(runs), 'shares': shares,
             'dominantCounts': counts, 'taskCauses': causes}
 
 
