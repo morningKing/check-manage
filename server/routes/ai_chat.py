@@ -1404,7 +1404,7 @@ def get_messages(sid):
                 "FROM ai_chat_messages m "
                 "LEFT JOIN ai_chat_message_feedback f ON f.message_id = m.id "
                 "WHERE m.session_id = %s AND m.id > %s "
-                "ORDER BY m.created_at ASC",
+                "ORDER BY m.seq ASC",
                 (sid, since),
             )
             rows = cur.fetchall()
