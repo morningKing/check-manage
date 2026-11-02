@@ -3222,11 +3222,19 @@ class BatchWorker:
                          _json.dumps([{'type': 'text', 'text': prompt}])),
                     )
                     for mid, content, meta in assistant_rows:
+                        # 写放大防线（性能快改批 ①）：进度持久化每 2.5s 全量
+                        # upsert 全部 assistant 行，内容未变的行不得写新版本
+                        # ——否则 search_text 触发器与 GIN trgm 每轮全量重算，
+                        # WAL/dead tuple 随批子会话数线性放大。WHERE 跳过即无
+                        # 行版本（xmin 不变），真变化仍照常更新。
                         cur.execute(
                             "INSERT INTO ai_chat_messages (id, session_id, role, content, meta) "
                             "VALUES (%s, %s, 'assistant', %s::jsonb, %s::jsonb) "
                             "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, "
-                            "  meta = COALESCE(EXCLUDED.meta, ai_chat_messages.meta)",
+                            "  meta = COALESCE(EXCLUDED.meta, ai_chat_messages.meta) "
+                            "WHERE ai_chat_messages.content IS DISTINCT FROM EXCLUDED.content "
+                            "   OR (EXCLUDED.meta IS NOT NULL "
+                            "       AND ai_chat_messages.meta IS DISTINCT FROM EXCLUDED.meta)",
                             (mid, session_id, _json.dumps(content),
                              _json.dumps(meta) if meta else None),
                         )
