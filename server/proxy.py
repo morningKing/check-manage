@@ -145,6 +145,33 @@ def _safe_upstream_path(path):
     return ''.join(chr(b) if b < 0x80 else '%{:02X}'.format(b) for b in raw)
 
 
+def _chat_api_timeout_sec() -> float:
+    """AI chat 路径的上游读超时（性能快改批 ③）：env PROXY_CHAT_TIMEOUT_SEC
+    可调，缺省 30s，非法值回退 30s。调用时读取（与 CORS 等 env 语义一致：
+    改 env 需重启 proxy）。"""
+    try:
+        return float(os.environ.get('PROXY_CHAT_TIMEOUT_SEC', '') or 30)
+    except (TypeError, ValueError):
+        return 30
+
+
+def _upstream_timeout(path: str, stream: bool):
+    """上游读超时分档：
+
+    - SSE（stream=True）：None——chunk 逐段转发，永不整体超时；
+    - /api/ai/chat/*（非 SSE）：30s——批任务负载下后端变慢时，慢请求钉死
+      浏览器同源连接槽与代理线程的上限从 2 分钟降到 30 秒（此前一刀切
+      120s 是 pending 放大器）；AI chat 的长活操作（发送/压缩/分析）都已是
+      后台线程 + SSE 通知，REST 本身不应有 >30s 的合法响应；
+    - 其余路径：120s 不变——备份还原/大导出等合法长请求都在这里。
+    """
+    if stream:
+        return None
+    if path.split('?')[0].startswith('/api/ai/chat/'):
+        return _chat_api_timeout_sec()
+    return 120
+
+
 class ProxyHandler(SimpleHTTPRequestHandler):
     """Handle static files from dist/ and proxy /api to Flask backend."""
 
@@ -199,7 +226,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         # SSE streams are long-lived and must never be read to completion or
         # buffered; disable the read timeout and relay chunk-by-chunk.
-        timeout = None if stream else 120
+        # 非 SSE 按路径分档（性能快改批 ③）：/api/ai/chat/* 30s，其余 120s。
+        timeout = _upstream_timeout(self.path, stream)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if stream:

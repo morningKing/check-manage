@@ -95,3 +95,34 @@ def test_serve_log_unified_with_restart_path():
         assert 'a' in fh.mode
     finally:
         fh.close()
+
+
+# ---------------------------------------------------------------------------
+# 性能快改批 ③：上游读超时分档 —— /api/ai/chat/* 非 SSE 30s，其余 120s
+# ---------------------------------------------------------------------------
+
+def test_upstream_timeout_tiers():
+    """/api/ai/chat 的 REST 请求超时 30s（慢请求钉死浏览器连接槽与代理线程
+    的上限从 2 分钟降到 30 秒）；其余路径（备份还原等合法长请求）维持 120s；
+    SSE 永不超时（chunk 逐段转发）。"""
+    assert proxy._upstream_timeout(
+        '/api/ai/chat/sessions/s1/messages', stream=False) == 30
+    assert proxy._upstream_timeout(
+        '/api/ai/chat/sessions/s1/messages?limit=200', stream=False) == 30
+    assert proxy._upstream_timeout(
+        '/api/ai/chat/batches/events', stream=True) is None
+    assert proxy._upstream_timeout('/api/backups/upload', stream=False) == 120
+    assert proxy._upstream_timeout('/api/dynamic/query', stream=False) == 120
+
+
+def test_upstream_timeout_env_override(monkeypatch):
+    monkeypatch.setenv('PROXY_CHAT_TIMEOUT_SEC', '45')
+    assert proxy._upstream_timeout('/api/ai/chat/anything', stream=False) == 45
+    monkeypatch.setenv('PROXY_CHAT_TIMEOUT_SEC', 'not-a-number')
+    assert proxy._upstream_timeout('/api/ai/chat/anything', stream=False) == 30
+
+
+def test_proxy_to_backend_uses_tiered_timeout():
+    src = inspect.getsource(proxy.ProxyHandler._proxy_to_backend)
+    assert '_upstream_timeout' in src, (
+        '_proxy_to_backend 必须经 _upstream_timeout 取超时（分档才能生效）')
