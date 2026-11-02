@@ -338,3 +338,120 @@ def test_reconcile_budget_exhausted_fails(db_conn, user_id, claim_guard, monkeyp
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'failed'
     assert '预算已用尽' in err
+
+
+# ---------------------------------------------------------------------------
+# parent 链跨重启兜底（2026-11-02 端到端 run 口径的判据根基）：
+# _parent_attempt 是进程内存典——worker 重启后重试 attempt 会丢 parent_attempt_id，
+# 被 perf 分析误判成「人工接管 root」剔除。兜底：dict 未命中时查「最新一条
+# attempt 且 status='recovering' 且 error_code 属自动重试白名单」作链父。
+# 必须限「最新一条」：自动重试已收敛（末条 completed）后的人工 continue
+# 不得串上更早的 recovering 旧链。
+# ---------------------------------------------------------------------------
+
+_AUTO_REQUEUE_CODES = ('AUTO_RETRY', 'GATE_RETRY', 'RECONCILE_REQUEUE')
+
+
+def _seed_attempt(db_conn, sid, *, status, error_code=None,
+                  operation='continue', parent_id=None):
+    aid = str(uuid.uuid4())
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM ai_execution_attempts "
+            "WHERE session_id = %s", (sid,))
+        no = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO ai_execution_attempts (id, session_id, source_type,"
+            " parent_attempt_id, attempt_no, operation, status, started_at,"
+            " finished_at, error_code) VALUES (%s,%s,'batch',%s,%s,%s,%s,"
+            " NOW(), NOW(), %s)",
+            (aid, sid, parent_id, no, operation, status, error_code))
+    db_conn.commit()
+    return aid
+
+
+def test_consume_parent_fallback_whitelist(db_conn, user_id, monkeypatch):
+    import utils.batch_engine as eng
+    monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
+    bid, sids = _seed_batch(db_conn, user_id)
+    sid = sids[0]
+    worker = eng.BatchWorker()
+
+    assert worker._consume_parent_attempt(sid) is None      # 无 attempt
+
+    failed_id = _seed_attempt(db_conn, sid, status='failed',
+                              error_code='STALL_TIMEOUT')
+    assert worker._consume_parent_attempt(sid) is None      # failed 不串链
+
+    _seed_attempt(db_conn, sid, status='recovering', error_code='AUTO_RETRY')
+    assert worker._consume_parent_attempt(sid) != failed_id  # 取最新 recovering
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT error_code FROM ai_execution_attempts "
+                    "WHERE session_id=%s AND status='recovering'", (sid,))
+        assert cur.fetchone()[0] == 'AUTO_RETRY'
+
+    # 自动重试已收敛（最新一条 completed）→ 人工 continue 不得串旧链
+    _seed_attempt(db_conn, sid, status='completed')
+    assert worker._consume_parent_attempt(sid) is None
+
+
+def test_retry_parent_chain_survives_worker_restart(db_conn, user_id,
+                                                    claim_guard, monkeypatch,
+                                                    tmp_path):
+    """stall 重排队后 worker 重启（_parent_attempt 字典随进程丢失）：新一轮
+    attempt 仍要串上 recovering 前驱——perf 端到端 run 口径依赖该链。"""
+    import utils.batch_engine as eng
+    monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
+    bid, sids = _seed_batch(db_conn, user_id)
+    sid = sids[0]
+    claim_guard(sid)
+    worker = _stall_worker(monkeypatch)
+
+    def create_session(directory='', title=''):
+        return 'oc-stall'
+    _patch_oc(monkeypatch,
+              create_session=staticmethod(create_session),
+              send_message=staticmethod(lambda *a, **k: None),
+              list_messages=staticmethod(lambda oc, directory='': [_idle_msg()]))
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
+
+    worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
+                     'batch_input_file': 'x.csv', 'input_files': None,
+                     'scan_task_id': None, 'opencode_session_id': None,
+                     'workspace_path': str(tmp_path), 'continue_prompt': None,
+                     'agent': '', 'model': '', 'fencing_token': 0})
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id, status FROM ai_execution_attempts "
+                    "WHERE session_id=%s ORDER BY attempt_no", (sid,))
+        first = cur.fetchall()
+    assert len(first) == 1 and first[0][1] == 'recovering'
+    att1 = first[0][0]
+
+    # 模拟重启：全新 worker（内存字典为空）接管重排队后的会话
+    worker2 = _stall_worker(monkeypatch)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running', retry_count=1 "
+                    "WHERE id=%s RETURNING execution_generation", (sid,))
+        gen = cur.fetchone()[0]
+    db_conn.commit()
+    worker2._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
+                      'batch_input_file': 'x.csv', 'input_files': None,
+                      'scan_task_id': None, 'opencode_session_id': 'oc-stall',
+                      'workspace_path': str(tmp_path), 'continue_prompt': None,
+                      'agent': '', 'model': '', 'execution_generation': gen,
+                      'fencing_token': 0})
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id, parent_attempt_id, status, error_code "
+                    "FROM ai_execution_attempts WHERE session_id=%s "
+                    "ORDER BY attempt_no", (sid,))
+        rows = cur.fetchall()
+    assert len(rows) == 2
+    assert rows[1][0] != att1
+    assert rows[1][1] == att1               # 跨重启仍串上链（run 口径判据）
+    assert rows[1][2] == 'recovering'

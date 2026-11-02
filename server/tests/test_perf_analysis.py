@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.perf_analysis import (coverage_split, load_attempt_metrics,
                                  list_definition_tasks, list_slow_tasks,
                                  definition_overview, diagnose,
-                                 definition_cause_distribution)
+                                 definition_cause_distribution, definition_p50)
 
 
 class TestCoverageSplit:
@@ -1176,3 +1176,179 @@ class TestChildPerfEndpoint:
         r = pf_client.get('/ai/chat/admin/batches/b-x/sessions/s-x/perf',
                           headers={'Authorization': f'Bearer {tok}'})
         assert r.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 端到端 run 口径（2026-11-02）：性能分析只算「端到端一次性」耗时——
+# run = 一条 attempt 链（root=parent_attempt_id IS NULL + 全部 parent 后代），
+# 自动恢复续跑（AUTO_RETRY/GATE_RETRY/RECONCILE_REQUEUE 串链）连同重排队
+# 间隙计入链墙钟；人工接管（无链 continue root）及其后续整条 run 剔除。
+# 判据：parent_attempt_id 只有批引擎自动重排队才写，人工 continue 恒 NULL。
+# ---------------------------------------------------------------------------
+
+
+def _seed_followup(db_conn, bid, sid, *, no, operation='continue',
+                   status='completed', parent_id=None, start_off,
+                   end_off=None, effective_agent=None):
+    """给会话追加一条 attempt（链成员 parent_id 非空；人工轮 parent 空）。
+    end_off None → 未完结（finished_at NULL）。"""
+    aid = str(uuid.uuid4())
+    end_expr = ("NOW() - interval '%s seconds'" if end_off is not None else "NULL")
+    with db_conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO ai_execution_attempts (id, session_id, source_type,"
+            f" source_id, parent_attempt_id, attempt_no, operation, status,"
+            f" started_at, finished_at, effective_agent) VALUES"
+            f" (%s,%s,'batch',%s,%s,%s,%s,%s,"
+            f" NOW() - interval '%s seconds', {end_expr}, %s)",
+            (aid, sid, bid, parent_id, no, operation, status, start_off,
+             *((end_off,) if end_off is not None else ()), effective_agent))
+    db_conn.commit()
+    return aid
+
+
+class TestEndToEndRunScope:
+    def test_chain_merged_window_spans_auto_recovery(self, db_conn, user_id):
+        """自动重试链：run 窗口 = [root.started, 末成员.finished]——重排队
+        间隙计入（自动恢复也算）；链上任意成员请求都返回合并口径。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id,
+                                    model_turns=[(100_000, 10, 10, 0)])
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=aid1, start_off=50, end_off=10)
+        m = load_attempt_metrics(db_conn, aid2)
+        assert m['attemptId'] == aid2
+        assert m['wallMs'] == 590_000            # 600s → 10s（含 50s 恢复间隙）
+        assert m['runAnchorAttemptId'] == aid2
+        assert [c['attemptId'] for c in m['chain']] == [aid1, aid2]
+        assert m['excludedManualRounds'] == 0
+        # 请求链首成员：同一合并窗口，身份保持请求值
+        m1 = load_attempt_metrics(db_conn, aid1)
+        assert m1['attemptId'] == aid1 and m1['wallMs'] == 590_000
+        assert m1['runAnchorAttemptId'] == aid2
+
+    def test_manual_continue_run_excluded_from_aggregates(self, db_conn, user_id):
+        """人工接管（无链 continue root）整体剔除：任务表/P50/慢任务/慢因
+        分布只剩 send run。人工轮带 effective_agent 与 runtime 调用也要剔
+        （真实人工续跑会重选 agent、也会触发技能）。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id, effective_agent='dev',
+                                    agents=['dev'])
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=None, start_off=90, end_off=5,
+                              effective_agent='dev')
+        _seed_invocation(db_conn, aid2, sid, 'stock-analysis')
+        tasks = list_definition_tasks(db_conn, 'agent', 'dev')
+        assert [t['attemptId'] for t in tasks] == [aid1]
+        assert tasks[0]['wallMs'] == 500_000
+        tasks_skill = list_definition_tasks(db_conn, 'skill', 'stock-analysis')
+        assert [t['attemptId'] for t in tasks_skill] == [aid1]
+        assert definition_p50(db_conn, 'agent', 'dev') == 500_000
+        ov = definition_overview(db_conn)
+        entry = next(d for d in ov if d['defKind'] == 'agent' and d['defName'] == 'dev')
+        assert entry['tasks'] == 1
+        slow_ids = {t['attemptId'] for t in list_slow_tasks(db_conn, limit=50)}
+        assert aid1 in slow_ids and aid2 not in slow_ids
+        dist = definition_cause_distribution(db_conn, 'agent', 'dev')
+        assert dist['taskCount'] == 1
+        assert dist['taskCauses'][0]['attemptId'] == aid1
+
+    def test_manual_root_with_auto_retry_descendant_whole_run_excluded(
+            self, db_conn, user_id):
+        """人工接管后再 stall 触发自动重试：整条人工 run（含其链后代）都
+        剔除——人工节奏污染过的历史不产生任何性能样本。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id, effective_agent='dev',
+                                    agents=['dev'])
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=None, start_off=90, end_off=60,
+                              effective_agent='dev')
+        aid3 = _seed_followup(db_conn, bid, sid, no=3, operation='continue',
+                              parent_id=aid2, start_off=55, end_off=5,
+                              effective_agent='dev')
+        tasks = list_definition_tasks(db_conn, 'agent', 'dev')
+        assert [t['attemptId'] for t in tasks] == [aid1]
+        slow_ids = {t['attemptId'] for t in list_slow_tasks(db_conn, limit=50)}
+        assert aid2 not in slow_ids and aid3 not in slow_ids
+        dist = definition_cause_distribution(db_conn, 'agent', 'dev')
+        assert dist['taskCount'] == 1
+
+    def test_direct_manual_attempt_view_stays_single_window(self, db_conn, user_id):
+        """直查人工 attempt：维持单 attempt 视图（无合并字段）——审计入口
+        不受 run 口径影响。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id)
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=None, start_off=90, end_off=5)
+        m = load_attempt_metrics(db_conn, aid2)
+        assert m['wallMs'] == 85_000
+        assert 'chain' not in m and 'runAnchorAttemptId' not in m
+
+    def test_running_chain_listed_but_excluded_from_p50(self, db_conn, user_id):
+        """链未收尾（末成员 running）：任务表照列（status=running），P50/
+        概览分母不计——与单 attempt 时代语义一致。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id)
+        _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                       parent_id=aid1, start_off=50, end_off=None)
+        tasks = list_definition_tasks(db_conn, 'skill', 'stock-analysis')
+        assert len(tasks) == 1 and tasks[0]['status'] == 'running'
+        assert definition_p50(db_conn, 'skill', 'stock-analysis') is None
+
+    def test_cause_distribution_merges_chain_into_one_sample(self, db_conn, user_id):
+        """慢因分布按 run 归样本：链合并成一个窗口（shares 墙钟=链跨度），
+        归属键=anchor（与任务表行同源，PerfView 点击筛选依赖）。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id,
+                                    model_turns=[(100_000, 10, 10, 0)])
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=aid1, start_off=50, end_off=10)
+        dist = definition_cause_distribution(db_conn, 'skill', 'stock-analysis')
+        assert dist['taskCount'] == 1
+        assert dist['taskCauses'][0] == {'attemptId': aid2, 'dominant': 'idle'}
+        assert dist['shares']['wallMs'] == 590_000
+
+    def test_slow_tasks_chain_wall_and_anchor(self, db_conn, user_id):
+        """慢任务 Top 按 run 墙钟排序/展示，归属键=anchor。链墙钟(590s)
+        比单 attempt 池里的 500s 更慢 → 排最前。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id)
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=aid1, start_off=50, end_off=10)
+        slow = list_slow_tasks(db_conn, limit=10)
+        hit = next(t for t in slow if t['attemptId'] == aid2)
+        assert hit['wallMs'] == 590_000
+        assert hit['defKind'] == 'skill' and hit['defName'] == 'stock-analysis'
+
+
+class TestChildPerfRunScope:
+    """子会话性能报告切 run 口径：取会话最新「send-root run」的合并视图，
+    不再取最新 attempt（人工接管轮不再顶掉端到端报告）。"""
+
+    def test_reports_send_run_not_manual_latest(self, db_conn, user_id,
+                                                pf_client, admin_h):
+        bid, sid, aid1 = _seed_perf(db_conn, user_id)
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=None, start_off=40, end_off=5)
+        r = pf_client.get(f'/ai/chat/admin/batches/{bid}/sessions/{sid}/perf',
+                          headers=admin_h)
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['attempt']['attemptId'] == aid1     # 不是人工轮 aid2
+        assert body['attempt']['wallMs'] == 500_000
+        assert body['attempt']['excludedManualRounds'] == 1
+
+    def test_reports_merged_chain(self, db_conn, user_id, pf_client, admin_h):
+        bid, sid, aid1 = _seed_perf(db_conn, user_id)
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='continue',
+                              parent_id=aid1, start_off=50, end_off=10)
+        r = pf_client.get(f'/ai/chat/admin/batches/{bid}/sessions/{sid}/perf',
+                          headers=admin_h)
+        body = r.get_json()
+        assert body['attempt']['attemptId'] == aid2     # anchor=链末成员
+        assert body['attempt']['wallMs'] == 590_000
+        assert len(body['attempt']['chain']) == 2
+
+    def test_latest_send_root_still_wins_without_chain(self, db_conn, user_id,
+                                                       pf_client, admin_h):
+        """无链多 send-root（历史/交互形态）：仍取最新 run——既有
+        test_latest_attempt_selected 语义在新口径下保持。"""
+        bid, sid, aid1 = _seed_perf(db_conn, user_id)
+        aid2 = _seed_followup(db_conn, bid, sid, no=2, operation='send',
+                              parent_id=None, start_off=40, end_off=5)
+        r = pf_client.get(f'/ai/chat/admin/batches/{bid}/sessions/{sid}/perf',
+                          headers=admin_h)
+        assert r.get_json()['attempt']['attemptId'] == aid2
