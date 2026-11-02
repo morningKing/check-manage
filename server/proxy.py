@@ -7,6 +7,7 @@ Reverse proxy server for production deployment.
 """
 
 import os
+import re
 import sys
 import mimetypes
 import socket
@@ -31,7 +32,17 @@ from dotenv import load_dotenv
 # 独立进程里安全 import —— 不会把 Flask/db 那一坨拖进来。
 from utils.upload_limits import body_limit_for_path
 from utils import opencode_launch
-from utils.opencode_global import serve_stdio_file
+from utils.opencode_global import serve_listener_pids, serve_stdio_file
+
+# 启动前残留清理（prestart_cleanup）用的快照/树杀原语——实现在 scripts/
+# （stale_check 踩平了 wmic CSV/列表格式的坑，stack_stop 有树杀），复用不重写。
+# 部署包若不含 scripts/ 则降级跳过清理，绝不阻断启动。
+try:
+    from scripts import stale_check as _stale_check
+    from scripts import stack_stop as _stack_stop
+except Exception:  # noqa: BLE001 —— 缺模块只降级，见 prestart_cleanup
+    _stale_check = None
+    _stack_stop = None
 
 # Load server/.env so PROXY_*/BACKEND_URL/MCP_*/CORS_* take effect from the file
 # (this process is separate from Flask's config.py, which loads it for the app).
@@ -830,6 +841,102 @@ def _kill_tree(p):
             pass
 
 
+def prestart_cleanup():
+    """启动前清理上一轮残留进程（best-effort 自愈；PROXY_AUTOCLEAN=0 关闭）。
+
+    残留的两类实锤形态（2026-10-15 建 stale_check、2026-11-02 生产 405 再证）：
+      - 强杀留下的孤儿——旧 backend/MCP/SE 父进程已死仍占着端口：本进程随后
+        无条件拉起的新 backend bind 失败静默退出，wait_for_backend 探测命中
+        旧进程 →「启动成功」实为旧代码服务（新路由 404/405、新配置不生效）；
+      - 上一轮 proxy 还活着：本进程 bind PROXY_PORT 直接失败。
+
+    规则（宁少勿误杀）：
+      ① PROXY_PORT 上命令行含 proxy.py 的监听者 → 树杀（/T 连它 spawn 的
+         backend/MCP/SE 整棵带走）；先杀头再清身子，下一轮快照里它们已消失，
+         不会在②被误判成"父存活的陌生进程"。非 proxy.py 的陌生占用 → 不杀，
+         报错退出（换端口/手动释放）。
+      ② BACKEND_URL / MCP / SE 端口上**父进程已死**的监听者 → 树杀（孤儿
+         形态，命令行认不出也杀——这些端口本来就是本进程要占的）。
+         **父还活着**的身份不明监听者 → 不杀，报错退出：继续启动就是让新
+         backend bind 失败、流量被陌生进程接走，等于把要防的事故再演一遍。
+         FLASK_PORT（dev 后端，与 BACKEND_URL 不同端口时）不碰——那是另一条
+         开发栈的端口；OC serve 永不碰（可达即复用是既有契约，别人的不归
+         本进程管）。
+      ③ 孤儿 multiprocessing 子进程（spawn_main 且 parent_pid 已不存在）
+         → 树杀（历史强杀遗留、无端口可循，无条件清）。
+
+    清理模块缺失（部署包不含 scripts/）→ 打 WARN 跳过，绝不阻断启动。
+    """
+    if os.environ.get('PROXY_AUTOCLEAN', '1').strip() == '0':
+        print('[0/5] 残留清理已关闭（PROXY_AUTOCLEAN=0），跳过', flush=True)
+        return
+    if _stale_check is None or _stack_stop is None:
+        print('[0/5] 残留清理：scripts/ 快照模块不可用，跳过（不阻断启动）',
+              flush=True)
+        return
+    print('[0/5] 清理上一轮残留进程…', flush=True)
+    backend_port = _backend_port()
+    mcp_port = urlparse(MCP_HEALTH_URL).port or 3003
+    oc_port = urlparse(OPENCODE_BASE_URL).port or 4096
+
+    # ① 旧 proxy → 树杀；陌生占用 → 拒杀 + 退出
+    procs = _stale_check.snapshot_processes()
+    for pid in serve_listener_pids(PROXY_PORT):
+        cmd = (procs.get(pid) or {}).get('cmd') or _stale_check._cmdline_one(pid)
+        if 'proxy.py' in (cmd or '').lower():
+            print(f'       停掉旧 proxy pid={pid}（树杀，含其子进程）', flush=True)
+            _stack_stop._kill_tree(pid, procs)
+        else:
+            print(f'[ERROR] :{PROXY_PORT} 被 pid={pid}（非本平台 proxy）占用：'
+                  f'{(cmd or "?")[:120]}', flush=True)
+            print('        拒绝误杀陌生进程——请换 PROXY_PORT 或手动释放后重启。',
+                  flush=True)
+            sys.exit(1)
+    time.sleep(1.0)   # 树杀后端口释放/子进程随之退场，下一轮快照才反映得出
+
+    # ② 所需端口：父已死 → 杀孤儿；父存活且身份不明 → 拦下启动
+    procs = _stale_check.snapshot_processes()
+    foreign = []
+    for name, port in (('BACKEND_URL', backend_port), ('MCP', mcp_port),
+                       ('智能写作(SE)', SE_WS_PORT)):
+        if port in (PROXY_PORT, oc_port):   # 端口配置串角色也绝不越界杀 proxy/OC
+            continue
+        for pid in serve_listener_pids(port):
+            if pid == os.getpid():
+                continue
+            parent = (procs.get(pid) or {}).get('parent') or 0
+            if parent and parent in procs:
+                cmd = (procs.get(pid) or {}).get('cmd') \
+                    or _stale_check._cmdline_one(pid)
+                foreign.append((name, port, pid, cmd))
+                continue
+            print(f'       清理孤儿残留 pid={pid} :{port}'
+                  f'（{name}，父进程已退出）', flush=True)
+            _stack_stop._kill_tree(pid, procs)
+    if foreign:
+        for name, port, pid, cmd in foreign:
+            print(f'[ERROR] :{port}（{name}）被父进程存活的身份不明进程占用 '
+                  f'pid={pid}：{(cmd or "?")[:120]}', flush=True)
+            print(f'        新拉起的子进程会 bind 失败、流量可能被它接走'
+                  f'（405 事故形态）。请确认后手动释放'
+                  f'（taskkill /F /PID {pid}）再重启。', flush=True)
+        sys.exit(1)
+
+    # ③ 孤儿 multiprocessing 子进程
+    procs = _stale_check.snapshot_processes()
+    n = 0
+    for pid, info in procs.items():
+        if 'spawn_main' not in info['cmd']:
+            continue
+        m = re.search(r'parent_pid=(\d+)', info['cmd'])
+        if m and int(m.group(1)) not in procs:
+            _stack_stop._kill_tree(pid, procs)
+            n += 1
+    if n:
+        print(f'       清理孤儿 multiprocessing 子进程 {n} 个', flush=True)
+    print('       残留清理完成', flush=True)
+
+
 def main():
     if not os.path.isdir(DIST_DIR):
         print(f'[ERROR] dist/ not found at {DIST_DIR}')
@@ -839,6 +946,10 @@ def main():
     if not os.path.isfile(os.path.join(DIST_DIR, 'index.html')):
         print(f'[ERROR] index.html not found in {DIST_DIR}')
         sys.exit(1)
+
+    # 启动前清残留：旧后端占着 BACKEND_URL 端口时新后端 bind 失败静默退出、
+    # 探测命中旧进程 →「启动成功」实为旧代码服务（2026-11-02 生产 405 事故）。
+    prestart_cleanup()
 
     # Subprocesses we manage; killed on shutdown (OpenCode is NOT one of them).
     procs = []
