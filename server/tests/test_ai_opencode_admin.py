@@ -241,7 +241,7 @@ def test_merged_agents_sources_and_states(gdir, monkeypatch):
     assert by['my-agent']['model'] == 'm'
     assert by['build']['runtime'] == 'disabled'  # switch file, live plan still up
     assert by['plan']['source'] == 'builtin'
-    assert by['plugin-one']['source'] == 'plugin'
+    assert by['plugin-one']['source'] == 'external'   # 2026-11-03 起 live-only 非 native 统一标 external
     # unseen new file → pending
     ocg.write_agent('fresh-agent', fields={'description': 'd'}, body='')
     out = ocg.merged_agents()
@@ -823,3 +823,82 @@ def test_merged_skills_classifies_config_area_as_global(gdir):
     by = {i['name']: i for i in merged['items']}
     assert by['in-config']['source'] == 'global'
     assert by['plugin-skill']['source'] == 'external'
+
+
+# ---------------------------------------------------------------------------
+# 外部 agent：live-only 非 native 的归类（external）+ 一键导入为平台文件
+# ---------------------------------------------------------------------------
+
+_EXT_LIVE = [{'name': 'ext-agent', 'description': 'from home dir',
+              'mode': 'subagent', 'native': False,
+              'model': {'providerID': 'opencode-go', 'modelID': 'glm-5.3'},
+              'temperature': 0.3, 'topP': 0.9,
+              'prompt': 'You are the external verifier.'}]
+
+
+def test_merged_agents_labels_non_native_external(gdir, monkeypatch):
+    """live-only 非 native（OC 家目录/插件加载）标 external，而非误导性的
+    builtin/plugin——文件只是不在平台管理目录，导入后即可编辑。"""
+    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    out = ocg.merged_agents()
+    by = {it['name']: it for it in out['items']}
+    assert by['ext-agent']['source'] == 'external'
+    assert by['ext-agent']['fileName'] is None
+    assert by['ext-agent']['runtime'] == 'loaded'
+
+
+def test_import_agent_reconstructs_file(gdir, monkeypatch):
+    """导入 = 用 live /agent 响应（含 prompt 正文）忠实重建平台目录文件：
+    frontmatter(name/description/mode/model/temperature/topP) + body。"""
+    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    res = ocg.import_agent('ext-agent')
+    assert res['changed'] is True
+    got = ocg.read_agent('ext-agent')
+    assert got['meta']['description'] == 'from home dir'
+    assert got['meta']['mode'] == 'subagent'
+    assert got['meta']['model'] == 'opencode-go/glm-5.3'
+    assert got['meta']['temperature'] == 0.3
+    assert got['meta']['top_p'] == 0.9
+    assert got['body'].strip() == 'You are the external verifier.'
+    # 导入后归类翻转：source=file（live 仍在跑 → loaded）
+    out = ocg.merged_agents()
+    by = {it['name']: it for it in out['items']}
+    assert by['ext-agent']['source'] == 'file'
+    assert by['ext-agent']['runtime'] == 'loaded'
+
+
+def test_import_agent_rejects_native_and_missing(gdir, monkeypatch):
+    monkeypatch.setattr(
+        ocg, '_runtime_lists',
+        lambda: ([], [{'name': 'build', 'native': True, 'mode': 'primary'}]))
+    with pytest.raises(ocg.OpenCodeGlobalError) as ei:
+        ocg.import_agent('build')
+    assert ei.value.code == 'BAD_REQUEST'
+    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], []))
+    with pytest.raises(ocg.OpenCodeGlobalError) as ei:
+        ocg.import_agent('ghost')
+    assert ei.value.status == 404
+
+
+def test_import_agent_conflict_on_existing_file(gdir, monkeypatch):
+    ocg.write_agent('ext-agent', fields={'description': 'platform copy'}, body='x')
+    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    with pytest.raises(ocg.OpenCodeGlobalError) as ei:
+        ocg.import_agent('ext-agent')
+    assert ei.value.code == 'CONFLICT'
+    assert ocg.read_agent('ext-agent')['body'].strip() == 'x'   # 既有文件不被覆盖
+
+
+def test_import_agent_route(gdir, admin_headers, monkeypatch):
+    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    client = _client()
+    r = client.post('/ai/opencode/agents/ext-agent/import', headers=admin_headers)
+    assert r.status_code == 201 and r.get_json()['changed'] is True
+    assert (gdir / 'agent' / 'ext-agent.md').is_file()
+    # developer（无 admin.ai_agent_write）→ 403
+    from auth import create_token
+    dev = {'Authorization': 'Bearer ' + create_token(
+        {'id': 'u-dev', 'username': 'dev', 'role': 'developer'})}
+    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    r = client.post('/ai/opencode/agents/ext-agent/import', headers=dev)
+    assert r.status_code == 403
