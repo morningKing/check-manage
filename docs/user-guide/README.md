@@ -56,6 +56,7 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 |------|------|
 | [assistant.md](./ai/assistant.md) | AI 助手对话：@子智能体、模型选择、工具调用 |
 | [batch-tasks.md](./ai/batch-tasks.md) | AI 批任务：N 文件 + 1 Prompt 并发处理；管理员跨用户查看产出文件、下载、导入到 data_files |
+| [batch-takeover.md](./ai/batch-takeover.md) | 批任务对外人工接管：Open API 签发短时令牌链接、免登录精简对话页（查看/续跑/中断）、吊销与限速 |
 | [scan-tasks.md](./ai/scan-tasks.md) | 定时 AI 数据流水线：扫描数据页 → AI 处理 → 结构化回写 |
 | [session-groups.md](./ai/session-groups.md) | AI 会话分组与归档：自定义分组、存量自动归档、轨迹分析系统分组 |
 | [execution-audit.md](./ai/execution-audit.md) | AI 执行审计：执行尝试/契约判定/工具失败分析与管理员分析闭环（管理员） |

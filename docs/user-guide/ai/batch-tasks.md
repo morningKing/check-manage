@@ -185,3 +185,4 @@ curl -s -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
 
 - 单条对话见 [AI 助手](./assistant.md)。
 - 按计划自动扫描数据页并回写结果，见 [定时 AI 数据流水线](./scan-tasks.md)。
+- 把某个子任务通过短时链接交给外部人员查看/续跑/中断，见 [批任务对外人工接管](./batch-takeover.md)。
