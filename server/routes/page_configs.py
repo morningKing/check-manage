@@ -3,8 +3,8 @@ from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, require_permission
 from common.operation_log import log_operation
-from utils.page_config_relations import get_page_config_relations
-from utils.field_indexes import sync_field_indexes, mark_all_dropping
+from data.page_config_relations import get_page_config_relations
+from data.field_indexes import sync_field_indexes, mark_all_dropping
 from utils.row_action_validate import validate_row_actions
 from utils.ai_schema_designer import draft_page_schema
 import psycopg2.extras
@@ -296,9 +296,9 @@ def get_relations(page_id):
     """获取页面配置的关联关系图谱"""
     # 强制重新导入模块（解决缓存问题）
     import importlib
-    import utils.page_config_relations
-    importlib.reload(utils.page_config_relations)
-    from utils.page_config_relations import get_page_config_relations as get_relations_func
+    from data import page_config_relations as page_config_relations
+    importlib.reload(page_config_relations)
+    from data.page_config_relations import get_page_config_relations as get_relations_func
 
     try:
         # 验证depth参数

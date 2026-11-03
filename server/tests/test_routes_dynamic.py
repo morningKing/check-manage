@@ -501,7 +501,7 @@ class TestBatchCreate:
             return (['字段不能为空'], [], [])
 
         with patch('routes.dynamic.get_validation_script', return_value='script'):
-            with patch('utils.script_runner.run_validation_script', side_effect=mock_run_script):
+            with patch('data.script_runner.run_validation_script', side_effect=mock_run_script):
                 records = [
                     {'id': 'rec-1', 'data': {'name': ''}, 'relations': {}},
                 ]

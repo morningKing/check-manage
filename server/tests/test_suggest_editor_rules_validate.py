@@ -1,7 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
-from utils.suggest_editor_rules import (
+from editor.suggest_editor_rules import (
     RuleValidationError, validate_rules, parse_rules_csv, merge_rules,
 )
 

@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import db as _db_module  # noqa: E402
 from db import get_db  # noqa: E402
 from auth import create_token, hash_api_key  # noqa: E402
-from utils.sequences import allocate_sequence  # noqa: E402
+from data.sequences import allocate_sequence  # noqa: E402
 
 
 @pytest.fixture

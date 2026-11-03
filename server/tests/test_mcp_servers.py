@@ -17,7 +17,7 @@ def _clean(db_conn):
 
 
 def test_create_list_update_delete_remote():
-    from utils.mcp_servers import (
+    from data.mcp_servers import (
         create_server, list_servers, update_server, delete_server)
     row = create_server(name='mcp-test-remote', type='remote',
                         url='https://example.com/mcp', headers={'Authorization': 'Bearer x'})
@@ -39,7 +39,7 @@ def test_create_list_update_delete_remote():
 
 
 def test_create_local_server():
-    from utils.mcp_servers import create_server
+    from data.mcp_servers import create_server
     row = create_server(name='mcp-test-local', type='local',
                         command=['npx', '-y', 'some-mcp'], environment={'TOKEN': 't'})
     assert row['type'] == 'local'
@@ -48,7 +48,7 @@ def test_create_local_server():
 
 
 def test_validation_errors():
-    from utils.mcp_servers import create_server, McpServerError
+    from data.mcp_servers import create_server, McpServerError
     with pytest.raises(McpServerError):
         create_server(name='', type='remote', url='https://x')          # no name
     with pytest.raises(McpServerError):
@@ -60,14 +60,14 @@ def test_validation_errors():
 
 
 def test_duplicate_name_rejected():
-    from utils.mcp_servers import create_server, McpServerError
+    from data.mcp_servers import create_server, McpServerError
     create_server(name='mcp-test-dup', type='remote', url='https://a')
     with pytest.raises(McpServerError):
         create_server(name='mcp-test-dup', type='remote', url='https://b')
 
 
 def test_enabled_mcp_config_shapes_and_filters():
-    from utils.mcp_servers import create_server, enabled_mcp_config
+    from data.mcp_servers import create_server, enabled_mcp_config
     create_server(name='mcp-test-on', type='remote', url='https://on', headers={'H': '1'})
     create_server(name='mcp-test-off', type='remote', url='https://off', enabled=False)
     create_server(name='mcp-test-loc', type='local', command=['run'], environment={'E': '2'})
@@ -81,7 +81,7 @@ def test_enabled_mcp_config_shapes_and_filters():
 
 
 def test_reserved_name_skipped():
-    from utils.mcp_servers import create_server, enabled_mcp_config
+    from data.mcp_servers import create_server, enabled_mcp_config
     create_server(name='mcp-test-reserved', type='remote', url='https://x')
     cfg = enabled_mcp_config(reserved_names=['mcp-test-reserved'])
     assert 'mcp-test-reserved' not in cfg

@@ -6,7 +6,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.mongo_query import translate, remap_labels, MongoQueryError
+from data.mongo_query import translate, remap_labels, MongoQueryError
 
 
 class TestBasicEquality:

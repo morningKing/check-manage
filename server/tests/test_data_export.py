@@ -8,7 +8,7 @@ from contextlib import contextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.data_export import is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError
+from data.data_export import is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError
 
 
 def test_is_export_intent():
@@ -50,14 +50,14 @@ def test_resolve_collection_from_text_matches_longest_name():
         ('page-inspection-case', '巡检用例'),
         ('page-special-record', '专项巡检'),
     ])]
-    with patch('utils.data_export.get_db', _fake_db(script)):
+    with patch('data.data_export.get_db', _fake_db(script)):
         res = resolve_collection_from_text('请把巡检用例数据导出成 excel')
     assert res == ('inspection-case', '巡检用例')
 
 
 def test_resolve_collection_none_when_no_match():
     script = [("SELECT page_id, name FROM menus", [('page-x', '订单')])]
-    with patch('utils.data_export.get_db', _fake_db(script)):
+    with patch('data.data_export.get_db', _fake_db(script)):
         assert resolve_collection_from_text('随便聊聊') is None
 
 
@@ -75,7 +75,7 @@ def test_export_writes_xlsx_with_field_headers(tmp_path):
             [{'caseName': '磁盘检查', 'priority': '中', 'checkItems': ['c']}],
         ]),
     ]
-    with patch('utils.data_export.get_db', _fake_db(script)):
+    with patch('data.data_export.get_db', _fake_db(script)):
         res = export_collection_to_xlsx('ic', ws, role='developer')
     assert res['rows'] == 2
     assert res['path'].startswith('outputs/ic-')
@@ -94,13 +94,13 @@ def test_export_writes_xlsx_with_field_headers(tmp_path):
 
 def test_export_role_denied(tmp_path):
     script = [("FROM menus m", [('page-ic', '保密表', ['admin'])])]
-    with patch('utils.data_export.get_db', _fake_db(script)):
+    with patch('data.data_export.get_db', _fake_db(script)):
         with pytest.raises(ExportError):
             export_collection_to_xlsx('ic', str(tmp_path), role='guest')
 
 
 def test_export_unknown_collection(tmp_path):
     script = [("FROM menus m", [])]
-    with patch('utils.data_export.get_db', _fake_db(script)):
+    with patch('data.data_export.get_db', _fake_db(script)):
         with pytest.raises(ExportError):
             export_collection_to_xlsx('ghost', str(tmp_path), role='admin')

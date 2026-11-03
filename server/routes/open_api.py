@@ -4,7 +4,7 @@ from db import get_db
 from auth import api_key_required
 from config import OPEN_API_BRANCH
 from datetime import timezone
-from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+from data.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from common.search_text import compute_search_text
 from routes.data_files import save_data_file, _check_allowed_extension
 import uuid
@@ -420,7 +420,7 @@ def create_collection_item(collection):
 
         # 旁路 create_item 的 API 写入后，重播种序列计数器，避免与后续创建重号。
         # 保留 API 提供的 autoSequence 值（不覆盖），仅把计数器抬到 GREATEST(计数, 已写入值)。
-        from utils.sequences import reseed_sequences
+        from data.sequences import reseed_sequences
         reseed_sequences(cur, collections=[collection])
 
     result = row_to_record(new_row)
@@ -565,7 +565,7 @@ def create_batch_items(collection):
                 rec['branchId'] = branch_id
                 created_records.append(rec)
 
-            from utils.sequences import reseed_sequences
+            from data.sequences import reseed_sequences
             reseed_sequences(cur, collections=[collection])
 
     result = {

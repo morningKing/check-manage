@@ -3,7 +3,7 @@ from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, require_permission
 from common.operation_log import log_operation
-from utils.script_runner import run_export_script, validate_export_script_scope
+from data.script_runner import run_export_script, validate_export_script_scope
 import psycopg2.extras
 import psycopg2.errors
 import uuid
@@ -268,7 +268,7 @@ def delete_script(script_id):
 @require_permission('admin.export_scripts')
 def test_script(script_id):
     """Test a script with sample data or real collection data."""
-    from utils.script_runner import run_menu_export_script
+    from data.script_runner import run_menu_export_script
     body = request.get_json(force=True)
     with get_db() as conn:
         cur = conn.cursor()
@@ -292,7 +292,7 @@ def test_script(script_id):
         # 与生产 execute_menu_export 一致——菜单级脚本本应针对菜单测试，而非单个数据页。
         if scope == 'menu' and menu_id:
             from utils.menu_export import get_menu_collections
-            from utils.export_references import resolve_references
+            from data.export_references import resolve_references
             from datetime import timezone as _tz
             cur.execute('SELECT name FROM menus WHERE id = %s', (menu_id,))
             mrow = cur.fetchone()
@@ -376,7 +376,7 @@ def test_script(script_id):
         # 页面级脚本：解析引用以便预览时也能 join（菜单级在上面分支单独处理）
         page_refs = {}
         if scope != 'menu' and collection:
-            from utils.export_references import resolve_page_references
+            from data.export_references import resolve_page_references
             try:
                 page_refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
             except Exception:
@@ -422,7 +422,7 @@ def test_script(script_id):
 def debug_script(script_id):
     """追踪式断点调试：在指定行下断点，跑一次脚本，回传每次命中的局部变量快照 + 行执行轨迹。
     body: { breakpoints:[行号], collection?/data?/fields?/pageName?, branchId? }"""
-    from utils.script_runner import debug_export_script
+    from data.script_runner import debug_export_script
     from datetime import timezone as _tz
     body = request.get_json(force=True)
     breakpoints = body.get('breakpoints') or []
@@ -440,7 +440,7 @@ def debug_script(script_id):
         # 菜单级脚本 + 指定菜单：用真实多表 menu_data + 引用解析（与 test_script 一致）
         if scope == 'menu' and menu_id:
             from utils.menu_export import get_menu_collections
-            from utils.export_references import resolve_references
+            from data.export_references import resolve_references
             cur.execute('SELECT name FROM menus WHERE id = %s', (menu_id,))
             mrow = cur.fetchone()
             if not mrow:
@@ -498,7 +498,7 @@ def debug_script(script_id):
                 data.append(rec)
             # 页面级脚本：解析引用，调试时也能看到 references
             if scope != 'menu':
-                from utils.export_references import resolve_page_references
+                from data.export_references import resolve_page_references
                 try:
                     page_refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
                 except Exception:
@@ -529,7 +529,7 @@ def debug_script(script_id):
 @login_required
 def execute_script():
     """Execute an export script (page scope) and return the generated file."""
-    from utils.export_runner import (
+    from data.export_runner import (
         execute_bound_export, ExportBindingError, ExportPermissionError, SCRIPT_SELECT,
     )
     from flask import g
@@ -594,7 +594,7 @@ def batch_export():
                     continue
 
                 # Fetch script (with binding columns)
-                from utils.export_runner import check_binding, ExportBindingError, SCRIPT_SELECT
+                from data.export_runner import check_binding, ExportBindingError, SCRIPT_SELECT
                 cur.execute(f'SELECT {SCRIPT_SELECT} FROM export_scripts WHERE id = %s',
                             (script_id,))
                 script_row = cur.fetchone()
@@ -638,7 +638,7 @@ def batch_export():
                 fields = pc_row[1] if pc_row else []
 
                 # 解析跨页/跨项目引用，注入脚本 references
-                from utils.export_references import resolve_page_references
+                from data.export_references import resolve_page_references
                 try:
                     refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
                 except Exception:

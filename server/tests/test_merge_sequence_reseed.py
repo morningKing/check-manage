@@ -14,7 +14,7 @@ merge_project_version_detailed），构造最小 DB 状态：
 """
 import psycopg2.extras
 from db import get_db
-from utils.sequences import allocate_sequence
+from data.sequences import allocate_sequence
 from utils.project_version import (
     merge_project_version,
     merge_project_version_detailed,

@@ -9,7 +9,7 @@ import time
 
 def main():
     sys.path.insert(0, '.')
-    from utils.script_runner import _process_exec, _worker_state  # noqa: E402
+    from data.script_runner import _process_exec, _worker_state  # noqa: E402
 
     payload = _process_exec('validation', 'result = 1 + 1',
                             {'data': [], 'fields': []}, 10, 'timeout')

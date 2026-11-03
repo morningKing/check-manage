@@ -1318,7 +1318,7 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
         # 未被推进 —— 后续 create_item 可能重号。此处在提交前、与合并同事务重播种目标
         # 分支这些 collection 的序列计数器（GREATEST 语义，绝不回退）。
         if merged_collections:
-            from utils.sequences import reseed_sequences
+            from data.sequences import reseed_sequences
             reseed_sequences(cur, collections=list(merged_collections), branch_id=target_branch_id)
 
         # 更新合并记录统计
@@ -1635,7 +1635,7 @@ def merge_project_version_detailed(version_id, target_branch, collection_decisio
         # 与上面 merge_project_version 同理：在提交前重播种目标分支这些 collection 的
         # 序列计数器，防止详细合并复制进来的 autoSequence 编号被后续 create 重号。
         if merged_collections:
-            from utils.sequences import reseed_sequences
+            from data.sequences import reseed_sequences
             reseed_sequences(cur, collections=list(merged_collections), branch_id=target_branch_id)
 
         # 更新合并记录统计
@@ -1764,7 +1764,7 @@ def restore_from_project_version(version_id, restored_by, user_id, project_menu_
 
         # 闭合 autoSequence 计数器不变式：快照记录可能携带超过当前分支计数器的编号，
         # 重播种当前分支，避免还原后下一次 create_item 重号。
-        from utils.sequences import reseed_sequences
+        from data.sequences import reseed_sequences
         restored_collections = [c['collection'] for c in collections]
         reseed_sequences(cur, collections=restored_collections, branch_id=current_branch)
 
@@ -2145,7 +2145,7 @@ def _rollback_merge(merge_id: str) -> bool:
             # 闭合 autoSequence 计数器不变式：回滚恢复（deleted/updated）的记录可能携带
             # 超过目标分支计数器的编号，重播种目标分支，避免回滚后 create_item 重号。
             if affected_collections:
-                from utils.sequences import reseed_sequences
+                from data.sequences import reseed_sequences
                 reseed_sequences(cur, collections=list(affected_collections),
                                  branch_id=target_branch_id)
 

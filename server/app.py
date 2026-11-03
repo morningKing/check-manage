@@ -752,7 +752,7 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     start_backup_scheduler(app)
 
     # Start dependency validation scheduler
-    from utils.dependency_scheduler import start_dependency_scheduler
+    from data.dependency_scheduler import start_dependency_scheduler
     start_dependency_scheduler(app)
 
     # Start in-process batch worker (drives child sessions via OpenCode HTTP API)
@@ -768,7 +768,7 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     start_status_badge_timeout_scheduler(app)
 
     # Start field-index build/drop worker (async CREATE/DROP INDEX CONCURRENTLY)
-    from utils.field_index_scheduler import start_field_index_scheduler
+    from data.field_index_scheduler import start_field_index_scheduler
     start_field_index_scheduler(app)
 
     # OpenCode serve 崩溃看门狗（连续不可达自动拉起；多进程租约互斥）
@@ -779,7 +779,7 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
         logging.warning('oc-watchdog start failed: %s', _e5)
 
     # Start ETL background scheduler (async run of large imports, see utils/etl_scheduler.py)
-    from utils.etl_scheduler import start_etl_scheduler
+    from data.etl_scheduler import start_etl_scheduler
     start_etl_scheduler(app)
 
     # P1：outbox 投递器（持 delivery 租约；AI_DELIVERY_OUTBOX_ENABLED=0 时回退

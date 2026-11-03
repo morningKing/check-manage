@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timezone
 from db import get_db
 import psycopg2.extras
-from utils.page_config_relations import extract_target_collection
+from data.page_config_relations import extract_target_collection
 from utils.project_version import get_project_collections
 
 

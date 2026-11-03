@@ -22,14 +22,14 @@ class TestFieldIndexTick:
         ]
 
     def test_pending_row_gets_built_and_marked_ready(self, mock_conn, mock_cursor):
-        from utils import field_index_scheduler as mod
+        from data import field_index_scheduler as mod
         mock_cursor.fetchall.side_effect = [
             [('devices', 'status', 'idx_dyn_fld_abc123')],  # pending batch
             [],  # dropping batch
         ]
         build_conn = MagicMock()
-        with patch('utils.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
-             patch('utils.field_index_scheduler.psycopg2.connect', return_value=build_conn):
+        with patch('data.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
+             patch('data.field_index_scheduler.psycopg2.connect', return_value=build_conn):
             mod._tick()
 
         # bookkeeping: pending -> building
@@ -52,7 +52,7 @@ class TestFieldIndexTick:
         assert ready_calls[0].args[1] == ('devices', 'status')
 
     def test_build_failure_marks_row_failed_with_error_and_cleans_up_invalid_index(self, mock_conn, mock_cursor):
-        from utils import field_index_scheduler as mod
+        from data import field_index_scheduler as mod
         mock_cursor.fetchall.side_effect = [
             [('devices', 'status', 'idx_dyn_fld_abc123')],
             [],
@@ -60,8 +60,8 @@ class TestFieldIndexTick:
         build_conn = MagicMock()
         build_cur = build_conn.cursor.return_value
         build_cur.execute.side_effect = [Exception('disk full'), None]  # CREATE fails, cleanup DROP succeeds
-        with patch('utils.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
-             patch('utils.field_index_scheduler.psycopg2.connect', return_value=build_conn):
+        with patch('data.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
+             patch('data.field_index_scheduler.psycopg2.connect', return_value=build_conn):
             mod._tick()
 
         failed_calls = self._find_sql_calls(mock_cursor, "status = 'failed'")
@@ -72,14 +72,14 @@ class TestFieldIndexTick:
         assert len(drop_calls) == 1
 
     def test_dropping_row_gets_dropped_and_row_deleted(self, mock_conn, mock_cursor):
-        from utils import field_index_scheduler as mod
+        from data import field_index_scheduler as mod
         mock_cursor.fetchall.side_effect = [
             [],  # pending batch
             [('devices', 'status', 'idx_dyn_fld_abc123')],  # dropping batch
         ]
         build_conn = MagicMock()
-        with patch('utils.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
-             patch('utils.field_index_scheduler.psycopg2.connect', return_value=build_conn):
+        with patch('data.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
+             patch('data.field_index_scheduler.psycopg2.connect', return_value=build_conn):
             mod._tick()
 
         build_cur = build_conn.cursor.return_value
@@ -92,16 +92,16 @@ class TestFieldIndexTick:
         assert delete_calls[0].args[1] == ('devices', 'status')
 
     def test_no_pending_or_dropping_rows_is_a_noop(self, mock_conn, mock_cursor):
-        from utils import field_index_scheduler as mod
+        from data import field_index_scheduler as mod
         mock_cursor.fetchall.side_effect = [[], []]
-        with patch('utils.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
-             patch('utils.field_index_scheduler.psycopg2.connect') as mock_connect:
+        with patch('data.field_index_scheduler.get_db', _make_mock_db(mock_conn)), \
+             patch('data.field_index_scheduler.psycopg2.connect') as mock_connect:
             mod._tick()
         mock_connect.assert_not_called()
 
 
 class TestSafeTick:
     def test_exceptions_are_swallowed(self):
-        from utils import field_index_scheduler as mod
-        with patch('utils.field_index_scheduler._tick', side_effect=RuntimeError('boom')):
+        from data import field_index_scheduler as mod
+        with patch('data.field_index_scheduler._tick', side_effect=RuntimeError('boom')):
             mod._safe_tick()  # 不应抛出

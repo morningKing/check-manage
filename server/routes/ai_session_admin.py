@@ -168,7 +168,7 @@ def analyze_session(session_id):
     from utils.opencode_client import OpenCodeClient
     from utils.workspace import create_session_workspace, write_opencode_config
     from utils.session_token import generate_token
-    from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
+    from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
         INTERNAL_MCP_NAME as MCP_NAME
 
     logger = logging.getLogger('ai_session_admin')

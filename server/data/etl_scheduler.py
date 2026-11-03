@@ -91,7 +91,7 @@ def _make_cancel_check(log_id):
 
 
 def _run_one(log_id, task_id):
-    from utils.etl_engine import execute_task
+    from data.etl_engine import execute_task
     # 延迟到调用时才取 db.pool：本模块可能在 db.get_pool() 第一次被调用（也就
     # 是 db.pool 从 None 变成真实连接池实例）之前就被导入（例如 pytest 收集
     # 测试模块时），若在模块顶层 `from db import pool`，绑定的会是当时那个

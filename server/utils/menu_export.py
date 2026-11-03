@@ -16,7 +16,7 @@ import zipfile
 import io
 from urllib.parse import quote
 from datetime import datetime, timezone
-from utils.script_runner import run_export_script, run_menu_export_script
+from data.script_runner import run_export_script, run_menu_export_script
 
 
 def get_menu_collections(cur, menu_id):
@@ -142,7 +142,7 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main', role=N
 
             # ===== 绑定驱动模式（默认）：用绑定脚本导出，无绑定则跳过 =====
             if not script_id:
-                from utils.export_runner import (
+                from data.export_runner import (
                     execute_bound_export, ExportBindingError, ExportPermissionError, SCRIPT_SELECT,
                 )
                 collections = get_menu_collections(cur, menu_id)
@@ -254,7 +254,7 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main', role=N
                 # 解析引用：补取被引用记录（含跨项目，按依赖版本/分支）+ 回挂 _relations，
                 # 让脚本能 join 未被选中的被引用页数据。失败不阻断导出（退化为裸 ID）。
                 try:
-                    from utils.export_references import resolve_references
+                    from data.export_references import resolve_references
                     references = resolve_references(cur, menu_data, export_branch=branch_id)
                 except Exception as ref_err:
                     references = {}
@@ -321,7 +321,7 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main', role=N
                     # 解析该页引用：补取被引用记录（含跨项目，按依赖版本/分支）+ 回挂 _relations。
                     # 失败不阻断导出（退化为裸 ID）。
                     try:
-                        from utils.export_references import resolve_page_references
+                        from data.export_references import resolve_page_references
                         page_refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
                     except Exception as ref_err:
                         page_refs = {}

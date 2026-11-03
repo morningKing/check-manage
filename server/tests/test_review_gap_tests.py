@@ -1675,8 +1675,8 @@ def test_all_schedulers_use_lease():
         'server/utils/ai_scan_scheduler.py',
         'server/utils/backup.py',
         'server/utils/status_badge_timeout_scheduler.py',
-        'server/utils/field_index_scheduler.py',
-        'server/utils/etl_scheduler.py',
+        'server/data/field_index_scheduler.py',
+        'server/data/etl_scheduler.py',
     ]
     for p in schedulers:
         src = (repo_root / p).read_text(encoding='utf-8', errors='replace')

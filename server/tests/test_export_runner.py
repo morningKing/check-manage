@@ -3,7 +3,7 @@ import json
 import psycopg2.extras
 import pytest
 from db import get_db
-from utils.export_runner import (
+from data.export_runner import (
     execute_bound_export, check_binding, check_rbac,
     ExportBindingError, ExportPermissionError, SCRIPT_SELECT,
 )

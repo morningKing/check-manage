@@ -10,7 +10,7 @@ import pytest
 from app import app
 from auth import create_token
 from db import get_db
-from utils.suggest_editor_rule_ai import (
+from editor.suggest_editor_rule_ai import (
     RuleConversionError, RuleParseError, _convert_model, normalize_rules, parse_rule_json,
 )
 
@@ -68,7 +68,7 @@ def test_convert_model_prefers_agent_model(monkeypatch):
     monkeypatch.setenv('AGENT_MODEL', 'opencode-go/deepseek-v4.1-flash')
     assert _convert_model() == 'opencode-go/deepseek-v4.1-flash'
     monkeypatch.delenv('AGENT_MODEL', raising=False)
-    with patch('utils.suggest_editor_rule_ai.get_default_chat_model', return_value='platform/model'):
+    with patch('editor.suggest_editor_rule_ai.get_default_chat_model', return_value='platform/model'):
         assert _convert_model() == 'platform/model'
 
 
@@ -77,7 +77,7 @@ def test_convert_model_prefers_agent_model(monkeypatch):
 
 def test_convert_reports_unreachable_serve(monkeypatch):
     """serve 没起来：立即报“不可达”并带 proxy 排查提示，不再空等 90 秒。"""
-    import utils.suggest_editor_rule_ai as ra
+    from editor import suggest_editor_rule_ai as ra
     monkeypatch.setenv('AGENT_MODEL', 'test/model')
 
     class Unreachable:
@@ -119,7 +119,7 @@ class _FakeClient:
 
 def test_convert_fails_fast_on_model_error(monkeypatch):
     """模型侧错误（鉴权/额度/模型不存在）立即 502，并带出上游错误名与说明。"""
-    import utils.suggest_editor_rule_ai as ra
+    from editor import suggest_editor_rule_ai as ra
     monkeypatch.setenv('AGENT_MODEL', 'test/model')
 
     class ModelErrorClient(_FakeClient):
@@ -144,7 +144,7 @@ def test_convert_fails_fast_on_model_error(monkeypatch):
 
 def test_convert_timeout_message_has_diagnostics(monkeypatch):
     """真超时：错误里带 serve 地址/模型/轮询失败次数与重试提示。"""
-    import utils.suggest_editor_rule_ai as ra
+    from editor import suggest_editor_rule_ai as ra
     monkeypatch.setenv('AGENT_MODEL', 'test/model')
 
     class SilentClient(_FakeClient):
@@ -211,7 +211,7 @@ def test_convert_success_returns_rules(deliver_env):
     client, admin = deliver_env['client'], deliver_env['admin']
     fake = [{'id': 'rule-x', 'name': 'x', 'enabled': True, 'severity': 'warn',
              'maps': [{'wrong': 'a', 'right': 'b'}]}]
-    with patch('utils.suggest_editor_rule_ai.convert_nl_to_rules', return_value=fake) as m:
+    with patch('editor.suggest_editor_rule_ai.convert_nl_to_rules', return_value=fake) as m:
         r = client.post('/suggest-editor/rules/convert', headers=admin,
                         json={'description': '型号 a 要写成 b'})
     assert r.status_code == 200 and r.get_json()['rules'] == fake
@@ -220,11 +220,11 @@ def test_convert_success_returns_rules(deliver_env):
 
 def test_convert_maps_errors_to_422_and_502(deliver_env):
     client, admin = deliver_env['client'], deliver_env['admin']
-    with patch('utils.suggest_editor_rule_ai.convert_nl_to_rules',
+    with patch('editor.suggest_editor_rule_ai.convert_nl_to_rules',
                side_effect=RuleParseError('AI 返回的 JSON 解析失败')):
         r = client.post('/suggest-editor/rules/convert', headers=admin, json={'description': 'x'})
     assert r.status_code == 422 and 'JSON' in r.get_json()['error']
-    with patch('utils.suggest_editor_rule_ai.convert_nl_to_rules',
+    with patch('editor.suggest_editor_rule_ai.convert_nl_to_rules',
                side_effect=RuleConversionError('生成超时')):
         r = client.post('/suggest-editor/rules/convert', headers=admin, json={'description': 'x'})
     assert r.status_code == 502 and '超时' in r.get_json()['error']

@@ -4,8 +4,8 @@ Flask 路由与 MCP 工具都调用本模块，确保「绑定校验 + RBAC + �
 只有一份实现。不 import Flask、不 import 任何 db 模块——调用方传入游标。
 """
 from datetime import timezone
-from utils.script_runner import run_export_script, run_menu_export_script
-from utils.export_references import resolve_page_references, resolve_references
+from data.script_runner import run_export_script, run_menu_export_script
+from data.export_references import resolve_page_references, resolve_references
 from utils.menu_export import get_menu_collections
 
 SCRIPT_SELECT = 'id, name, script, output_format, scope, bound_collection, bound_menu_id'

@@ -34,12 +34,12 @@ from auth import (
 )
 from config import MCP_INTERNAL_TOKEN, SE_DATA_DIR
 from common.operation_log import log_operation
-from utils.suggest_editor_attachments import (
+from editor.suggest_editor_attachments import (
     delete_document_attachments,
     get_attachment,
     save_attachment,
 )
-from utils.suggest_editor_repo import (
+from editor.suggest_editor_repo import (
     access_check,
     clear_document_seed,
     create_document,
@@ -56,7 +56,7 @@ from utils.suggest_editor_repo import (
     touch_document,
     update_template,
 )
-from utils.suggest_editor_rules import (
+from editor.suggest_editor_rules import (
     CSV_COLUMNS,
     MAX_FILE_BYTES,
     RuleValidationError,
@@ -350,7 +350,7 @@ def internal_settings():
 def internal_document_state_get(doc_id: str):
     if not _internal_authorized():
         return jsonify({"error": "forbidden"}), 403
-    from utils.suggest_editor_repo import load_state
+    from editor.suggest_editor_repo import load_state
 
     state = load_state(doc_id)
     return jsonify({
@@ -881,7 +881,7 @@ def convert_rule_text():
     description = str(body.get("description") or "").strip()
     if not description:
         return jsonify({"error": "description required"}), 400
-    from utils.suggest_editor_rule_ai import (
+    from editor.suggest_editor_rule_ai import (
         MAX_DESCRIPTION_CHARS, RuleConversionError, RuleParseError, convert_nl_to_rules,
     )
     if len(description) > MAX_DESCRIPTION_CHARS:

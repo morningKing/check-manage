@@ -460,9 +460,9 @@ class TestDependencyScheduler:
             ('dep-3',),
         ]
 
-        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
-            with patch('utils.dependency_scheduler.validate_project_dependency') as mock_validate:
-                from utils.dependency_scheduler import validate_all_dependencies
+        with patch('data.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('data.dependency_scheduler.validate_project_dependency') as mock_validate:
+                from data.dependency_scheduler import validate_all_dependencies
                 validate_all_dependencies()
 
                 # 应该调用 3 次
@@ -472,9 +472,9 @@ class TestDependencyScheduler:
         """无依赖声明时正常处理"""
         mock_cursor.fetchall.return_value = []
 
-        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
-            with patch('utils.dependency_scheduler.validate_project_dependency') as mock_validate:
-                from utils.dependency_scheduler import validate_all_dependencies
+        with patch('data.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('data.dependency_scheduler.validate_project_dependency') as mock_validate:
+                from data.dependency_scheduler import validate_all_dependencies
                 validate_all_dependencies()
 
                 # 无调用
@@ -492,9 +492,9 @@ class TestDependencyScheduler:
         mock_validate = MagicMock()
         mock_validate.side_effect = [Exception('error'), None, None]
 
-        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
-            with patch('utils.dependency_scheduler.validate_project_dependency', mock_validate):
-                from utils.dependency_scheduler import validate_all_dependencies
+        with patch('data.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('data.dependency_scheduler.validate_project_dependency', mock_validate):
+                from data.dependency_scheduler import validate_all_dependencies
                 validate_all_dependencies()
 
                 # 应该调用 3 次（即使第一次失败）
@@ -507,9 +507,9 @@ class TestDependencyScheduler:
             ('dep-2',),
         ]
 
-        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
-            with patch('utils.dependency_scheduler.validate_project_dependency') as mock_validate:
-                from utils.dependency_scheduler import validate_dependencies_for_project
+        with patch('data.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('data.dependency_scheduler.validate_project_dependency') as mock_validate:
+                from data.dependency_scheduler import validate_dependencies_for_project
                 validate_dependencies_for_project('project-1')
 
                 # 应该调用 2 次

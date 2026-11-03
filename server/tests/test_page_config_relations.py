@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import psycopg2.extras
 import pytest
 from unittest.mock import patch
-from utils.page_config_relations import get_page_config_relations
+from data.page_config_relations import get_page_config_relations
 from db import get_db
 
 
@@ -272,7 +272,7 @@ def relations_route_setup(mock_conn, mock_cursor):
     patches = [
         patch('db.get_db', fake_get_db),
         patch('routes.page_configs.get_db', fake_get_db),
-        patch('utils.page_config_relations.get_db', fake_get_db),
+        patch('data.page_config_relations.get_db', fake_get_db),
     ]
 
     for p in patches:

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import psycopg2.extras
 import pandas as pd
 
-from utils.script_runner import run_etl_script
+from data.script_runner import run_etl_script
 
 # HTTP 请求超时（秒）
 HTTP_TIMEOUT = 30
@@ -451,7 +451,7 @@ def _step_save_to_collection(config, context, conn, dry_run, progress_cb=None, c
             break
 
     if not dry_run and success > 0:
-        from utils.sequences import reseed_sequences
+        from data.sequences import reseed_sequences
         reseed_sequences(cur, collections=[collection], branch_id='main')
         conn.commit()
 

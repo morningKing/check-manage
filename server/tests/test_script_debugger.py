@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.script_runner import debug_export_script  # noqa: E402
+from data.script_runner import debug_export_script  # noqa: E402
 
 
 def _page_locals(data):

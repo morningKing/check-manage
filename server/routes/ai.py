@@ -15,13 +15,13 @@ from common.operation_log import log_operation
 from utils.memory import (
     reset_memory_singleton, list_memories, delete_memory, add_memory_text, get_memory,
 )
-from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
-from utils.mcp_servers import (
+from data.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+from data.mcp_servers import (
     list_servers, get_server, create_server, update_server, delete_server,
     McpServerError, internal_mcp_enabled, set_internal_mcp_enabled,
     INTERNAL_MCP_NAME,
 )
-from utils.mcp_tool_rules import (
+from data.mcp_tool_rules import (
     list_tool_governance, replace_tool_rules, ToolRulesError,
 )
 

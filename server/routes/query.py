@@ -3,7 +3,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 from auth import login_required
-from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+from data.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 import json
 
 query_bp = Blueprint('query', __name__)

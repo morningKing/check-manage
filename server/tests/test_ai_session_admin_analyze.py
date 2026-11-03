@@ -48,8 +48,8 @@ def test_analyze_success(client, admin_headers, mock_conn):
     oc_client = MagicMock()
     oc_client.create_session.return_value = 'oc_sess_1'
     with patch('urllib.request.urlopen', _ok_urlopen()), \
-         patch('utils.mcp_servers.internal_mcp_enabled', return_value=True), \
-         patch('utils.mcp_servers.enabled_mcp_config', return_value={}), \
+         patch('data.mcp_servers.internal_mcp_enabled', return_value=True), \
+         patch('data.mcp_servers.enabled_mcp_config', return_value={}), \
          patch('routes.ai_session_admin.admin_get_session_detail', return_value=dict(DETAIL)), \
          patch('routes.ai_session_admin.get_db', _fake_db(mock_conn)), \
          patch('utils.workspace.create_session_workspace', return_value='/tmp/ws2'), \
@@ -96,7 +96,7 @@ def test_analyze_502_when_mcp_down(client, admin_headers):
 
 def test_analyze_409_when_internal_mcp_disabled(client, admin_headers):
     with patch('urllib.request.urlopen', _ok_urlopen()), \
-         patch('utils.mcp_servers.internal_mcp_enabled', return_value=False):
+         patch('data.mcp_servers.internal_mcp_enabled', return_value=False):
         resp = client.post('/ai/chat/admin/sessions/v2/sess_x/analyze',
                            headers=admin_headers)
     assert resp.status_code == 409
@@ -105,7 +105,7 @@ def test_analyze_409_when_internal_mcp_disabled(client, admin_headers):
 
 def test_analyze_404_unknown_session(client, admin_headers):
     with patch('urllib.request.urlopen', _ok_urlopen()), \
-         patch('utils.mcp_servers.internal_mcp_enabled', return_value=True), \
+         patch('data.mcp_servers.internal_mcp_enabled', return_value=True), \
          patch('routes.ai_session_admin.admin_get_session_detail', return_value=None):
         resp = client.post('/ai/chat/admin/sessions/v2/nope/analyze',
                            headers=admin_headers)

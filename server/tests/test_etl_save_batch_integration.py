@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from db import get_db  # noqa: E402
-from utils.etl_engine import _step_save_to_collection  # noqa: E402
+from data.etl_engine import _step_save_to_collection  # noqa: E402
 
 COLLECTION = '_t_etl_batch_save'
 
@@ -132,7 +132,7 @@ class TestProgressAndCancel:
     def test_cancel_after_first_batch_keeps_already_written_data(self, monkeypatch):
         """把 SAVE_BATCH_SIZE 临时改小，制造"多批"场景：第一批写完后取消，
         断言第一批已经落库、第二批没有被处理。"""
-        import utils.etl_engine as etl_engine
+        from data import etl_engine as etl_engine
         monkeypatch.setattr(etl_engine, 'SAVE_BATCH_SIZE', 2)
 
         with get_db() as conn:
@@ -170,7 +170,7 @@ class TestBatchFailureRollback:
         success==2/error==2/3 条数据完全不同，所以这个测试真的挂在 rollback
         这一行上，不是摆设。
         """
-        import utils.etl_engine as etl_engine
+        from data import etl_engine as etl_engine
         monkeypatch.setattr(etl_engine, 'SAVE_BATCH_SIZE', 2)
 
         with get_db() as conn:

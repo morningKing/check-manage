@@ -1038,7 +1038,7 @@ def ai_query():
     GET /v1/collections/<collection>?q=<filter> 获取实际数据。
     """
     from utils.ai_query import nl_to_mongo_filter
-    from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+    from data.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
     body = request.get_json(force=True)
     collection = (body.get('collection') or '').strip()
     question = (body.get('question') or '').strip()

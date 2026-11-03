@@ -195,7 +195,7 @@ def copy_data_to_branch(source_branch, target_branch, collection):
 
         # 闭合 autoSequence 计数器不变式：复制进来的记录可能携带超过目标分支计数器的
         # 编号，重播种目标分支，避免新分支首次 create_item 重号。
-        from utils.sequences import reseed_sequences
+        from data.sequences import reseed_sequences
         reseed_sequences(cur, collections=[collection], branch_id=target_branch)
 
     return len(records)

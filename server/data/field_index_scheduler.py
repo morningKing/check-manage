@@ -9,7 +9,7 @@ import psycopg2
 from apscheduler.schedulers.background import BackgroundScheduler
 from config import DB_CONFIG
 from db import get_db
-from utils.field_indexes import sql_literal
+from data.field_indexes import sql_literal
 
 logger = logging.getLogger(__name__)
 

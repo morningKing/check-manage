@@ -36,7 +36,7 @@ def _matrix_sandbox(db_conn):
 
 
 def test_list_groups_shape_and_defaults():
-    from utils.mcp_tool_rules import list_tool_governance
+    from data.mcp_tool_rules import list_tool_governance
     out = list_tool_governance()
     by_tool = {t['name']: t for g in out['groups'] for t in g['tools']}
     assert set(by_tool) == {'mtg-test-a', 'mtg-test-b'}
@@ -50,7 +50,7 @@ def test_list_groups_shape_and_defaults():
 
 
 def test_replace_rules_roundtrip_and_diff():
-    from utils.mcp_tool_rules import list_tool_governance, replace_tool_rules
+    from data.mcp_tool_rules import list_tool_governance, replace_tool_rules
     full = [{'role': r, 'tool_name': t, 'allowed': a}
             for t in ('mtg-test-a', 'mtg-test-b')
             for r, a in (('admin', True), ('developer', False),
@@ -66,7 +66,7 @@ def test_replace_rules_roundtrip_and_diff():
 
 
 def test_replace_rules_atomic_on_unknown_tool():
-    from utils.mcp_tool_rules import replace_tool_rules, ToolRulesError, list_tool_governance
+    from data.mcp_tool_rules import replace_tool_rules, ToolRulesError, list_tool_governance
     good = [{'role': 'admin', 'tool_name': 'mtg-test-a', 'allowed': True}]
     bad = good + [{'role': 'admin', 'tool_name': 'no-such-tool', 'allowed': True}]
     with pytest.raises(ToolRulesError):
@@ -78,7 +78,7 @@ def test_replace_rules_atomic_on_unknown_tool():
 
 
 def test_replace_rules_validation_errors():
-    from utils.mcp_tool_rules import replace_tool_rules, ToolRulesError
+    from data.mcp_tool_rules import replace_tool_rules, ToolRulesError
     for bad in (
         [],
         [{'role': 'hacker', 'tool_name': 'mtg-test-a', 'allowed': True}],

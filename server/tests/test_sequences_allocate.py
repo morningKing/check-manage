@@ -1,7 +1,7 @@
 import psycopg2.extras
 from concurrent.futures import ThreadPoolExecutor
 from db import get_db
-from utils.sequences import allocate_sequence
+from data.sequences import allocate_sequence
 
 
 def _setup(coll='zzalloc'):

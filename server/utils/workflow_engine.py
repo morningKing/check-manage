@@ -2,7 +2,7 @@
 挂在 update_item 状态转换之后。复用 sequences/pk-lock/notifier/workflow_repo。"""
 import uuid
 import psycopg2.extras
-from utils.sequences import allocate_sequence
+from data.sequences import allocate_sequence
 
 
 class WorkflowError(Exception):

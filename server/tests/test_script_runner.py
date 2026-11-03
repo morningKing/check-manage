@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.script_runner import (
+from data.script_runner import (
     _validate_script,
     validate_export_script_scope,
     run_export_script,
@@ -300,7 +300,7 @@ class TestRunMenuExportScript:
 
     def test_single_file_output(self):
         """单文件输出"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = 'result = json.dumps(menu_data, ensure_ascii=False)'
         menu_data = [
@@ -317,7 +317,7 @@ class TestRunMenuExportScript:
 
     def test_multi_file_output(self):
         """多文件输出"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = '''
 result = [
@@ -337,7 +337,7 @@ result = [
 
     def test_custom_filename(self):
         """自定义文件名"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = '''
 result = "data"
@@ -349,7 +349,7 @@ filename = "custom_export.json"
 
     def test_injected_variables(self):
         """验证注入变量可用"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = '''
 output = {
@@ -374,35 +374,35 @@ result = json.dumps(output)
 
     def test_result_required(self):
         """必须设置 result"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         with pytest.raises(ValueError, match='result'):
             run_menu_export_script('x = 1', [], '菜单', 'json')
 
     def test_result_must_be_valid_type(self):
         """result 必须是有效类型"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         with pytest.raises(ValueError, match='str、bytes 或 list'):
             run_menu_export_script('result = 123', [], '菜单', 'json')
 
     def test_multi_file_item_must_have_filename_and_content(self):
         """多文件输出时每个元素必须有 filename 和 content"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         with pytest.raises(ValueError, match='filename 和 content'):
             run_menu_export_script('result = [{"filename": "test.json"}]', [], '菜单', 'json')
 
     def test_multi_file_item_must_be_dict(self):
         """多文件输出时元素必须是 dict"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         with pytest.raises(ValueError, match='必须是 dict'):
             run_menu_export_script('result = ["string"]', [], '菜单', 'json')
 
     def test_bytes_result(self):
         """bytes 类型结果"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = 'result = b"binary data"'
         files = run_menu_export_script(script, [], '菜单', 'json')
@@ -411,7 +411,7 @@ result = json.dumps(output)
 
     def test_content_type_inference(self):
         """content_type 自动推断"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = 'result = [{"filename": "data.csv", "content": "a,b\\n1,2"}]'
         files = run_menu_export_script(script, [], '菜单', 'json')
@@ -420,14 +420,14 @@ result = json.dumps(output)
 
     def test_import_blocked(self):
         """禁止 import"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         with pytest.raises(ValueError, match='import'):
             run_menu_export_script('import os\nresult = "x"', [], '菜单', 'json')
 
     def test_injected_modules_available(self):
         """预注入模块可用"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = '''
 # 使用预注入的模块
@@ -442,7 +442,7 @@ result = output.getvalue()
 
     def test_can_access_all_table_data(self):
         """可以访问所有数据表的数据"""
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
 
         script = '''
 # 遍历所有表，提取数据
@@ -531,7 +531,7 @@ class TestNestedScopeNameResolution:
 
     # ---- menu export (子进程路径) ----
     def test_menu_custom_function_references_menu_data(self):
-        from utils.script_runner import run_menu_export_script
+        from data.script_runner import run_menu_export_script
         script = (
             "def count_tables():\n"
             "    return len(menu_data)\n"

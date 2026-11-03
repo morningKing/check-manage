@@ -76,7 +76,7 @@ def test_put_ok_logs_operation(app, patched_repo, admin_headers, monkeypatch):
 
 def test_put_invalid_rules_400(app, patched_repo, admin_headers, monkeypatch):
     import routes.ai as ai_mod
-    from utils.mcp_tool_rules import ToolRulesError
+    from data.mcp_tool_rules import ToolRulesError
     monkeypatch.setattr(ai_mod, 'replace_tool_rules',
                         lambda rules: (_ for _ in ()).throw(ToolRulesError('unknown role')))
     resp = app.test_client().put(

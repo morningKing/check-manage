@@ -124,7 +124,7 @@ def execute_actions(actions, record_data, collection, record_id, cur):
                 cur.execute('SELECT script FROM validation_scripts WHERE id = %s', (script_id,))
                 row = cur.fetchone()
                 if row and row[0]:
-                    from utils.script_runner import run_validation_script
+                    from data.script_runner import run_validation_script
                     run_validation_script(row[0], record_data, 'update', {}, [], collection, cur.connection)
             except Exception:
                 pass  # Log but don't block the transition

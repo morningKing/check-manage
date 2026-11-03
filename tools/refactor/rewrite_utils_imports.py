@@ -45,6 +45,26 @@ MAPPING = {
     'zip_unicode': 'common.zip_unicode',
     'search_text': 'common.search_text',
     'py_runner': 'common.py_runner',
+    # ---- batch 1: data/ + editor/ ----
+    'mongo_query': 'data.mongo_query',
+    'script_runner': 'data.script_runner',
+    'data_export': 'data.data_export',
+    'export_runner': 'data.export_runner',
+    'export_references': 'data.export_references',
+    'etl_engine': 'data.etl_engine',
+    'etl_scheduler': 'data.etl_scheduler',
+    'field_indexes': 'data.field_indexes',
+    'field_index_scheduler': 'data.field_index_scheduler',
+    'dependency_scheduler': 'data.dependency_scheduler',
+    'scan_writeback_validator': 'data.scan_writeback_validator',
+    'mcp_servers': 'data.mcp_servers',
+    'mcp_tool_rules': 'data.mcp_tool_rules',
+    'sequences': 'data.sequences',
+    'page_config_relations': 'data.page_config_relations',
+    'suggest_editor_repo': 'editor.suggest_editor_repo',
+    'suggest_editor_rules': 'editor.suggest_editor_rules',
+    'suggest_editor_rule_ai': 'editor.suggest_editor_rule_ai',
+    'suggest_editor_attachments': 'editor.suggest_editor_attachments',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

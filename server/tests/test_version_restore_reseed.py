@@ -14,7 +14,7 @@ restore_from_project_version 会 DELETE 当前分支记录，再从 project_vers
 """
 import psycopg2.extras
 from db import get_db
-from utils.sequences import allocate_sequence
+from data.sequences import allocate_sequence
 from utils.project_version import restore_from_project_version
 
 

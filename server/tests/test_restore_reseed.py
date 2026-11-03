@@ -1,6 +1,6 @@
 import psycopg2.extras
 from db import get_db
-from utils.sequences import reseed_sequences, allocate_sequence
+from data.sequences import reseed_sequences, allocate_sequence
 
 
 def test_reseed_after_data_change_prevents_collision():

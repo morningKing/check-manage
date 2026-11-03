@@ -1,7 +1,7 @@
 import json
 import psycopg2.extras
 from db import get_db
-from utils.sequences import reseed_sequences, seq_max_from_data
+from data.sequences import reseed_sequences, seq_max_from_data
 
 
 def _setup_page(cur, collection, seq_field, prefix):

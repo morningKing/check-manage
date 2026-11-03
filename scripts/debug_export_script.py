@@ -95,8 +95,8 @@ _psycopg2 = None
 try:
     if str(_SERVER_DIR) not in sys.path:
         sys.path.insert(0, str(_SERVER_DIR))
-    from utils.script_runner import _build_safe_globals as _server_build_globals  # type: ignore  # noqa: E402
-    from utils.export_references import resolve_references as _resolve_references  # type: ignore  # noqa: E402
+    from data.script_runner import _build_safe_globals as _server_build_globals  # type: ignore  # noqa: E402
+    from data.export_references import resolve_references as _resolve_references  # type: ignore  # noqa: E402
     from config import DB_CONFIG as _db_config  # type: ignore  # noqa: E402
     import psycopg2 as _psycopg2  # type: ignore  # noqa: E402
 except Exception:

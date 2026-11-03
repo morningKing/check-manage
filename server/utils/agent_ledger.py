@@ -538,7 +538,7 @@ def _validate_effect_spec(check_type, spec, idx):
         filt = spec.get('filter')
         if not collection:
             raise ValueError(f'action_checks[{idx}].effect_spec.collection 必填')
-        from utils.mongo_query import translate as mongo_translate, MongoQueryError
+        from data.mongo_query import translate as mongo_translate, MongoQueryError
         try:
             mongo_translate(filt or {})
         except MongoQueryError as e:
@@ -1029,7 +1029,7 @@ def _count_file_evidence(cur, session_id: str, spec) -> int:
 
 def _count_db_record_evidence(cur, spec) -> int:
     """db_record 原语:dynamic_data 中按集合 + Mongo 过滤的命中记录数。"""
-    from utils.mongo_query import translate as mongo_translate
+    from data.mongo_query import translate as mongo_translate
     collection = (spec or {}).get('collection') or ''
     filt = (spec or {}).get('filter') or {}
     where, params = mongo_translate(filt)

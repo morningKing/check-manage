@@ -197,7 +197,7 @@ def run_task(task_id):
         from db import pool
         exec_conn = pool.getconn()
         try:
-            from utils.etl_engine import execute_task
+            from data.etl_engine import execute_task
             context = execute_task(task, exec_conn, dry_run=True, sample_limit=sample_size)
             exec_conn.rollback()
 

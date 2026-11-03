@@ -142,7 +142,7 @@ def test_script(script_id):
     sample_collection = body.get('collection', 'test')
 
     try:
-        from utils.script_runner import run_validation_script
+        from data.script_runner import run_validation_script
         from db import pool
         test_conn = pool.getconn()
         try:

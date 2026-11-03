@@ -131,7 +131,7 @@ def on_child_finished(session_row, final_msg, ok):
     required = [m['jsonKey'] for m in task['field_mapping'] if m.get('required')]
     if parsed is None or any(parsed.get(k) in (None, '') for k in required):
         # TV-04 结果不完整：必需字段缺失/为空
-        from utils.scan_writeback_validator import record_violations_to_audit
+        from data.scan_writeback_validator import record_violations_to_audit
         record_violations_to_audit(session_row['id'], [{
             'type': 'TV-04', 'severity': 'high',
             'message': '必需结果字段缺失或解析失败（parsed=%s）' % (parsed is None),
@@ -157,14 +157,14 @@ def on_child_finished(session_row, final_msg, ok):
         pass  # 账本 best-effort，不影响回写本身
     if n == 0:
         # TV-03 回写失败：匹配 0 行
-        from utils.scan_writeback_validator import (
+        from data.scan_writeback_validator import (
             record_violations_to_audit, validate_writeback)
         v = validate_writeback(task, rid, parsed or {}, 0, None)
         record_violations_to_audit(session_row['id'], v['violations'])
         print(f"[ai_scan] write-back matched 0 rows for record {rid}")
         return
     # 写后读校验（TV-03 确定性覆盖）：回读比对映射字段与状态字段
-    from utils.scan_writeback_validator import (
+    from data.scan_writeback_validator import (
         validate_writeback, record_violations_to_audit)
     def _recheck():
         with get_db() as conn:
@@ -367,7 +367,7 @@ def claim_records(task):
         # mongo_query.translate(query) -> (where_fragment, params); the fragment
         # references the JSONB column unaliased as `data`, which resolves against
         # `dynamic_data d` (single-table FROM). Mirror routes/dynamic.py usage.
-        from utils.mongo_query import translate, MongoQueryError
+        from data.mongo_query import translate, MongoQueryError
         try:
             clause, fparams = translate(extra)
             if clause and clause != 'TRUE':

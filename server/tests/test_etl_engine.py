@@ -17,7 +17,7 @@ from openpyxl import Workbook
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.etl_engine import (
+from data.etl_engine import (
     _resolve_path,
     _step_json_input,
     _step_file_upload,

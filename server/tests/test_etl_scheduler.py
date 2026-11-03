@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from db import get_db  # noqa: E402
-from utils import etl_scheduler  # noqa: E402
+from data import etl_scheduler as etl_scheduler  # noqa: E402
 
 TASK_ID = '_t_etl_sched_task'
 COLLECTION = '_t_etl_sched_out'
