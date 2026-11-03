@@ -17,7 +17,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import get_db
-from utils.permissions import invalidate_cache
+from common.permissions import invalidate_cache
 
 NEW_KEYS = [
     'admin.ai_runtime_read',

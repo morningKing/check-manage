@@ -782,7 +782,7 @@ def validate_project_dependency(dependency_id: str, send_notification: bool = Tr
 
     # 发送通知（仅在状态变化时）
     if send_notification:
-        from utils.notifier import (
+        from common.notifier import (
             notify_dependency_broken,
             notify_dependency_warning,
             notify_dependency_resolved,

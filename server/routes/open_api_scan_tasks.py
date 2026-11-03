@@ -14,8 +14,8 @@ from flask import Blueprint, g, jsonify
 
 from auth import api_key_required, require_bound_key
 from utils import ai_scan_repo
-from utils.api_errors import INTERNAL_ERROR, NOT_FOUND, err, register_error_handlers
-from utils.operation_log import log_api_operation
+from common.api_errors import INTERNAL_ERROR, NOT_FOUND, err, register_error_handlers
+from common.operation_log import log_api_operation
 
 open_api_scan_tasks_bp = Blueprint(
     'open_api_scan_tasks', __name__, url_prefix='/v1/ai-scan-tasks')

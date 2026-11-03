@@ -285,7 +285,7 @@ def _field_labels(collection):
     Note: get_field_label_map(fields) takes the fields list (verified against
     utils/operation_log.py), so we resolve the page config fields first.
     """
-    from utils.operation_log import get_field_label_map
+    from common.operation_log import get_field_label_map
     return get_field_label_map(_page_config_fields(collection))
 
 

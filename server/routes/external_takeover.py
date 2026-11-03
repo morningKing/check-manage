@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request, g
 
 from db import get_db
 from utils import batch_repo, takeover_repo
-from utils.rate_limit import RateLimiter
+from common.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def _log_takeover(action: str, target_id: str, target_name: str, description: st
         r = getattr(g, 'takeover', None)
         if not r:
             return
-        from utils.operation_log import _write_log_row
+        from common.operation_log import _write_log_row
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT username, role FROM users WHERE id = %s",

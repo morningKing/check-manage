@@ -199,6 +199,6 @@ def test_append_over_batch_cap_is_400_not_500(client, mock_conn, mock_cursor, tm
 def test_append_body_is_under_the_json_size_gate(client, mock_conn, mock_cursor):
     """新路由落在 /v1/ai-batches 前缀下，所以自动受 1 MB JSON 门限制（不是 uploads
     的 101 MB）—— 钉住这一点，免得日后有人把 append 挪出前缀而失去防护。"""
-    from utils.upload_limits import MAX_JSON_BODY_BYTES, body_limit_for_path
+    from common.upload_limits import MAX_JSON_BODY_BYTES, body_limit_for_path
     assert body_limit_for_path('/api/v1/ai-batches/b-1/append') == MAX_JSON_BODY_BYTES
     assert body_limit_for_path('/v1/ai-batches/b-1/append') == MAX_JSON_BODY_BYTES

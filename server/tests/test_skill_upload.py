@@ -142,14 +142,14 @@ def _make_gbk_zip(entries: dict) -> FileStorage:
 
 
 def test_decoded_zip_name_utf8_flag_passthrough():
-    from utils.zip_unicode import decoded_zip_name
+    from common.zip_unicode import decoded_zip_name
     info = zipfile.ZipInfo('数据.txt')
     info.flag_bits |= 0x800
     assert decoded_zip_name(info) == '数据.txt'
 
 
 def test_decoded_zip_name_gbk_recovery():
-    from utils.zip_unicode import decoded_zip_name
+    from common.zip_unicode import decoded_zip_name
     info = _LegacyNameInfo('数据/工具.txt'.encode('gbk'))
     assert decoded_zip_name(info) == '数据/工具.txt'
 
@@ -170,7 +170,7 @@ def test_gbk_chinese_filenames_survive_skill_upload(tmp_path):
 
 
 def test_safe_extract_decoded_handles_gbk(tmp_path):
-    from utils.zip_unicode import safe_extract_decoded
+    from common.zip_unicode import safe_extract_decoded
     z = _make_gbk_zip({'目录/文件.txt': '内容'.encode('utf-8'), 'top.txt': b'ok'})
     with zipfile.ZipFile(z.stream) as zf:
         safe_extract_decoded(zf, str(tmp_path))
@@ -179,7 +179,7 @@ def test_safe_extract_decoded_handles_gbk(tmp_path):
 
 
 def test_safe_extract_decoded_blocks_traversal(tmp_path):
-    from utils.zip_unicode import safe_extract_decoded
+    from common.zip_unicode import safe_extract_decoded
     z = _make_gbk_zip({'../evil.txt': b'pwn', 'SKILL.md': b'---\nname: ok\n---\n'})
     with zipfile.ZipFile(z.stream) as zf, pytest.raises(ValueError):
         safe_extract_decoded(zf, str(tmp_path))

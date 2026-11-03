@@ -13,13 +13,13 @@ import psycopg2
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from config import DB_CONFIG
-from utils.search_text import compute_search_text
+from common.search_text import compute_search_text
 
 
 @pytest.fixture(autouse=True)
 def _ensure_cache_fresh():
     """Ensure the RBAC permission cache is clean for this module."""
-    import utils.permissions as perms
+    from common import permissions as perms
     perms.invalidate_cache()
     yield
     perms.invalidate_cache()

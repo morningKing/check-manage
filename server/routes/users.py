@@ -3,7 +3,7 @@ from werkzeug.security import generate_password_hash
 from db import get_db
 from auth import require_permission
 from datetime import timezone
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 import uuid
 
 users_bp = Blueprint('users', __name__)

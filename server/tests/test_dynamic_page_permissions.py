@@ -21,15 +21,15 @@ def setup(mock_conn, mock_cursor):
         patch('db.get_db', fake_db),
         patch('routes.dynamic.get_db', fake_db),
         patch('routes.relations.get_db', fake_db),
-        patch('utils.permissions.get_db', fake_db),
+        patch('common.permissions.get_db', fake_db),
         patch('utils.version.get_db', fake_db),
         patch('utils.branch_lock.get_db', fake_db),
         patch('db.pool', MagicMock()),
-        patch('utils.operation_log.log_operation'),
+        patch('common.operation_log.log_operation'),
     ]
     for p in patches:
         p.start()
-    import utils.permissions as perms
+    from common import permissions as perms
     perms.invalidate_cache()
     from app import app
     app.config['TESTING'] = True

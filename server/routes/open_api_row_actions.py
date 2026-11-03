@@ -17,9 +17,9 @@ from flask import Blueprint, jsonify, request
 from auth import api_key_required, require_bound_key
 from db import get_db
 from routes.open_api import check_collection_writable, get_request_branch_id
-from utils.api_errors import (CONFLICT, FORBIDDEN, INTERNAL_ERROR, INVALID_ARGUMENT,
+from common.api_errors import (CONFLICT, FORBIDDEN, INTERNAL_ERROR, INVALID_ARGUMENT,
                               NOT_FOUND, err, register_error_handlers)
-from utils.operation_log import log_api_operation
+from common.operation_log import log_api_operation
 from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
 
 open_api_row_actions_bp = Blueprint(

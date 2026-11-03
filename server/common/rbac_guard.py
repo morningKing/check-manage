@@ -1,5 +1,5 @@
 from flask import g, jsonify
-from utils.permissions import can_page
+from common.permissions import can_page
 
 
 def require_page_action(collection, action):

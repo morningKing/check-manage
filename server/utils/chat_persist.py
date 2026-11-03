@@ -15,7 +15,7 @@ from db import get_db
 from utils.runtime import get_runtime
 from utils.ai_message_meta import (
     meta_from_info, aggregate_metas, public_meta)
-from utils.notifier import create_notification
+from common.notifier import create_notification
 from config import AI_CHAT_NOTIFY_MIN_SECONDS
 
 logger = logging.getLogger(__name__)

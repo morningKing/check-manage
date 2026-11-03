@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, require_permission
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 import uuid
 
 validation_scripts_bp = Blueprint('validation_scripts', __name__)

@@ -10,14 +10,14 @@ from flask import Blueprint, request, jsonify, Response, stream_with_context, se
 from db import get_db
 from utils import kefu_repo
 from utils import kefu_event_bus
-from utils.rate_limit import RateLimiter
+from common.rate_limit import RateLimiter
 from utils.opencode_client import OpenCodeClient
 from utils.chat_persist import (
     ensure_listener, new_state, apply_event, persist_turn,
     event_session_id, has_listener,
 )
 from utils.workspace import safe_resolve, WorkspacePathError
-from utils.filename import safe_filename
+from common.filename import safe_filename
 from config import OPENCODE_BASE_URL, get_default_chat_model
 
 logger = logging.getLogger(__name__)

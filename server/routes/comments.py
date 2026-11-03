@@ -53,7 +53,7 @@ def add_comment(collection, record_id):
     # Notify mentioned users
     if mentions:
         try:
-            from utils.notifier import notify_mention
+            from common.notifier import notify_mention
             notify_mention(collection, record_id, mentions, user.get('username', ''))
         except Exception:
             pass

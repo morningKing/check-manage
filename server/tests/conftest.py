@@ -136,7 +136,7 @@ def _reset_and_prime_permission_cache():
     Then clear the cache on teardown so a test that wants custom resolution
     (by patching `utils.permissions.get_db` itself) starts clean.
     """
-    import utils.permissions as _perms
+    from common import permissions as _perms
     _perms.invalidate_cache()
     _perms._cache['admin'] = {
         'is_superuser': True,

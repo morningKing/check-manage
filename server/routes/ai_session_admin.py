@@ -17,7 +17,7 @@ import logging
 from flask import Blueprint, g as flask_g, jsonify, request
 from db import get_db
 from auth import require_permission, require_permission_sse
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 from utils.session_admin_repo import (
     admin_get_session_detail,
     admin_get_session_messages,
@@ -579,7 +579,7 @@ def execution_audit_prompt(sid):
     if not row:
         return jsonify({'error': '没有 Prompt 快照'}), 404
     plaintext = row[7] == 'plaintext'
-    from utils.operation_log import log_operation
+    from common.operation_log import log_operation
     log_operation('read', 'ai_execution_prompt', target['id'], sid,
                   '查看执行 Prompt 快照')
     return jsonify({

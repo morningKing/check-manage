@@ -49,7 +49,7 @@ from utils.workspace import (create_session_workspace, _rm_force,
 from utils.workspace_changes import git_changes, record_session_files
 from utils.ai_message_meta import meta_from_info, public_meta
 from utils.session_history import render_history_block
-from utils.notifier import create_notification
+from common.notifier import create_notification
 
 logger = logging.getLogger(__name__)
 

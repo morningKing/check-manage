@@ -36,14 +36,14 @@ def setup(mock_conn, mock_cursor):
         patch('routes.page_configs.get_db', fake_db),
         patch('routes.users.get_db', fake_db),
         patch('routes.relations.get_db', fake_db),
-        patch('utils.permissions.get_db', fake_db),
+        patch('common.permissions.get_db', fake_db),
         patch('db.pool', MagicMock()),
-        patch('utils.operation_log.log_operation'),
-        patch('utils.operation_log.get_page_info', return_value=('测试页面', [])),
+        patch('common.operation_log.log_operation'),
+        patch('common.operation_log.get_page_info', return_value=('测试页面', [])),
         patch('routes.dynamic.get_page_info', return_value=('测试页面', [])),
-        patch('utils.operation_log.pick_display_name', return_value='记录名'),
+        patch('common.operation_log.pick_display_name', return_value='记录名'),
         patch('routes.dynamic.pick_display_name', return_value='记录名'),
-        patch('utils.operation_log.get_field_label_map', return_value={}),
+        patch('common.operation_log.get_field_label_map', return_value={}),
         patch('routes.dynamic.get_field_label_map', return_value={}),
         patch('routes.dynamic.log_operation'),
         patch('routes.dynamic.get_validation_script', return_value=None),
@@ -63,7 +63,7 @@ def setup(mock_conn, mock_cursor):
     # utils.permissions, which queries the DB. Prime the cache so the 'admin'
     # role resolves as a superuser (bypasses every page check) without consuming
     # entries from the per-test mock cursor's fetchone/fetchall side effects.
-    import utils.permissions as _perms
+    from common import permissions as _perms
     _perms.invalidate_cache()
     _perms._cache['admin'] = {
         'is_superuser': True,

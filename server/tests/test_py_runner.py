@@ -4,7 +4,7 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.py_runner import run_python_in_workspace, _interpreter
+from common.py_runner import run_python_in_workspace, _interpreter
 
 
 def test_runs_and_captures_stdout(tmp_path):

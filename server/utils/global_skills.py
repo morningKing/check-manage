@@ -16,7 +16,7 @@ import zipfile
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
-from utils.zip_unicode import safe_extract_decoded
+from common.zip_unicode import safe_extract_decoded
 
 SKILL_NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 MAX_SKILL_ZIP_BYTES = 5 * 1024 * 1024  # 5 MB

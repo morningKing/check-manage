@@ -9,7 +9,7 @@ from scripts.seed_data import MENUS, PAGE_CONFIGS, DYNAMIC_DATA
 from db_schema import (DDL, DATA_FILES_DDL, AI_CHAT_PROMPT_TEMPLATES_DDL,
                       AI_CHAT_BATCHES_DDL, AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL,
                       AI_SCAN_TASKS_DDL, GLOBAL_SKILLS_DDL, RBAC_DDL)
-from utils.search_text import compute_search_text
+from common.search_text import compute_search_text
 import json
 
 

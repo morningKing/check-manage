@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import require_permission, login_required
-from utils.permissions import PERMISSION_CATALOG, catalog_keys, invalidate_cache
-from utils.operation_log import log_operation
+from common.permissions import PERMISSION_CATALOG, catalog_keys, invalidate_cache
+from common.operation_log import log_operation
 import psycopg2.extras
 import uuid
 

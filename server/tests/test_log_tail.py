@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.log_tail import (  # noqa: E402
+from common.log_tail import (  # noqa: E402
     MAX_READ_BYTES, TAIL_WINDOW_BYTES, TRUNC_SUFFIX, read_tail,
 )
 

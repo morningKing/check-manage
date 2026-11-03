@@ -8,7 +8,7 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import login_required, require_permission   # 与 ai_approvals 同款鉴权
 from utils import gate_policy_repo
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 
 ai_gate_policies_bp = Blueprint('ai_gate_policies', __name__,
                                 url_prefix='/ai/chat/gate-policies')

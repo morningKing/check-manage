@@ -45,7 +45,7 @@ from flask import (
     Blueprint, request, jsonify, g as flask_g, Response, stream_with_context,
     send_file,
 )
-from utils.filename import safe_filename
+from common.filename import safe_filename
 from db import get_db
 from auth import login_required, login_required_sse, write_required, require_permission
 from utils.opencode_client import OpenCodeClient
@@ -73,10 +73,10 @@ from utils.subtask_repo import get_subtask_messages
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
-from utils.py_runner import run_python_in_workspace
+from common.py_runner import run_python_in_workspace
 from utils.skill_upload import extract_skill_zip, SkillUploadError
 from utils.memory import search_memory, render_memory_block
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, get_default_chat_model,

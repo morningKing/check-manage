@@ -1132,7 +1132,7 @@ def test_internal_commands_endpoint(db_conn, gap_internal_client):
 
 def test_structured_error_detail(app):
     """P1-A1：err() 支持 error_detail 增量字段。"""
-    from utils.api_errors import err
+    from common.api_errors import err
     with app.test_request_context():
         resp, status = err('msg', 'CODE', 409,
                            retryable=True, phase='dispatch', attempt=2,
@@ -1148,7 +1148,7 @@ def test_structured_error_detail(app):
 
 def test_structured_error_backward_compat(app):
     """P1-A1：不传 kwargs 时行为与既有完全一致（无 error_detail 键）。"""
-    from utils.api_errors import err
+    from common.api_errors import err
     with app.test_request_context():
         resp, status = err('msg', 'CODE', 404)
         body = resp.get_json()

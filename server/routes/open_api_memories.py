@@ -17,10 +17,10 @@ mem0 的 m.delete(memory_id=...)），所以删除前必须先 list_memories(own
 from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, require_bound_key
-from utils.api_errors import (INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND, err,
+from common.api_errors import (INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND, err,
                               register_error_handlers)
 from utils.memory import add_memory_text, delete_memory, get_memory, list_memories
-from utils.operation_log import log_api_operation
+from common.operation_log import log_api_operation
 
 open_api_memories_bp = Blueprint(
     'open_api_memories', __name__, url_prefix='/v1/memories')

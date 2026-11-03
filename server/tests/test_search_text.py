@@ -1,5 +1,5 @@
 """单测：utils/search_text.py 的 compute_search_text 拼接逻辑。"""
-from utils.search_text import compute_search_text, DIRECT_SEARCHABLE_TYPES
+from common.search_text import compute_search_text, DIRECT_SEARCHABLE_TYPES
 
 
 class TestComputeSearchText:

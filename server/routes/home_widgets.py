@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
-from utils.operation_log import log_operation
-from utils.permissions import can_admin
+from common.operation_log import log_operation
+from common.permissions import can_admin
 import psycopg2.extras
 import json
 import time

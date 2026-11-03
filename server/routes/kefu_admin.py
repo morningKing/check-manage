@@ -8,7 +8,7 @@ from auth import require_permission
 from utils import kefu_repo
 from utils import kefu_event_bus
 from utils import kefu_sse_ticket
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 
 kefu_admin_bp = Blueprint('kefu_admin', __name__, url_prefix='/admin/kefu')
 

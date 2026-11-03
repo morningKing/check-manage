@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 # 唯一真源：AI 批任务对外端点的请求体上限（Flask 侧同一份数字，见
 # routes/open_api_batches.py 的 before_request）。该模块零依赖，可以在这个
 # 独立进程里安全 import —— 不会把 Flask/db 那一坨拖进来。
-from utils.upload_limits import body_limit_for_path
+from common.upload_limits import body_limit_for_path
 from utils import opencode_launch
 from utils.opencode_global import serve_listener_pids, serve_stdio_file
 

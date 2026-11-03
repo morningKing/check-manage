@@ -10,7 +10,7 @@ import os
 from flask import Blueprint, jsonify, request
 
 from auth import require_permission
-from utils.log_tail import DEFAULT_LIMIT, MAX_LIMIT, read_tail
+from common.log_tail import DEFAULT_LIMIT, MAX_LIMIT, read_tail
 
 log = logging.getLogger(__name__)
 

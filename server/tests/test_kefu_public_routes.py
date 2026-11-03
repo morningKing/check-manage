@@ -123,7 +123,7 @@ def test_rate_ip_floor_catches_rotating_visitor():
     """Rotating visitor_id does not bypass the IP-only bucket floor."""
     import routes.kefu_public as mod
     from unittest.mock import patch as _patch
-    from utils.rate_limit import RateLimiter
+    from common.rate_limit import RateLimiter
 
     inst = {'id': 'kf_ipfloor', 'rate_limit': {}}
     limiter = RateLimiter()

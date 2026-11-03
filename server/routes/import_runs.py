@@ -10,7 +10,7 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required
-from utils.rbac_guard import require_page_action
+from common.rbac_guard import require_page_action
 import psycopg2.extras
 import uuid
 

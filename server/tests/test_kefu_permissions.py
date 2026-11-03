@@ -1,4 +1,4 @@
-from utils.permissions import PERMISSION_CATALOG, all_permission_keys
+from common.permissions import PERMISSION_CATALOG, all_permission_keys
 
 
 def test_admin_kefu_in_catalog():

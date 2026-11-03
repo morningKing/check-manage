@@ -9,7 +9,7 @@ from flask import Blueprint, request, jsonify, Response, g
 from db import get_db
 from auth import login_required, write_required
 from utils.menu_export import execute_menu_export, batch_clear
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 from urllib.parse import quote
 
 menu_export_bp = Blueprint('menu_export', __name__)

@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify, Response
 from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, require_permission
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 from utils.script_runner import run_export_script, validate_export_script_scope
 import psycopg2.extras
 import psycopg2.errors

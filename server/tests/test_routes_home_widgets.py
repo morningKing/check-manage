@@ -161,7 +161,7 @@ class TestListHomeWidgets:
     def test_get_all_widgets_admin_includes_disabled(self, setup):
         """?all=true（管理员）返回全部区块，含未启用 —— 取消勾选后仍可在配置页重新启用"""
         client, mock_cursor, admin_h, _ = setup
-        import utils.permissions as _perms
+        from common import permissions as _perms
         _perms.invalidate_cache()
         _perms._cache['admin'] = {
             'is_superuser': True, 'default_page_access': 'write',
@@ -183,7 +183,7 @@ class TestListHomeWidgets:
     def test_get_all_widgets_non_admin_still_filtered(self, setup):
         """非管理员即便带 ?all=true 也只拿到启用且角色可见的区块（权限不被绕过）"""
         client, mock_cursor, _, dev_h = setup
-        import utils.permissions as _perms
+        from common import permissions as _perms
         _perms.invalidate_cache()
         _perms._cache['developer'] = {
             'is_superuser': False, 'default_page_access': 'read',

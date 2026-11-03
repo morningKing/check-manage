@@ -30,7 +30,7 @@ def setup(mock_conn, mock_cursor):
     patches = [
         patch('db.get_db', fake_db),
         patch('routes.auth.get_db', fake_db),
-        patch('utils.permissions.get_db', fake_db),
+        patch('common.permissions.get_db', fake_db),
         patch('routes.menus.get_db', fake_db),
         patch('routes.etl_tasks.get_db', fake_db),
         patch('routes.dynamic.get_db', fake_db),
@@ -38,14 +38,14 @@ def setup(mock_conn, mock_cursor):
         patch('routes.users.get_db', fake_db),
         patch('routes.relations.get_db', fake_db),
         patch('db.pool', MagicMock()),
-        patch('utils.operation_log.log_operation'),
+        patch('common.operation_log.log_operation'),
     ]
     for p in patches:
         p.start()
 
     # RBAC permission resolution is cached per role_id; clear it so each test's
     # mocked role row is actually consulted instead of a stale cached entry.
-    from utils.permissions import invalidate_cache
+    from common.permissions import invalidate_cache
     invalidate_cache()
 
     from app import app

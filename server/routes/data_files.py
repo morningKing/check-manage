@@ -26,8 +26,8 @@ from flask import Blueprint, request, jsonify, g, send_file
 from auth import login_required, login_required_sse
 from db import get_db
 from config import DATA_FILES_ROOT, DATA_FILE_MAX_MB
-from utils.filename import safe_filename
-from utils.permissions import can_page
+from common.filename import safe_filename
+from common.permissions import can_page
 
 data_files_bp = Blueprint('data_files', __name__)
 

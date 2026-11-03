@@ -86,7 +86,7 @@ def _fake_db(mock_conn):
 @pytest.fixture(autouse=True)
 def _fresh_limiter(monkeypatch):
     """每测换新限速桶：用例间互不串桶，确定性无睡眠。"""
-    from utils.rate_limit import RateLimiter
+    from common.rate_limit import RateLimiter
     monkeypatch.setattr(ext, '_limiter', RateLimiter())
 
 
@@ -257,7 +257,7 @@ def _send_patches(mock_conn, tok, status, owner=None):
         patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),
         patch('routes.external_takeover.batch_repo.continue_child'),
         patch('utils.batch_engine.get_worker', return_value=MagicMock()),
-        patch('utils.operation_log._write_log_row'),
+        patch('common.operation_log._write_log_row'),
     )
 
 
@@ -476,7 +476,7 @@ def _cancel_patches(mock_conn, tok, post_status='running', owner=None):
         patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),
         patch('routes.external_takeover.batch_repo.cancel_child'),
         patch('utils.batch_engine.get_worker', return_value=MagicMock()),
-        patch('utils.operation_log._write_log_row'),
+        patch('common.operation_log._write_log_row'),
     )
 
 

@@ -29,7 +29,7 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import require_permission
 from utils import opencode_global as ocg
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 
 logger = logging.getLogger(__name__)
 
@@ -399,7 +399,7 @@ def restart():
     body = request.get_json(silent=True) or {}
     force = bool(body.get('force'))
     if force:
-        from utils.permissions import can_admin
+        from common.permissions import can_admin
         if not can_admin(g.current_user.get('role'), 'admin.ai_runtime_force'):
             return jsonify({'error': '强制重启需要「OpenCode 强制重启」权限',
                             'code': 'FORCE_FORBIDDEN'}), 403

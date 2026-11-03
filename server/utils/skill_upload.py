@@ -14,7 +14,7 @@ import zipfile
 
 from werkzeug.datastructures import FileStorage
 
-from utils.zip_unicode import decoded_zip_name
+from common.zip_unicode import decoded_zip_name
 
 MAX_ZIP_BYTES = 5 * 1024 * 1024
 MAX_ZIP_ENTRIES = 200

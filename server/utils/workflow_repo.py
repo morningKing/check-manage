@@ -40,7 +40,7 @@ def delete_definition(cur, wid):
 def validate_definition(cur, definition):
     """保存期校验：检查每个阶段绑定的状态字段确实能驱动推进，返回中文告警列表（非阻断）。
     无告警 = 该工作流可正常推进；有告警说明阶段配置会导致「推进按钮永不出现」之类的死流程。"""
-    from utils.operation_log import get_page_info
+    from common.operation_log import get_page_info
     warnings = []
     for st in definition.get('stages', []):
         name = st.get('name') or st.get('id') or '?'

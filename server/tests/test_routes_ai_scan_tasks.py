@@ -18,11 +18,11 @@ def _make_db(mock_conn):
 def setup(mock_conn, mock_cursor):
     fake = _make_db(mock_conn)
     patches = [patch('db.get_db', fake),
-               patch('utils.permissions.get_db', fake), patch('utils.ai_scan_repo.get_db', fake),
-               patch('db.pool', MagicMock()), patch('utils.operation_log.log_operation')]
+               patch('common.permissions.get_db', fake), patch('utils.ai_scan_repo.get_db', fake),
+               patch('db.pool', MagicMock()), patch('common.operation_log.log_operation')]
     for p in patches:
         p.start()
-    import utils.permissions as perms
+    from common import permissions as perms
     perms.invalidate_cache()
     mock_cursor.fetchone.return_value = ('admin', True, 'write')
     from app import app
@@ -90,7 +90,7 @@ def test_create_missing_required_400(setup):
 
 def test_forbidden_without_capability(setup):
     client, cur, headers = setup
-    import utils.permissions as perms
+    from common import permissions as perms
     perms._cache['guest'] = {
         'is_superuser': False,
         'default_page_access': 'read',

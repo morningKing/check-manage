@@ -1,7 +1,7 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.permissions import PERMISSION_CATALOG, catalog_keys
+from common.permissions import PERMISSION_CATALOG, catalog_keys
 
 
 def test_catalog_has_expected_keys():
@@ -24,7 +24,7 @@ def test_catalog_keys_are_unique():
 
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
-import utils.permissions as perms
+from common import permissions as perms
 
 
 def _mock_db(role_row, admin_rows, page_rows):
@@ -50,28 +50,28 @@ def setup_function():
 
 def test_superuser_bypasses_everything():
     fake = _mock_db(('admin', True, 'write'), [], [])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         assert perms.can_admin('admin', 'admin.anything') is True
         assert perms.can_page('admin', 'page-orders', 'delete') is True
 
 
 def test_admin_key_grant():
     fake = _mock_db(('developer', False, 'write'), [('admin.etl_tasks',)], [])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         assert perms.can_admin('developer', 'admin.etl_tasks') is True
         assert perms.can_admin('developer', 'admin.users') is False
 
 
 def test_page_default_fallback_read():
     fake = _mock_db(('guest', False, 'read'), [], [])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         assert perms.can_page('guest', 'page-orders', 'read') is True
         assert perms.can_page('guest', 'page-orders', 'update') is False
 
 
 def test_page_default_fallback_write():
     fake = _mock_db(('developer', False, 'write'), [], [])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         assert perms.can_page('developer', 'page-orders', 'create') is True
         assert perms.can_page('developer', 'page-orders', 'delete') is True
 
@@ -79,7 +79,7 @@ def test_page_default_fallback_write():
 def test_page_explicit_row_overrides_default():
     fake = _mock_db(('developer', False, 'write'), [],
                     [('page-orders', True, False, True, False)])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         assert perms.can_page('developer', 'page-orders', 'update') is True
         assert perms.can_page('developer', 'page-orders', 'create') is False
         # other pages still use default
@@ -88,18 +88,18 @@ def test_page_explicit_row_overrides_default():
 
 def test_unknown_role_denies():
     fake = _mock_db(None, [], [])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         assert perms.can_admin('ghost', 'admin.users') is False
         assert perms.can_page('ghost', 'page-orders', 'read') is False
 
 
 def test_cache_invalidation_reloads():
     fake1 = _mock_db(('developer', False, 'read'), [], [])
-    with patch('utils.permissions.get_db', fake1):
+    with patch('common.permissions.get_db', fake1):
         assert perms.can_page('developer', 'page-x', 'create') is False
     # change underlying data to 'write', but cache still holds old value
     fake2 = _mock_db(('developer', False, 'write'), [], [])
-    with patch('utils.permissions.get_db', fake2):
+    with patch('common.permissions.get_db', fake2):
         assert perms.can_page('developer', 'page-x', 'create') is False  # cached
         perms.invalidate_cache('developer')
         assert perms.can_page('developer', 'page-x', 'create') is True   # reloaded
@@ -125,7 +125,7 @@ def test_require_permission_allows_granted():
     app = _app_with_protected_route()
     token = create_token({'id': 'u1', 'username': 'dev', 'role': 'developer'})
     fake = _mock_db(('developer', False, 'read'), [('admin.users',)], [])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         perms.invalidate_cache()
         resp = app.test_client().get('/protected', headers={'Authorization': f'Bearer {token}'})
         assert resp.status_code == 200
@@ -135,7 +135,7 @@ def test_require_permission_denies_ungranted():
     app = _app_with_protected_route()
     token = create_token({'id': 'u1', 'username': 'guest', 'role': 'guest'})
     fake = _mock_db(('guest', False, 'read'), [], [])
-    with patch('utils.permissions.get_db', fake):
+    with patch('common.permissions.get_db', fake):
         perms.invalidate_cache()
         resp = app.test_client().get('/protected', headers={'Authorization': f'Bearer {token}'})
         assert resp.status_code == 403

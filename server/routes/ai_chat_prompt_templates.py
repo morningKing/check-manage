@@ -3,7 +3,7 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import login_required
 from utils.agent_ledger import validate_checks
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 from utils.prompt_template import (
     DuplicateTemplateName,
     create_template,

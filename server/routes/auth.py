@@ -2,14 +2,14 @@ from flask import Blueprint, request, jsonify, g
 from werkzeug.security import check_password_hash, generate_password_hash
 from db import get_db
 from auth import create_token, login_required
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 
 auth_bp = Blueprint('auth', __name__)
 
 
 def build_permissions_payload(role_id):
     """Resolve a compact permission set for the frontend."""
-    from utils.permissions import get_role_perms
+    from common.permissions import get_role_perms
     p = get_role_perms(role_id)
     if not p:
         return {'isSuperuser': False, 'adminKeys': [],

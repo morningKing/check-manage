@@ -38,7 +38,7 @@ def setup(mock_conn, mock_cursor):
         patch('routes.relations.get_db', fake_db),
         patch('routes.validation_scripts.get_db', fake_db),
         patch('db.pool', MagicMock()),
-        patch('utils.operation_log.log_operation'),
+        patch('common.operation_log.log_operation'),
     ]
     for p in patches:
         p.start()

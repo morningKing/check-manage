@@ -48,7 +48,7 @@ def test_require_permission_sse_header_token_forwards_to_perm_gate():
     app = _make_app()
     client = app.test_client()
     with patch('auth.decode_token', return_value={'userId': 'u', 'username': 'x', 'role': 'custom'}), \
-         patch('utils.permissions.can_admin', return_value=True):
+         patch('common.permissions.can_admin', return_value=True):
         r = client.get('/protected', headers={'Authorization': 'Bearer tok'})
     assert r.status_code == 200
     body = r.get_json()
@@ -61,7 +61,7 @@ def test_require_permission_sse_query_token_grants_when_capability_held():
     app = _make_app()
     client = app.test_client()
     with patch('auth.decode_token', return_value={'userId': 'u', 'username': 'y', 'role': 'custom'}), \
-         patch('utils.permissions.can_admin', return_value=True):
+         patch('common.permissions.can_admin', return_value=True):
         r = client.get('/protected?access_token=tok')
     assert r.status_code == 200
     assert r.get_json()['ok'] is True
@@ -72,7 +72,7 @@ def test_require_permission_sse_query_token_denies_when_capability_missing():
     app = _make_app()
     client = app.test_client()
     with patch('auth.decode_token', return_value={'userId': 'u', 'username': 'y', 'role': 'custom'}), \
-         patch('utils.permissions.can_admin', return_value=False):
+         patch('common.permissions.can_admin', return_value=False):
         r = client.get('/protected?access_token=tok')
     assert r.status_code == 403
 

@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, g
 from auth import require_permission
 from utils import ai_scan_repo
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 
 ai_scan_tasks_bp = Blueprint('ai_scan_tasks', __name__)
 
@@ -95,7 +95,7 @@ def import_scan_outputs(task_id, sid):
         return jsonify({'error': '任务未配置 output_file_field'}), 400
     n = _import_child_outputs_to_record(task, row[2], session_row,
                                         task['output_file_field'])
-    from utils.operation_log import log_operation
+    from common.operation_log import log_operation
     log_operation('update', 'ai_scan_task', task_id, sid,
                   f'手动导入产物 {n} 个文件')
     return jsonify({'imported': n})

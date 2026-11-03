@@ -14,7 +14,7 @@ import os
 from flask import Blueprint, g, jsonify, request
 from auth import require_permission
 from config import AI_WORKSPACE_ROOT
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 from utils.global_skills import (
     delete_global_skill,
     get_global_skill,

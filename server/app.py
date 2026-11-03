@@ -69,7 +69,7 @@ from routes.kefu_admin import kefu_admin_bp
 from routes.kefu_public import kefu_public_bp
 from routes.suggest_editor import suggest_editor_bp
 from routes.plugins_admin import plugins_bp
-from utils.logging_setup import setup_logging
+from common.logging_setup import setup_logging
 
 # Configure logging (console + rotating file) before anything logs. Skip the
 # file handler under pytest so test runs don't spew ai-chat.log.
@@ -149,7 +149,7 @@ def _ai_open_api_body_limit():
     拦，直连后端 / 经 Vite 开发代理的超大 JSON 会完整进入 Flask。函数对
     限度之外的路径（含备份还原、/v1/collections 数据接口）一律放行，详见
     upload_limits 模块注释。"""
-    from utils.upload_limits import body_limit_for_path
+    from common.upload_limits import body_limit_for_path
     limit = body_limit_for_path(request.path)
     if limit is None:
         return None
@@ -214,7 +214,7 @@ try:
     # 运营日志表保留（大数据量优化 §2.2/2.3/2.4）：operation_logs /
     # agent_tool_calls / webhook_logs 分批清理过期行
     try:
-        from utils.log_retention import apply_log_retention
+        from common.log_retention import apply_log_retention
         _lr = apply_log_retention()
         logging.info('log retention applied: %s', _lr)
     except Exception as _e_lr:
@@ -260,7 +260,7 @@ try:
             logging.warning('SkillOpt retention failed: %s', e2)
         # 运营日志表保留（与执行事件 retention 同一每日作业）
         try:
-            from utils.log_retention import apply_log_retention
+            from common.log_retention import apply_log_retention
             lr = apply_log_retention()
             logging.info('log retention: %s', lr)
         except Exception as e2:

@@ -7,7 +7,7 @@ in source collections, executing actions on target collections.
 import uuid
 import psycopg2.extras
 from datetime import datetime, timezone
-from utils.notifier import create_notification
+from common.notifier import create_notification
 
 
 def fire_triggers(event, collection, record_id, old_data, new_data, operator, cur, operator_user_id=None):

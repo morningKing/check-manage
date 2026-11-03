@@ -47,7 +47,7 @@ def setup(mock_conn, mock_cursor):
         patch('routes.data_files.get_db', fake_db),
         patch('auth.get_db', fake_db),
         patch('db.pool', MagicMock()),
-        patch('utils.operation_log.log_operation'),
+        patch('common.operation_log.log_operation'),
     ]
     for p in patches:
         p.start()

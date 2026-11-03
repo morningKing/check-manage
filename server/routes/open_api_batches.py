@@ -15,7 +15,7 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, require_bound_key
 from db import get_db
-from utils.api_errors import (CONFLICT, INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND,
+from common.api_errors import (CONFLICT, INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND,
                               PAYLOAD_TOO_LARGE, UPSTREAM_UNAVAILABLE, err,
                               register_error_handlers)
 from utils.batch_engine import get_worker
@@ -25,11 +25,11 @@ from utils.batch_repo import (append_to_batch, cancel_batch,
                               get_children_progress, get_max_files_per_batch,
                               get_session_usage, list_batches,
                               reset_failed_to_pending)
-from utils.filename import safe_filename
-from utils.operation_log import log_api_operation
+from common.filename import safe_filename
+from common.operation_log import log_api_operation
 # 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
 # rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
-from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
+from common.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
                                  MAX_UPLOAD_TOTAL_BYTES, body_limit_for_path)
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                              legacy_batch_workspace_root,

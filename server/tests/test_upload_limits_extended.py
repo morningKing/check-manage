@@ -2,7 +2,7 @@
 纳入 1 MB 请求体门，而 /v1/collections 数据接口与备份还原保持不限。"""
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.upload_limits import (body_limit_for_path, MAX_JSON_BODY_BYTES,
+from common.upload_limits import (body_limit_for_path, MAX_JSON_BODY_BYTES,
                                  MAX_UPLOAD_REQUEST_BYTES)
 
 

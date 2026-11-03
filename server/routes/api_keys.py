@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify, g
 from db import get_db
 from datetime import timezone
 from auth import hash_api_key, require_permission
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 import uuid
 import secrets
 

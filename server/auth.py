@@ -109,7 +109,7 @@ def _user_has_permission(payload, permission_key):
     roles.is_superuser（经 utils.permissions.can_admin），不在 JWT role slug
     上做任何短路，保留与重构前完全一致的判定语义。
     """
-    from utils.permissions import can_admin
+    from common.permissions import can_admin
     return can_admin(payload.get('role'), permission_key)
 
 

@@ -6,7 +6,7 @@
 from flask import Blueprint, g as flask_g, jsonify, request
 
 from auth import login_required, require_permission
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 
 from utils import approval_repo
 

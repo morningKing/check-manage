@@ -20,13 +20,13 @@ def setup(mock_conn, mock_cursor):
     patches = [
         patch('db.get_db', fake_db),
         patch('routes.roles.get_db', fake_db),
-        patch('utils.permissions.get_db', fake_db),
+        patch('common.permissions.get_db', fake_db),
         patch('db.pool', MagicMock()),
-        patch('utils.operation_log.log_operation'),
+        patch('common.operation_log.log_operation'),
     ]
     for p in patches:
         p.start()
-    import utils.permissions as perms
+    from common import permissions as perms
     perms.invalidate_cache()
     # superuser admin so require_permission('admin.roles') passes
     mock_cursor.fetchone.return_value = ('admin', True, 'write')

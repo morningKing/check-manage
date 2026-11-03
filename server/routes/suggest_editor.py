@@ -33,7 +33,7 @@ from auth import (
     write_required,
 )
 from config import MCP_INTERNAL_TOKEN, SE_DATA_DIR
-from utils.operation_log import log_operation
+from common.operation_log import log_operation
 from utils.suggest_editor_attachments import (
     delete_document_attachments,
     get_attachment,

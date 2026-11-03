@@ -1659,7 +1659,7 @@ def force_stop_batch(batch_id: str, *, operator: str,
                     "  completed_at=COALESCE(completed_at, NOW()) "
                     "WHERE id=%s", (batch_id,))
         conn.commit()
-    from utils.operation_log import log_operation
+    from common.operation_log import log_operation
     log_operation('update', 'ai_chat_batch', batch_id, batch_id,
                   f'管理员强制停止（{operator}）：取消 {stopped["cancelled"]} 个子任务')
     _log.warning('force_stop batch=%s by=%s cancelled=%s', batch_id, operator,

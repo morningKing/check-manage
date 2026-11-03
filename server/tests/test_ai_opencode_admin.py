@@ -675,7 +675,7 @@ def _grant_only(*keys):
 def test_permission_split_read_only_role(gdir, admin_headers, monkeypatch):
     """ai_runtime_read alone can view lists but cannot write skills/agents."""
     client = _client()
-    monkeypatch.setattr('utils.permissions.can_admin',
+    monkeypatch.setattr('common.permissions.can_admin',
                         _grant_only('admin.ai_runtime_read'))
     assert client.get('/ai/opencode/skills', headers=admin_headers).status_code == 200
     assert client.get('/ai/opencode/agents', headers=admin_headers).status_code == 200
@@ -689,7 +689,7 @@ def test_permission_split_read_only_role(gdir, admin_headers, monkeypatch):
 
 def test_permission_split_skill_vs_agent_write(gdir, admin_headers, monkeypatch):
     client = _client()
-    monkeypatch.setattr('utils.permissions.can_admin',
+    monkeypatch.setattr('common.permissions.can_admin',
                         _grant_only('admin.ai_skill_write'))
     r = client.post('/ai/opencode/skills', headers=admin_headers,
                     json={'name': 'split-skill', 'description': 'd'})
@@ -708,14 +708,14 @@ def test_permission_split_apply_and_restart(gdir, admin_headers, monkeypatch):
     monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [])
     monkeypatch.setattr(ocg, '_kill_pids', lambda pids: None)
 
-    monkeypatch.setattr('utils.permissions.can_admin',
+    monkeypatch.setattr('common.permissions.can_admin',
                         _grant_only('admin.ai_runtime_read'))
     assert client.post('/ai/opencode/runtime/apply',
                        headers=admin_headers, json={}).status_code == 403
     assert client.post('/ai/opencode/restart',
                        headers=admin_headers, json={}).status_code == 403
 
-    monkeypatch.setattr('utils.permissions.can_admin',
+    monkeypatch.setattr('common.permissions.can_admin',
                         _grant_only('admin.ai_runtime_restart'))
     # spawn 分隔行重定向（勿写真实 oc-serve.log，同 test_restart_guard_and_force）
     monkeypatch.setattr(ocg, 'serve_stdio_file',

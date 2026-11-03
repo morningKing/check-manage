@@ -2,14 +2,14 @@ from flask import Blueprint, request, jsonify, g as flask_g
 from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, write_required
-from utils.permissions import can_page
-from utils.rbac_guard import require_page_action
-from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
+from common.permissions import can_page
+from common.rbac_guard import require_page_action
+from common.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from utils.version import get_user_current_branch, MAIN_BRANCH_ID
 from utils.branch_lock import check_branch_lock
 from utils.sequences import allocate_sequence
-from utils.search_text import compute_search_text
+from common.search_text import compute_search_text
 from utils.field_indexes import sql_literal
 from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
 import psycopg2.extras
@@ -927,7 +927,7 @@ def update_item(collection, item_id):
                   field_changes=field_changes if field_changes else None, branch_id=branch_id)
     # Notify on status field changes
     try:
-        from utils.notifier import notify_status_change
+        from common.notifier import notify_status_change
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         operator = user.get('username', '')
         for fc in field_changes:

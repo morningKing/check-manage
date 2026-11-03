@@ -358,7 +358,7 @@ class TestDependencyValidationNotification:
             with patch('utils.cross_project_dependency.check_branch_exists', return_value=False):
                 with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
                     with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
-                        with patch('utils.notifier.notify_dependency_broken') as mock_notify:
+                        with patch('common.notifier.notify_dependency_broken') as mock_notify:
                             from utils.cross_project_dependency import validate_project_dependency
                             result = validate_project_dependency('dep-1', send_notification=True)
 
@@ -385,7 +385,7 @@ class TestDependencyValidationNotification:
             with patch('utils.cross_project_dependency.check_branch_exists', return_value=True):
                 with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
                     with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
-                        with patch('utils.notifier.notify_dependency_resolved') as mock_notify:
+                        with patch('common.notifier.notify_dependency_resolved') as mock_notify:
                             from utils.cross_project_dependency import validate_project_dependency
                             result = validate_project_dependency('dep-1', send_notification=True)
 
@@ -425,7 +425,7 @@ class TestDependencyValidationNotification:
                             'brokenCount': 2,
                             'brokenRecords': [],
                         }):
-                            with patch('utils.notifier.notify_dependency_warning') as mock_notify:
+                            with patch('common.notifier.notify_dependency_warning') as mock_notify:
                                 from utils.cross_project_dependency import validate_project_dependency
                                 result = validate_project_dependency('dep-1', send_notification=True)
 
@@ -530,8 +530,8 @@ class TestDependencyNotifier:
         mock_cursor.fetchall.return_value = [('user-1',), ('user-2',)]
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.notifier import notify_dependency_broken
+        with patch('common.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from common.notifier import notify_dependency_broken
             notify_dependency_broken('project-1', '项目A', '项目B', '目标分支不存在')
 
             # 应该为每个管理员创建通知
@@ -543,8 +543,8 @@ class TestDependencyNotifier:
         mock_cursor.fetchall.return_value = [('user-1',)]
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.notifier import notify_dependency_warning
+        with patch('common.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from common.notifier import notify_dependency_warning
             notify_dependency_warning('project-1', '项目A', '项目B', '2条外键断裂')
 
             assert mock_cursor.execute.called
@@ -555,8 +555,8 @@ class TestDependencyNotifier:
         mock_cursor.fetchall.return_value = [('user-1',)]
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.notifier import notify_dependency_resolved
+        with patch('common.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from common.notifier import notify_dependency_resolved
             notify_dependency_resolved('project-1', '项目A', '项目B')
 
             assert mock_cursor.execute.called
@@ -567,8 +567,8 @@ class TestDependencyNotifier:
         mock_cursor.fetchall.side_effect = Exception('db error')
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.notifier import notify_dependency_broken
+        with patch('common.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from common.notifier import notify_dependency_broken
             # 不应该抛出异常
             result = notify_dependency_broken('project-1', '项目A', '项目B', 'error')
             assert result is None  # 异常被捕获，返回 None
@@ -695,9 +695,9 @@ class TestValidationStateEdgeCases:
                 with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
                     with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
                         with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-                            with patch('utils.notifier.notify_dependency_broken') as mock_broken:
-                                with patch('utils.notifier.notify_dependency_resolved') as mock_resolved:
-                                    with patch('utils.notifier.notify_dependency_warning') as mock_warning:
+                            with patch('common.notifier.notify_dependency_broken') as mock_broken:
+                                with patch('common.notifier.notify_dependency_resolved') as mock_resolved:
+                                    with patch('common.notifier.notify_dependency_warning') as mock_warning:
                                         from utils.cross_project_dependency import validate_project_dependency
                                         result = validate_project_dependency('dep-1', send_notification=True)
 
@@ -730,7 +730,7 @@ class TestValidationStateEdgeCases:
                 with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
                     with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
                         with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-                            with patch('utils.notifier.notify_dependency_broken') as mock_notify:
+                            with patch('common.notifier.notify_dependency_broken') as mock_notify:
                                 from utils.cross_project_dependency import validate_project_dependency
                                 result = validate_project_dependency('dep-1', send_notification=False)
 

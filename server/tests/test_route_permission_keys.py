@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.permissions import catalog_keys
+from common.permissions import catalog_keys
 
 _ROUTES_DIR = os.path.join(os.path.dirname(__file__), '..', 'routes')
 _CALL_RE = re.compile(r"require_permission\(['\"]([^'\"]+)['\"]\)")

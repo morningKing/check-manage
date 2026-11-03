@@ -21,9 +21,9 @@ from auth import api_key_required, require_bound_key
 from routes.open_api_batches import MAX_PROMPT_CHARS, _validate_files
 from utils.batch_repo import get_max_files_per_batch
 from utils.ai_session_repo import cancel_session, create_session, get_session_for_owner
-from utils.api_errors import CONFLICT, INVALID_ARGUMENT, NOT_FOUND, err, register_error_handlers
+from common.api_errors import CONFLICT, INVALID_ARGUMENT, NOT_FOUND, err, register_error_handlers
 from utils.batch_engine import get_worker
-from utils.operation_log import log_api_operation
+from common.operation_log import log_api_operation
 
 open_api_ai_sessions_bp = Blueprint(
     'open_api_ai_sessions', __name__, url_prefix='/v1/ai-sessions')

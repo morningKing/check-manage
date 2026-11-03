@@ -5,7 +5,7 @@ from auth import api_key_required
 from config import OPEN_API_BRANCH
 from datetime import timezone
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
-from utils.search_text import compute_search_text
+from common.search_text import compute_search_text
 from routes.data_files import save_data_file, _check_allowed_extension
 import uuid
 import json

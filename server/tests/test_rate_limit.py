@@ -1,4 +1,4 @@
-from utils.rate_limit import RateLimiter
+from common.rate_limit import RateLimiter
 
 
 def test_per_minute_limit():

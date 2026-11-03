@@ -8,7 +8,7 @@ from pathlib import Path
 import psycopg2.pool
 
 from flask import Blueprint, current_app, g, jsonify, request
-from utils.filename import safe_filename
+from common.filename import safe_filename
 
 from auth import login_required, login_required_sse
 from utils.workspace import (batch_staging_dir, batch_workspace_root,

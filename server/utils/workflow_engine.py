@@ -89,7 +89,7 @@ def _notify_roles(cur, roles, title, content, collection, record_id):
     """通知拥有 roles 之一的所有用户（create_notification 自开连接，独立事务）。"""
     if not roles:
         return
-    from utils.notifier import create_notification
+    from common.notifier import create_notification
     cur.execute("SELECT id FROM users WHERE role = ANY(%s)", (list(roles),))
     for (uid,) in cur.fetchall():
         create_notification(uid, 'workflow', title, content, collection, record_id)

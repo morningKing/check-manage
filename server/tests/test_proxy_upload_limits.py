@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
+from common.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
                                  body_limit_for_path)
 
 
@@ -56,7 +56,7 @@ def test_other_paths_are_unlimited(path):
 def test_flask_and_proxy_read_the_same_numbers():
     """改一处、两边一致 —— routes 层不能自己再抄一份数字。"""
     import routes.open_api_batches as r
-    import utils.upload_limits as lim
+    from common import upload_limits as lim
     assert r.MAX_UPLOAD_REQUEST_BYTES is lim.MAX_UPLOAD_REQUEST_BYTES
     assert r.MAX_JSON_BODY_BYTES is lim.MAX_JSON_BODY_BYTES
     assert r.MAX_UPLOAD_TOTAL_BYTES is lim.MAX_UPLOAD_TOTAL_BYTES

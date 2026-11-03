@@ -18,7 +18,7 @@ import hashlib
 from datetime import datetime, timezone
 from db import get_db
 import psycopg2.extras
-from utils.operation_log import log_operation, pick_display_name, get_page_info
+from common.operation_log import log_operation, pick_display_name, get_page_info
 
 MAIN_BRANCH_ID = 'main'
 
