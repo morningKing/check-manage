@@ -818,6 +818,15 @@ class BatchWorker:
     # 自动重试预算（批任务无人值守的"失败不终局"）：可重试类失败（停滞/
     # 工具卡死/网络异常）把子任务重新排队，预算用尽才落 failed。0 = 关闭。
     MAX_AUTO_RETRY = int(os.getenv('AI_BATCH_MAX_AUTO_RETRY', '2'))
+    # 完成保证（2026-11-03 生产分叉修复：子会话还在跑、状态已 completed）：
+    # finished 判定须连续 N 个轮询成立且 assistant 消息 id 集合不变才放行
+    # （tool-calls 裁决间隙 / autocontinue 与「回合真结束」的单点快照不可
+    # 区分）。1 = 回退旧的单点判定语义。
+    FINISH_CONFIRM_POLLS = max(1, int(os.getenv('AI_BATCH_FINISH_CONFIRM_POLLS', '2') or 2))
+    # 放行后 best-effort abort 主会话与在跑的 task 子代理再返回——回合真
+    # 结束时为幂等 no-op，判定过早时杀死 zombie。不变式「completed ⟹ OC
+    # 回合已终结」由它硬保证。0 = 回退旧行为（不 abort）。
+    ABORT_ON_FINISH = os.getenv('AI_BATCH_ABORT_ON_FINISH', '1') != '0'
     # _TurnFailed.name 白名单：只有这些 provider 错误值得重试。
     # ProviderAuthError（密钥错，重试必然再炸）、MessageAbortedError（用户
     # 主动中断）、ContextOverflowError（上下文超限，续跑只会更大）不在列。
@@ -1664,7 +1673,7 @@ class BatchWorker:
                 oc_session_id, sid, directory=ws,
                 on_progress=_persist_progress,
                 baseline_ids=baseline_ids,
-                lease_lost=lease_lost)
+                lease_lost=lease_lost, batch_id=batch_id)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg,
                                        directory=ws, generation=generation,
                                        turn_label=turn_label,
@@ -2694,7 +2703,8 @@ class BatchWorker:
                         directory: str = '',
                         on_progress=None,
                         baseline_ids: set | None = None,
-                        lease_lost: 'threading.Event | None' = None) -> tuple[str | None, dict | None]:
+                        lease_lost: 'threading.Event | None' = None,
+                        batch_id: str | None = None) -> tuple[str | None, dict | None]:
         """Poll until the latest assistant message reports finished.
 
         Returns (preview_first_line, full_message_dict). The full message is
@@ -2723,6 +2733,12 @@ class BatchWorker:
         - 工具卡死看门狗：工具调用的签名冻结超过 TOOL_STALL_TIMEOUT_SEC 且
           没有活跃子代理作保 → abort + 失败（reason='tool stuck'）；
         - 原有 STALL 看门狗不变：工具在跑就算进展，只有真冻结才触发。
+
+        完成语义（2026-11-03 生产分叉修复：子会话还在跑、状态已 completed）：
+        finished 不再是单点判定——须连续 FINISH_CONFIRM_POLLS 个轮询成立且
+        assistant 消息 id 集合不变（tool-calls 裁决间隙 / autocontinue 与
+        「回合真结束」的单点快照不可区分），放行后经 _finish_with_guarantee
+        先止血 abort（幂等）再终拉对账，保证「completed ⟹ OC 回合已终结」。
         """
         cap = self.SESSION_TIMEOUT_SEC
         deadline = (time.time() + cap) if cap and cap > 0 else None   # None = no hard cap
@@ -2735,6 +2751,9 @@ class BatchWorker:
         tool_stall_start: float | None = None
         child_sigs: dict = {}
         first = True
+        # 完成稳定窗状态：候选 id 集合 + 连续成立计数（见 docstring 完成语义）。
+        cand_ids: frozenset | None = None
+        cand_polls = 0
         while deadline is None or time.time() < deadline:
             # F3/F4：租约心跳线程判定执行权易主时静默放手——不 abort（接管
             # 者可能正在复用该 OpenCode 会话，与 _LeaseLost 处理器语义一致）、
@@ -2767,6 +2786,7 @@ class BatchWorker:
                     traceback.print_exc()
                 last_persist_at = time.time()
             active_tool = False
+            finished_now = False
             for m in reversed(msgs):
                 if m.get('role') == 'assistant':
                     if baseline_ids and m.get('id') in baseline_ids:
@@ -2779,12 +2799,33 @@ class BatchWorker:
                     if m.get('error'):
                         raise _TurnFailed(m['error'])
                     if m.get('finished'):
-                        return last_preview, last_message
+                        # 不再单点返回：进入稳定窗（tool-calls 裁决间隙 /
+                        # autocontinue 与「回合真结束」此刻的快照不可区分）。
+                        finished_now = True
                     # The model is mid tool-call (incl. delegating to a subagent
                     # via the `task` tool) — it's working, not stalled.
                     if m.get('running_tool') or m.get('finish') in ('tool-calls', 'tool_use'):
                         active_tool = True
                     break
+            # 完成稳定窗：连续 FINISH_CONFIRM_POLLS 个轮询 finished 成立且
+            # 本轮 assistant id 集合不变才放行；期间冒新消息（集合变化）计数
+            # 重置、判定失效（最后一条不 finished）候选清空。
+            if finished_now:
+                cur_ids = frozenset(
+                    x.get('id') for x in msgs
+                    if x.get('role') == 'assistant' and x.get('id') is not None
+                    and not (baseline_ids and x.get('id') in baseline_ids))
+                if cand_ids == cur_ids:
+                    cand_polls += 1
+                else:
+                    cand_ids, cand_polls = cur_ids, 1
+                if cand_polls >= self.FINISH_CONFIRM_POLLS:
+                    return self._finish_with_guarantee(
+                        oc_session_id, sid, directory, msgs, baseline_ids,
+                        last_preview, last_message, cand_ids=cand_ids,
+                        lease_lost=lease_lost, batch_id=batch_id)
+            else:
+                cand_ids, cand_polls = None, 0
             # Watchdogs. 签名变化 = 有进展：重置两个计时器。工具在跑但父级输出
             # 冻结时，no-progress 看门狗保持安静（既有限制），同时给这个纹丝
             # 不动的工具调用单独计时（tool-stuck 看门狗）。
@@ -2833,7 +2874,77 @@ class BatchWorker:
                     diagnosis=self._stall_diagnosis(
                         msgs, baseline_ids, last_sig, directory, oc_session_id))
             time.sleep(self.POLL_INTERVAL_SEC)
+        # 硬上限到点时若稳定窗已有 ≥1 次确认（回合实际已完结、只差确认轮询），
+        # 按完成收口而不是超时——稳定窗不应把最后一刻完成的回合误判成超时失败。
+        if cand_polls >= 1:
+            return self._finish_with_guarantee(
+                oc_session_id, sid, directory, msgs, baseline_ids,
+                last_preview, last_message, cand_ids=cand_ids,
+                lease_lost=lease_lost, batch_id=batch_id)
         raise _SessionTimeout(self.SESSION_TIMEOUT_SEC)
+
+    def _finish_with_guarantee(self, oc_session_id: str, sid: str,
+                               directory: str, msgs: list,
+                               baseline_ids: set | None,
+                               last_preview, last_message, *,
+                               cand_ids: 'frozenset | None',
+                               lease_lost, batch_id: str | None):
+        """完成放行的三重保证（不变式：completed ⟹ OC 回合已终结）。
+
+        1. 租约检查：失守则不 abort（接管者可能正在复用该 OpenCode 会话，
+           与 _LeaseLost 处理器/F4 语义一致），交回上层静默放手；
+        2. 止血 abort：best-effort abort 主会话与在跑的 task 子代理。回合真
+           结束时为幂等 no-op（routes/ai_chat.py abort 端点的幂等契约），
+           判定过早时杀死 zombie——这是不变式的硬保证，异常只记日志；
+        3. 终拉对账：abort 后再拉一次消息——id 集合比候选判定时刻多 =
+           判定过早实锤（新消息已被 abort 杀掉），记 child.premature_finish
+           事件把静默分叉变成可取证证据；返回值刷新为终拉里更完整的最后
+           一条 assistant。终拉失败不阻塞完成（回退候选时刻的快照）。
+        """
+        if lease_lost is not None and lease_lost.is_set():
+            raise _LeaseLost()
+        if self.ABORT_ON_FINISH:
+            for target in [oc_session_id] + self._running_task_children(
+                    msgs, baseline_ids):
+                try:
+                    opencode_client.abort_session(target, directory=directory)
+                except Exception:  # noqa: BLE001 —— 止血是 best-effort
+                    logger.warning('[finish-guarantee] abort %s failed sid=%s',
+                                   target, sid, exc_info=True)
+        try:
+            final = opencode_client.list_messages(oc_session_id,
+                                                  directory=directory) or []
+        except Exception:  # noqa: BLE001 —— 对账失败不阻塞完成
+            logger.warning('[finish-guarantee] final pull failed sid=%s '
+                           '(fallback to confirmed snapshot)', sid)
+            return last_preview, last_message
+        final_ids = frozenset(
+            x.get('id') for x in final
+            if x.get('role') == 'assistant' and x.get('id') is not None
+            and not (baseline_ids and x.get('id') in baseline_ids))
+        grew = sorted(final_ids - (cand_ids or frozenset()))
+        if grew:
+            logger.warning('[finish-guarantee] premature completion sid=%s: '
+                           'messages appeared after confirmation %s (aborted)',
+                           sid, grew)
+            if batch_id:
+                try:
+                    from utils import batch_events
+                    batch_events.append_event(
+                        batch_id, 'child.premature_finish',
+                        aggregate_type='session', aggregate_id=sid,
+                        payload={'session_id': sid, 'newMessages': grew,
+                                 'confirmedIds': sorted(cand_ids or ())})
+                except Exception:  # noqa: BLE001 —— 取证 best-effort
+                    logger.warning('[finish-guarantee] premature event failed '
+                                   'sid=%s', sid, exc_info=True)
+        for m in reversed(final):
+            if m.get('role') != 'assistant':
+                continue
+            if baseline_ids and m.get('id') in baseline_ids:
+                continue
+            return self._preview_from(m), m
+        return last_preview, last_message
 
     @staticmethod
     def _progress_signature(msgs: list) -> tuple:
