@@ -1237,6 +1237,14 @@ def test_plugin_js_has_after_hook_and_postcheck():
     assert 'BAIZE_GATE_POSTCHECK_URL' in PLUGIN_JS
     assert 'inject' in PLUGIN_JS and 'prompt' in PLUGIN_JS
     assert '_lastArgsByCall' not in PLUGIN_JS
+    # 日志行必须带时间戳（2026-11-03）：serve stdio 原样落 oc-serve.log
+    assert 'new Date().toISOString()' in PLUGIN_JS
+    assert '${_ts()} gate DENY' in PLUGIN_JS
+    # 连接失败必须带目标 URL 与错误码（不能只留一句 Unable to connect）；DENY
+    # 行要带触发拦截的入参摘要（截断带 …(+N) 标记）
+    assert 'url=${GATE_URL' in PLUGIN_JS and '${_err(e)}' in PLUGIN_JS
+    assert 'url=${GATE_POST_URL' in PLUGIN_JS
+    assert 'args=[${_argsSummary(output && output.args)}]' in PLUGIN_JS
 
 
 # ---------------------------------------------------------------------------

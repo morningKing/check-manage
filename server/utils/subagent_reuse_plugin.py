@@ -54,7 +54,18 @@ function _takeCallAgent(callID) {
   return v ? v.agent : ''
 }
 
-function _log(...a) { console.error('[baize-subagent-reuse]', ...a) }
+// 时间戳与 tool-timeout 插件同口径（ISO/UTC 带毫秒）：插件 console 输出被
+// serve 原样落进 oc-serve.log，缺时间就无法把复用事件对到会话/批任务时间线。
+const _ts = () => new Date().toISOString()
+// 连接失败必须带地址与错误码（2026-11-03）：此前后端瞬断时只留一句
+// "fetch failed"，连不上哪个 URL、是拒连还是超时都看不出，排障要靠猜。
+const _err = (e) => {
+  if (!e) return 'unknown'
+  const code = e.code || (e.cause && (e.cause.code || e.cause.message)) || ''
+  const msg = e.message || String(e)
+  return code ? `${msg} (${code})` : msg
+}
+function _log(...a) { console.error('[baize-subagent-reuse]', _ts(), ...a) }
 
 async function _fetchJson(url, opts) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -67,7 +78,7 @@ async function _fetchJson(url, opts) {
       return { ok: true, body: await res.json() }
     } catch (e) {
       clearTimeout(timer)
-      if (attempt === 1) { _log('fetch failed', url.replace(/\?.*/, ''), e && e.message); return { ok: false, error: String(e && e.message) } }
+      if (attempt === 1) { _log('fetch failed', url, _err(e)); return { ok: false, error: String(e && e.message) } }
       await new Promise(r => setTimeout(r, 300))
     }
   }
@@ -124,7 +135,8 @@ async function pinByCall(sessionID, callID, taskId, agent) {
   // 会话）；后果有界：本次委派的 pin 缺失，下一次委派新建一次，后端恢复
   // 后自愈。stderr 留痕供排查。
   if (!r.ok) _log('pin FAILED (本次 pin 缺失，下次委派将新建；后端恢复后自愈)',
-                  sessionID, taskId)
+                  `url=${ENDPOINT}/pins`, sessionID, taskId,
+                  r.status ? `http=${r.status}` : `err=${r.error || 'unknown'}`)
   return r.ok
 }
 

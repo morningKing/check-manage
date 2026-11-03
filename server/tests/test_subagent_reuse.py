@@ -331,6 +331,15 @@ def test_plugin_deploy_idempotent(tmp_path):
     # 双保险（2026-10-08）：before 阶段进程内记 callID→agent，after 随 POST
     # 带回 agent——平台 intent 剪枝/未登记时的最后兜底
     assert '_rememberCallAgent' in src2
+    # 日志行必须带时间戳（2026-11-03）：serve 的 stdio 原样落 oc-serve.log，
+    # 缺时间无法把复用事件对到会话/批任务时间线。口径=tool-timeout 插件同款
+    # ISO/UTC 带毫秒。
+    assert 'new Date().toISOString()' in src2
+    assert "'[baize-subagent-reuse]', _ts()" in src2
+    # 连接失败/ pin 失败必须打出目标 URL 与错误码（2026-11-03：此前只有一句
+    # "fetch failed"，连不上哪个地址看不出；pin 失败也没 URL/原因）
+    assert "_log('fetch failed', url, _err(e))" in src2
+    assert 'url=${ENDPOINT}/pins' in src2 and 'http=${r.status}' in src2
 
 
 # ---------------------------------------------------------------------------

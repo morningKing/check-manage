@@ -57,13 +57,28 @@ const SLOW_COMPLETION_MS = 30000
 
 const pending = new Map() // `${sessionID}:${callID}` -> { timer, startedAt, args, tool }
 const ts = () => new Date().toISOString()
+// 参数摘要要能复核（2026-11-03：生产日志里 filePath 被截在 80 字符处、GUID 都
+// 没打全，排障时无法确认工具到底读了哪个 workspace）。上限放宽到单值 1000/
+// 整行 4000，超限时带 `…(+N)` 标记——"被截断"必须看得出来，不能静默丢内容。
+// 换行压成字面 \n：oc-serve.log 与日志查看器都按行消费，一条事件必须一行。
+const ARG_VALUE_MAX = 1000
+const ARGS_MAX = 4000
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…(+${s.length - n})` : s)
+const oneLine = (v) => {
+  try {
+    const s = typeof v === 'string'
+      ? v
+      : (JSON.stringify(v) === undefined ? String(v) : JSON.stringify(v))
+    return String(s).replace(/\r?\n/g, '\\n')
+  } catch { return '[unserializable]' }
+}
 const argsSummary = (args) => {
   try {
     if (args == null) return ''
-    if (typeof args === 'string') return args.slice(0, 120)
-    return Object.keys(args)
-      .map(k => `${k}=${String(args[k]).slice(0, 80)}`)
-      .join(' ').slice(0, 160)
+    if (typeof args === 'string') return clip(oneLine(args), ARGS_MAX)
+    return clip(Object.keys(args)
+      .map(k => `${k}=${clip(oneLine(args[k]), ARG_VALUE_MAX)}`)
+      .join(' '), ARGS_MAX)
   } catch { return '' }
 }
 

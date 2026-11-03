@@ -81,5 +81,11 @@ def test_plugin_template_has_leak_fix_and_attributable_logging():
     assert 'session.removed' in src                       # 兼容两种事件名
     assert 'const ts = () => new Date().toISOString()' in src   # 时间戳
     assert 'argsSummary' in src                           # 入参摘要（归因到具体文件等）
+    # 2026-11-03：参数不能被短上限静默截断（生产日志里 filePath 曾被砍在 80
+    # 字符、GUID 打不全）；截断必须带 `…(+N)` 标记，换行压成字面 \n 保持一行。
+    assert 'slice(0, 80)' not in src and 'slice(0, 160)' not in src
+    assert 'ARG_VALUE_MAX = 1000' in src and 'ARGS_MAX = 4000' in src
+    assert '…(+${s.length - n})' in src
+    assert r"replace(/\r?\n/g, '\\n')" in src
     assert 'SLOW_COMPLETION_MS' in src                    # 慢完成归因日志
     assert '(input, output)' in src                       # before 读 output.args

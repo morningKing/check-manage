@@ -268,6 +268,37 @@ const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
 const GATE_URL = process.env.BAIZE_GATE_PRECHECK_URL || '__GATE_ENDPOINT__'
 const GATE_POST_URL = process.env.BAIZE_GATE_POSTCHECK_URL || '__GATE_POSTCHECK__'
 const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN }
+// 日志行时间戳（ISO/UTC 带毫秒，与 baize-tool-timeout 插件同口径）：插件的
+// console 输出被 serve 原样落进 oc-serve.log，缺时间就无法把门禁事件对到
+// 会话/批任务时间线。
+const _ts = () => new Date().toISOString()
+// 日志行里必须带 URL 与失败原因（2026-11-03：生产只留了 "Unable to connect.
+// Is the computer able to access the url?"——连不上的是哪个地址都看不出）。
+// 参数摘要口径与 baize-tool-timeout 插件一致：单值 1000/整行 4000，超限带
+// `…(+N)` 标记，换行压成字面 \\n（一条事件一行）。
+const ARG_VALUE_MAX = 1000
+const ARGS_MAX = 4000
+const _clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…(+${s.length - n})` : s)
+const _flat = (v) => String(v).replace(/\\r?\\n/g, '\\\\n')
+const _err = (e) => {
+  if (!e) return 'unknown'
+  const code = e.code || (e.cause && (e.cause.code || e.cause.message)) || ''
+  const msg = e.message || String(e)
+  return code ? `${msg} (${code})` : msg
+}
+const _argsSummary = (args) => {
+  try {
+    if (args == null) return ''
+    if (typeof args === 'string') return _clip(_flat(args), ARGS_MAX)
+    return _clip(Object.keys(args).map((k) => {
+      const v = args[k]
+      const s = typeof v === 'string'
+        ? v
+        : (JSON.stringify(v) === undefined ? String(v) : JSON.stringify(v))
+      return `${k}=${_clip(_flat(s), ARG_VALUE_MAX)}`
+    }).join(' '), ARGS_MAX)
+  } catch { return '' }
+}
 // 诊断留痕（2026-10-15 生产 token 错位排查）：插件实际使用的 token 指纹与
 // 来源（env 优先/文件回落）随加载打印一次——与后端启动日志的 fingerprint、
 // 403 日志的 server=/got= 两侧对照，错位在哪一级一眼可见。只打前缀+长度。
@@ -275,7 +306,7 @@ const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN 
   const _envTok = process.env.BAIZE_INTERNAL_TOKEN
   const _tokStr = String(TOKEN)
   const _fp = _tokStr ? `${_tokStr.slice(0, 6)}…len=${_tokStr.length}` : '(empty)'
-  console.error(`[baize-trace] gate token source=${_envTok ? 'env' : 'file'} fingerprint=${_fp}`)
+  console.error(`[baize-trace] ${_ts()} gate token source=${_envTok ? 'env' : 'file'} fingerprint=${_fp}`)
 }
 const GATE_TIMEOUT_MS = 3000
 // (sessionID → expiry)。服务端返回 rules=0（该会话无任何 pre 规则）时短路
@@ -332,8 +363,8 @@ async function gatePreCheck(sessionID, tool, argsText) {
       // 非 2xx（含 token 失配 403）→ 放行；留痕到 oc-serve.log——服务端
       // 排查矩阵：有此行=插件在发请求（查 token/服务端），无此行也无 DENY=
       // 插件没发请求（老插件/serve 未重启）。
-      console.error(`[baize-trace] gate pre-check http ${res.status} → allow ` +
-        `tool=${tool}`)
+      console.error(`[baize-trace] ${_ts()} gate pre-check http ${res.status} → allow ` +
+        `url=${GATE_URL} tool=${tool}`)
       return { allow: true }
     }
     const body = await res.json()
@@ -362,8 +393,8 @@ async function gatePostCheck(sessionID, tool, argsText) {
       body: JSON.stringify({ sessionId: sessionID, tool, argsText }),
     })
     if (!res.ok) {
-      console.error(`[baize-trace] gate post-check http ${res.status} → skip ` +
-        `tool=${tool}`)
+      console.error(`[baize-trace] ${_ts()} gate post-check http ${res.status} → skip ` +
+        `url=${GATE_POST_URL} tool=${tool}`)
       return { inject: false }   // 非 2xx（含 token 失配 403）→ 不注入
     }
     const body = await res.json()
@@ -407,14 +438,16 @@ export const BaizeTracePlugin = async () => {
         body = await gatePreCheck(input.sessionID, input.tool,
                                   gateArgsText(output && output.args))
       } catch (e) {
-        console.error(`[baize-trace] gate pre-check unreachable → allow ` +
-          `tool=${input.tool}: ${e && e.message}`)
+        console.error(`[baize-trace] ${_ts()} gate pre-check unreachable → allow ` +
+          `url=${GATE_URL || '(empty)'} tool=${input.tool}: ${_err(e)}`)
         return
       }
       if (body && body.allow === false) {
         const reason = body.reason || `门禁拦截了工具 ${input.tool} 的调用`
-        console.error(`[baize-trace] gate DENY tool=${input.tool} ` +
-          `session=${input.sessionID}: ${reason}`)
+        console.error(`[baize-trace] ${_ts()} gate DENY tool=${input.tool} ` +
+          `session=${input.sessionID} ` +
+          `args=[${_argsSummary(output && output.args)}]: ` +
+          `${_clip(_flat(reason), 500)}`)
         // 抛错即阻断：OC 把该错误作为本次工具调用的结果回给模型
         throw new Error(reason)
       }
@@ -435,8 +468,8 @@ export const BaizeTracePlugin = async () => {
           output.output = (output.output ?? '') + '\\n\\n' + body.prompt
         }
       } catch (e) {
-        console.error(`[baize-trace] gate post-check unreachable → skip ` +
-          `tool=${input && input.tool}: ${e && e.message}`)
+        console.error(`[baize-trace] ${_ts()} gate post-check unreachable → skip ` +
+          `url=${GATE_POST_URL || '(empty)'} tool=${input && input.tool}: ${_err(e)}`)
       }
     },
   }
