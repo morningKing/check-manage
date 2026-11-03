@@ -1,0 +1,119 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+nul
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Backup files (generated at runtime)
+server/backups/
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript cache
+*.tsbuildinfo
+.pw-shots/
+.playwright-mcp/
+/home.png
+/artifact-preview-live.png
+/svg-render-live.png
+/bubbles-fixed.png
+/version-preview.png
+/composer-aligned.png
+/composer-card.png
+/composer-focus.png
+.worktrees
+
+# graphify code-graph output (generated, no API cost to rebuild via `graphify update <dir>`)
+graphify-out/
+**/graphify-out/
+
+# ---- Local dev scratch & runtime artifacts (not part of the project) ----
+# Root-level dev/test screenshots (docs images live under docs/ and stay tracked)
+/*.png
+# One-off local scratch scripts
+/check_disk.py
+/disk_monitor.py
+/hello.py
+# Scratch payload dumps
+msgs.json
+**/msgs.json
+# AI-chat runtime per-session workspaces (created at runtime)
+ai-workspaces/
+**/ai-workspaces/
+# Local dev override when AI_WORKSPACE_ROOT points into the repo
+.dev-ai-workspaces/
+# Superpowers / Trae / Claude local tooling dirs & generated indexes
+.superpowers/
+superpowers/
+.trae/
+.claude/worktrees/
+SKILLS.md
+
+# Playwright artifacts
+test-results/
+e2e-screenshots/
+e2e/screenshots/
+.playwright-cli/
+
+# Local tooling caches & one-off personal scratch (not part of the project)
+.clawhub/
+/joinquant_strategy_v2.py
+/test_api.py
+
+# playwright 共享登录态（本地生成）
+e2e/.auth/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
