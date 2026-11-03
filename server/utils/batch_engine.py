@@ -878,6 +878,10 @@ class BatchWorker:
         # F5：缓重排计时器（session_id -> 首次判飞行中的时刻）。对账器每轮
         # 末清掉已离开 stale 集的键，防无界增长。
         self._recover_defer_since: dict = {}
+        # F5 二次确认（2026-11-03）：步骤边界/空快照的「模糊态」跟踪
+        # （session_id -> {'sig', 'since'}）。同一签名稳定超过
+        # RECOVER_AMBIGUOUS_STABLE_SEC 才判空闲，避免单次采样把活回合重排。
+        self._recover_ambiguous: dict = {}
         self._lease_thread: threading.Thread | None = None
         # 租约被占时的后台重试（快速重启的 TTL 窗口内不永久放弃 dispatcher）
         self._acquire_retry_thread: threading.Thread | None = None
@@ -1023,6 +1027,14 @@ class BatchWorker:
     # OC 回合，「看似活着」的永久悬挂由这个上限顶替——超时后照常重排。
     RECOVER_DEFER_MAX_SEC = float(
         os.getenv('AI_BATCH_RECOVER_DEFER_MAX_SEC', '1800'))
+    # F5 二次确认（2026-11-03）：最新 assistant 消息以 continuation finish
+    # （tool-calls/tool_use）收尾、且工具已落地时，单次采样分不清「步骤间隙
+    # （下一步马上来）」和「回合真的结束」（question 被自动拒绝时 OpenCode
+    # 直接把消息完结、finish 却留在 tool-calls）。这类模糊态（含「REST 返回
+    # 空快照但库里已有消息」）要求签名在窗口内纹丝不动才判空闲；否则缓重排。
+    # 0/负数 = 关闭二次确认（退化为旧的单次采样语义）。
+    RECOVER_AMBIGUOUS_STABLE_SEC = float(
+        os.getenv('AI_BATCH_RECOVER_AMBIGUOUS_SEC', '60'))
 
     # --- PG LISTEN/NOTIFY（P3-C1）---
 
@@ -3622,6 +3634,28 @@ class BatchWorker:
             conn.commit()
         return ok
 
+    @staticmethod
+    def _abort_oc_quietly(oc_session_id: str | None, directory: str = '',
+                          *, why: str = '') -> None:
+        """在「判定失败/重排」之前尽力 abort 对应的 OpenCode 回合。
+
+        OpenCode 是独立进程：平台 worker 一旦放弃（停滞/对账重排），回合
+        不会自己停——任务已 failed/pending、会话却继续出字，自动重试的
+        continue 提示词还会排在这个活回合后面。取消/暂停/工具卡死三条路径
+        本来就会 abort，这里把停滞与对账恢复也补齐（2026-11-03）。
+
+        纯清场：空会话号跳过；任何异常只记日志，绝不反向影响失败/重排本身
+        （abort 失败最多留下一个仍在跑的回合，不能把收口流程炸掉）。"""
+        if not oc_session_id:
+            return
+        try:
+            opencode_client.abort_session(oc_session_id, directory=directory)
+            logger.info('batch abort issued oc=%s (%s)', oc_session_id,
+                        why or 'turn no longer owned')
+        except Exception:
+            logger.warning('batch abort failed oc=%s (%s); turn may keep '
+                           'running', oc_session_id, why or '', exc_info=True)
+
     def _mark_needs_review(self, session_id: str, batch_id: str | None,
                            reason: str, generation: int | None = None,
                            fencing_token: int | None = None):
@@ -3664,6 +3698,12 @@ class BatchWorker:
                 工具）→ 跳过本轮（行保持 running，等回合空闲）；缓重排有
                 兜底上限 RECOVER_DEFER_MAX_SEC，防「看似活着」的永久悬挂
                 挂死恢复；
+              * 回合处于模糊态（continuation finish + 工具已落地 = 步骤
+                边界；或 REST 空快照但库里有消息）→ 要求签名在
+                RECOVER_AMBIGUOUS_STABLE_SEC 内不变才判空闲，避免把步骤
+                间隙误判为「线程丢失」（2026-11-03 生产误重排窗口）；
+              * 重排/失败前 abort 该 OC 回合——对账器的「丢失」只说明平台
+                侧没人续租，OpenCode 是独立进程，可能还在正常生成；
               * OpenCode 会话存在 + 有 checkpoint → continue（原会话续跑，
                 注入续跑提示词，generation 不变）；
               * OpenCode 会话存在 + 无 checkpoint → 预算内原地续跑（沿用
@@ -3738,13 +3778,17 @@ class BatchWorker:
                     _has_ckpt = _ckpt.latest_checkpoint(sid) is not None
                 except Exception:
                     _has_ckpt = True  # 判定基建异常 → 保守续跑
+                # 消息计数无条件读：F5 用它区分「REST 空快照」与「从未开跑」
+                # （空列表 + 库里已有消息 = 轮询瞬时失明，不能当空闲）。
+                with get_db() as _c2:
+                    with _c2.cursor() as _cu:
+                        _cu.execute(
+                            "SELECT count(*) FROM ai_chat_messages "
+                            "WHERE session_id = %s", (sid,))
+                        _n_msgs = _cu.fetchone()[0]
                 if not _has_ckpt:
                     with get_db() as _c2:
                         with _c2.cursor() as _cu:
-                            _cu.execute(
-                                "SELECT count(*) FROM ai_chat_messages "
-                                "WHERE session_id = %s", (sid,))
-                            _n_msgs = _cu.fetchone()[0]
                             _cu.execute(
                                 "SELECT 1 FROM ai_execution_effects "
                                 "WHERE session_id = %s LIMIT 1", (sid,))
@@ -3763,18 +3807,23 @@ class BatchWorker:
                 # 补发 continue 提示词（同回合双发）。行保持 running，等回合
                 # 空闲（下轮对账）再重排续跑；兜底上限防「看似活着」的永久
                 # 悬挂挂死恢复（worker 死后没有 STALL 看门狗，上限顶替它）。
-                if self._turn_in_flight(raw_msgs):
+                decision = self._recover_turn_state(
+                    sid, raw_msgs, has_persisted_history=_n_msgs > 0)
+                if decision:
                     _since = self._recover_defer_since.get(sid)
                     if _since is None:
                         _since = self._recover_defer_since[sid] = time.time()
                     if time.time() - _since <= self.RECOVER_DEFER_MAX_SEC:
-                        self._emit_recovered(batch_id, sid, 'deferred_in_flight')
+                        self._emit_recovered(batch_id, sid, decision)
                         continue
                     logger.warning('recover defer cap exceeded sid=%s '
                                    '(turn looks alive for %.0fs); requeueing',
                                    sid, time.time() - _since)
                 self._recover_defer_since.pop(sid, None)
-                self._requeue_lost(sid, continue_on_same=True, batch_id=batch_id)
+                self._recover_ambiguous.pop(sid, None)
+                self._requeue_lost(sid, continue_on_same=True,
+                                   batch_id=batch_id,
+                                   oc_session_id=oc, directory=ws or '')
                 self._emit_recovered(batch_id, sid, 'requeue_continue')
             except Exception:
                 logger.exception('reconcile row failed sid=%s', sid)
@@ -3782,6 +3831,9 @@ class BatchWorker:
         # （重排/终态/本进程接管）就清，防 dict 无界增长。
         self._recover_defer_since = {
             k: v for k, v in self._recover_defer_since.items()
+            if k in stale_seen}
+        self._recover_ambiguous = {
+            k: v for k, v in self._recover_ambiguous.items()
             if k in stale_seen}
 
     def _emit_recovered(self, batch_id: str | None, sid: str, decision: str):
@@ -3791,17 +3843,54 @@ class BatchWorker:
                 batch_id, 'child.recovered', aggregate_type='child',
                 aggregate_id=sid, payload={'decision': decision})
 
+    def _recover_turn_state(self, sid: str, raw_msgs: list,
+                            has_persisted_history: bool = False) -> str | None:
+        """F5 二次确认：返回本轮 child.recovered 决策名，None = 可以重排。
+
+        `flying`（未终态/工具在跑）直接缓重排；`ambiguous`（continuation
+        finish + 工具已落地 = 步骤边界，或 REST 空快照但库里有历史）单次
+        采样分不清「下一步马上来」与「回合真的结束」，要求签名在
+        RECOVER_AMBIGUOUS_STABLE_SEC 内纹丝不动才放开重排——这正是
+        「对账器说工作线程丢了、会话却还在正常执行」的误判窗口
+        （2026-11-03：重启后对账恰好落在步骤间隙/空快照上）。"""
+        state = self._turn_flight_state(
+            raw_msgs, has_persisted_history=has_persisted_history)
+        if state == 'idle':
+            self._recover_ambiguous.pop(sid, None)
+            return None
+        if state == 'flying':
+            self._recover_ambiguous.pop(sid, None)
+            return 'deferred_in_flight'
+        sig = self._raw_progress_signature(raw_msgs)
+        prev = self._recover_ambiguous.get(sid)
+        if prev is None or prev.get('sig') != sig:
+            self._recover_ambiguous[sid] = {'sig': sig, 'since': time.time()}
+            return 'deferred_ambiguous'
+        if time.time() - prev['since'] < self.RECOVER_AMBIGUOUS_STABLE_SEC:
+            return 'deferred_ambiguous'
+        logger.info('recover ambiguity stable for %.0fs sid=%s; treat as idle '
+                    '(sig unchanged, no step started)',
+                    time.time() - prev['since'], sid)
+        self._recover_ambiguous.pop(sid, None)
+        return None
+
     @staticmethod
-    def _turn_in_flight(raw_msgs: list) -> bool:
-        """F5：OC 会话最新 assistant 消息仍在生成/带未完成工具 → 回合活着。
+    def _turn_flight_state(raw_msgs: list, *,
+                           has_persisted_history: bool = False) -> str:
+        """OC 会话最新 assistant 消息的存活三态：flying / ambiguous / idle。
 
         镜像 list_messages 的终态判定（finish + time.completed + running
-        tool），作用在 get_messages 的原始 {'info','parts'} 形状上（reconcile
-        本来就只拿它验存活）。无 assistant 消息（尚未开跑/已清空）按非飞行
-        中处理，恢复决策表照旧。刻意不镜像 resolved_tool_seen 的「消息间隙
-        翻终态」细则：finish=tool-calls + 工具已落地视为空闲照常重排——
-        间隙极短且新提示词会在 OC 内排队，不值得为它冒误判风险。"""
-        for m in reversed(raw_msgs or []):
+        tool），作用在 get_messages 的原始 {'info','parts'} 形状上。与
+        list_messages 的 `resolved_tool_seen` 刻意不同：那边把「continuation
+        finish + 工具已落地」当终态（question 被自动拒绝后 OpenCode 直接完结
+        消息，finish 却留在 tool-calls）；对账器若照抄，就会把每个步骤间隙
+        也当终态而误重排在飞的回合。这里把它标成 ambiguous，交给调用方做
+        签名稳定性二次确认。无 assistant 消息时：库里有历史（REST 空快照）
+        → ambiguous，从未开跑 → idle。"""
+        msgs = raw_msgs or []
+        if not msgs:
+            return 'ambiguous' if has_persisted_history else 'idle'
+        for m in reversed(msgs):
             info = m.get('info') or {}
             if info.get('role') != 'assistant':
                 continue
@@ -3815,17 +3904,29 @@ class BatchWorker:
                     running_tool = True
                     break
             finished = bool(completed) and finish not in (None, '')
-            return running_tool or not finished
-        return False
+            if running_tool or not finished:
+                return 'flying'
+            if finish in ('tool-calls', 'tool_use'):
+                return 'ambiguous'
+            return 'idle'
+        return 'idle'
 
     def _requeue_lost(self, session_id: str, *, continue_on_same: bool,
-                      batch_id: str | None):
+                      batch_id: str | None,
+                      oc_session_id: str | None = None, directory: str = ''):
         """对账器把丢失的 running 行重新排队（retry_count 预算内，超限则失败）。
 
         F1（pending-flip 修复）：不清 cancel_requested/pause_requested——
         worker 失联期间用户按下的中断/暂停必须保留，重排回 pending 后由
         _cancel_pending_requests 正常消费（cancelled / paused），而不是
-        抹掉标志让任务原样重跑。"""
+        抹掉标志让任务原样重跑。
+
+        重排/失败前先 abort OpenCode 回合（2026-11-03）：对账器判「工作线程
+        丢失」依据的是租约，OpenCode 回合是独立进程、可能还在正常生成。
+        不 abort 会同时留下两个问题——行已 pending/failed 但会话继续输出，
+        以及重排后的 continue 提示词排进这个活回合（同回合双发）。"""
+        self._abort_oc_quietly(oc_session_id, directory=directory,
+                               why='reconcile requeue/fail')
         lost_reason = ('执行工作进程与该子任务失去联系（可能因服务重启或崩溃），'
                        '对账器已自动重排续跑')
         with get_db() as conn:

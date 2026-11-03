@@ -9,9 +9,15 @@
   F5  OC 回合仍在飞行中（最新 assistant 消息未终态/带未完成工具）→
       对账器跳过本轮（行保持 running），回合空闲后再重排续跑；
       缓重排有兜底上限（RECOVER_DEFER_MAX_SEC，防回合永久悬挂挂死恢复）。
+  模糊态（2026-11-03）：continuation finish + 工具已落地（步骤边界），或
+      REST 空快照但库内已有消息（轮询失明）→ 单次采样不可信，要求进度
+      签名在 RECOVER_AMBIGUOUS_STABLE_SEC 内不变才判空闲。
   护栏（既有语义，修复前后都必须绿）：
-      会话无 assistant 消息 / 最新消息已终态（finish+time.completed、无
-      running tool）→ 首轮即重排，恢复延迟不回退。
+      从未开跑（无 assistant 消息且库内无消息）/ 最新消息已终态
+      （finish+time.completed、无 running tool）→ 首轮即重排，恢复延迟
+      不回退。
+  清场：重排/失败前先 abort 该 OC 回合（先停再翻状态），不留继续输出的
+      僵尸回合（2026-11-03）。
 """
 import os
 import sys
@@ -59,7 +65,7 @@ def user_id(db_conn):
     db_conn.commit()
 
 
-def _seed_lost_running(db_conn, user_id):
+def _seed_lost_running(db_conn, user_id, oc='oc-live'):
     """租约已过期的 running 行（后端重启后对账器看到的形状）。"""
     bid, sid = str(uuid.uuid4()), str(uuid.uuid4())
     with db_conn.cursor() as cur:
@@ -70,9 +76,9 @@ def _seed_lost_running(db_conn, user_id):
             "INSERT INTO ai_chat_sessions "
             "  (id, user_id, status, batch_id, batch_seq, batch_input_file, "
             "   opencode_session_id, fencing_token, lease_owner, lease_until) "
-            "VALUES (%s, %s, 'running', %s, 0, 'f.csv', 'oc-live', 3, "
+            "VALUES (%s, %s, 'running', %s, 0, 'f.csv', %s, 3, "
             "        'dead-owner', NOW() - interval '10 minutes')",
-            (sid, user_id, bid))
+            (sid, user_id, bid, oc))
     db_conn.commit()
     return bid, sid
 
@@ -160,3 +166,168 @@ def test_reconcile_requeues_session_without_messages(db_conn, user_id,
 
     _worker()._reconcile_stale_running()
     assert _status(db_conn, sid) == 'pending'
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-03：「对账器说工作线程丢了、会话却还在正常执行」的双修
+#   1) 重排/失败前 abort 该 OC 回合（先停再翻状态，不留继续输出的僵尸回合）；
+#   2) F5 二次确认：步骤边界（continuation finish + 工具已落地）与「REST 空
+#      快照但库里有历史」不再单次采样判空闲，要求签名在窗口内不变才重排。
+# ---------------------------------------------------------------------------
+
+def _step_boundary_raw(extra_tool: bool = False):
+    """步骤边界：消息已终态、finish 仍是 tool-calls（工具已落地）。
+
+    单次采样与「回合真的结束」（question 被自动拒绝后 OpenCode 直接完结
+    消息、finish 留在 tool-calls）不可区分——正是误重排在飞回合的窗口。"""
+    parts = [{'type': 'tool', 'tool': 'write',
+              'state': {'status': 'completed', 'output': 'ok'}}]
+    if extra_tool:
+        parts = [{'type': 'tool', 'tool': 'read',
+                  'state': {'status': 'completed', 'output': 'ok'}}] + parts
+    return [{'info': {'id': 'm1', 'role': 'assistant',
+                      'finish': 'tool-calls',
+                      'time': {'completed': {'seconds': 1}}},
+             'parts': parts}]
+
+
+def _patch_oc_abort(monkeypatch, raw, on_abort=None):
+    """Fake OC：get_messages 固定返回 raw；abort_session 记录调用。"""
+    import utils.batch_engine as eng
+    calls = []
+
+    def abort_session(oc, directory=''):
+        calls.append((oc, directory))
+        if on_abort is not None:
+            on_abort()
+
+    monkeypatch.setattr(eng, 'opencode_client', type('F', (), {
+        'get_messages': staticmethod(lambda oc, directory='': raw),
+        'abort_session': staticmethod(abort_session),
+    })())
+    return calls
+
+
+def _decisions(db_conn, bid):
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT payload->>'decision' FROM ai_batch_events "
+            "WHERE batch_id = %s AND event_type = 'child.recovered' "
+            "ORDER BY event_seq", (bid,))
+        return [r[0] for r in cur.fetchall()]
+
+
+def test_turn_flight_state_three_way():
+    """flying / ambiguous / idle 三态判定（含空快照与库内历史组合）。"""
+    from utils.batch_engine import BatchWorker as W
+    assert W._turn_flight_state(
+        [{'info': {'role': 'assistant', 'finish': None, 'time': {}},
+          'parts': [{'type': 'text', 'text': '生成中'}]}]) == 'flying'
+    assert W._turn_flight_state(
+        [{'info': {'role': 'assistant', 'finish': 'tool-calls',
+                   'time': {'completed': 1}},
+          'parts': [{'type': 'tool',
+                     'state': {'status': 'running'}}]}]) == 'flying'
+    assert W._turn_flight_state(_step_boundary_raw()) == 'ambiguous'
+    assert W._turn_flight_state(_idle_raw()) == 'idle'
+    assert W._turn_flight_state([]) == 'idle'
+    # REST 空快照 + 库里有历史：轮询瞬时失明，不能当空闲
+    assert W._turn_flight_state([], has_persisted_history=True) == 'ambiguous'
+
+
+def test_recover_turn_state_resets_window_when_signature_moves():
+    """模糊态期间只要有新进展（签名变化）就重置稳定窗口，不误判空闲。"""
+    w = _worker()
+    w.RECOVER_AMBIGUOUS_STABLE_SEC = 3600
+    assert w._recover_turn_state('s1', _step_boundary_raw()) == 'deferred_ambiguous'
+    sig1 = w._recover_ambiguous['s1']['sig']
+    assert w._recover_turn_state(
+        's1', _step_boundary_raw(extra_tool=True)) == 'deferred_ambiguous'
+    assert w._recover_ambiguous['s1']['sig'] != sig1   # 窗口已重置
+
+
+def test_reconcile_defers_step_boundary_then_requeues_with_abort(
+        db_conn, user_id, claim_guard, monkeypatch):
+    """F5 二次确认：步骤边界先缓一轮；签名稳定超窗口后才重排，且重排前
+    先 abort 该 OC 回合（abort 时行仍是 running，先停再翻状态）。"""
+    from utils import execution_checkpoint
+    oc = f'oc-step-{uuid.uuid4().hex[:8]}'
+    bid, sid = _seed_lost_running(db_conn, user_id, oc=oc)
+    claim_guard(sid)
+    execution_checkpoint.write_checkpoint(
+        sid, checkpoint_type='progress', attempt_id=None,
+        execution_generation=0, context_snapshot={})
+    status_at_abort = {}
+
+    def _on_abort():
+        status_at_abort['v'] = _status(db_conn, sid)
+
+    calls = _patch_oc_abort(monkeypatch, _step_boundary_raw(),
+                            on_abort=_on_abort)
+    worker = _worker()
+
+    worker._reconcile_stale_running()
+    assert _status(db_conn, sid) == 'running'   # 模糊态：先不判定
+    assert [c for c in calls if c[0] == oc] == []   # 也还没 abort
+    assert _decisions(db_conn, bid) == ['deferred_ambiguous']
+
+    # 窗口过去且签名仍未动（没有下一步/新输出）→ 判空闲，重排续跑
+    worker.RECOVER_AMBIGUOUS_STABLE_SEC = -1
+    worker._reconcile_stale_running()
+    assert _status(db_conn, sid) == 'pending'
+    mine = [c for c in calls if c[0] == oc]
+    assert mine and mine[0][0] == oc
+    assert status_at_abort['v'] == 'running'    # abort 先于状态翻转
+    assert _decisions(db_conn, bid) == [
+        'deferred_ambiguous', 'requeue_continue']
+
+
+def test_reconcile_defers_empty_snapshot_with_history(
+        db_conn, user_id, claim_guard, monkeypatch):
+    """REST 空快照 + 库里已有消息 = 轮询失明，不得当空闲立即重排。"""
+    from utils import execution_checkpoint
+    oc = f'oc-empty-{uuid.uuid4().hex[:8]}'
+    bid, sid = _seed_lost_running(db_conn, user_id, oc=oc)
+    claim_guard(sid)
+    execution_checkpoint.write_checkpoint(
+        sid, checkpoint_type='progress', attempt_id=None,
+        execution_generation=0, context_snapshot={})
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content, seq) "
+            "VALUES (%s, %s, 'assistant', '[]', 1)",
+            (str(uuid.uuid4()), sid))
+    db_conn.commit()
+    calls = _patch_oc_abort(monkeypatch, [])
+
+    worker = _worker()
+    worker._reconcile_stale_running()
+    assert _status(db_conn, sid) == 'running'
+    assert [c for c in calls if c[0] == oc] == []
+    assert _decisions(db_conn, bid) == ['deferred_ambiguous']
+
+
+def test_requeue_lost_budget_exhausted_aborts_before_failing(
+        db_conn, user_id, claim_guard, monkeypatch):
+    """重排预算用尽的终态失败同样先 abort——「判线程丢失」不等于回合已停。"""
+    from utils import execution_checkpoint
+    oc = f'oc-budget-{uuid.uuid4().hex[:8]}'
+    bid, sid = _seed_lost_running(db_conn, user_id, oc=oc)
+    claim_guard(sid)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET retry_count = 2 WHERE id = %s",
+                    (sid,))
+    db_conn.commit()
+    execution_checkpoint.write_checkpoint(
+        sid, checkpoint_type='progress', attempt_id=None,
+        execution_generation=0, context_snapshot={})
+    calls = _patch_oc_abort(monkeypatch, _idle_raw())
+
+    _worker()._reconcile_stale_running()
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, error_message FROM ai_chat_sessions "
+                    "WHERE id = %s", (sid,))
+        status, err = cur.fetchone()
+    assert status == 'failed'
+    assert '工作线程丢失' in err
+    assert [c for c in calls if c[0] == oc]

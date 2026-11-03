@@ -118,6 +118,13 @@ def _patch_oc(monkeypatch, **methods):
     monkeypatch.setattr(eng, 'opencode_client', type('F', (), methods)())
 
 
+def _idle_oc_msg():
+    """get_messages 的「回合已空闲」形状：终态 finish + time.completed。"""
+    return [{'info': {'id': 'm1', 'role': 'assistant', 'finish': 'stop',
+                      'time': {'completed': {'seconds': 1}}},
+             'parts': [{'type': 'text', 'text': 'done'}]}]
+
+
 def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
                                                               claim_guard,
                                                               monkeypatch, tmp_path):
@@ -418,7 +425,10 @@ def test_reconcile_alive_session_requeues(db_conn, user_id, claim_guard, monkeyp
             (f'{sid}:asst1', sid, '[{"type":"text","text":"进行中"}]'))
     db_conn.commit()
     worker = eng.BatchWorker()
-    _patch_oc(monkeypatch, get_messages=staticmethod(lambda oc, directory='': []))
+    # 回合已空闲（终态消息）。空快照 + 库里有历史现在按「轮询失明」缓一轮，
+    # 不再代表空闲（test_batch_recover_defer 的 2026-11-03 二次确认）。
+    _patch_oc(monkeypatch, get_messages=staticmethod(
+        lambda oc, directory='': _idle_oc_msg()))
 
     worker._reconcile_stale_running()
 
@@ -468,7 +478,9 @@ def test_reconcile_budget_exhausted_fails(db_conn, user_id, claim_guard, monkeyp
             (f'{sid}:asst1', sid, '[{"type":"text","text":"进行中"}]'))
     db_conn.commit()
     worker = eng.BatchWorker()
-    _patch_oc(monkeypatch, get_messages=staticmethod(lambda oc, directory='': []))
+    # 同上：用终态消息表达「回合已空闲」，空快照属于模糊态会先缓一轮。
+    _patch_oc(monkeypatch, get_messages=staticmethod(
+        lambda oc, directory='': _idle_oc_msg()))
 
     worker._reconcile_stale_running()
     status, retry_count, cp, err, oc = _row(db_conn, sid)
