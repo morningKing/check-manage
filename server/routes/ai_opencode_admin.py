@@ -286,6 +286,21 @@ def update_agent(name):
     return jsonify(result)
 
 
+@ai_opencode_admin_bp.post('/agents/<name>/import')
+@require_permission('admin.ai_agent_write')
+def import_agent_route(name):
+    """把外部 agent（live-only 非 native，文件在平台目录外）固化为平台文件。
+
+    导入后 source 翻转为 file、可编辑可删除；重启 serve 生效。"""
+    try:
+        result = ocg.import_agent(name)
+    except ocg.OpenCodeGlobalError as e:
+        return _err_response(e)
+    _audit('import', name, name,
+           f'导入外部 Agent 为平台文件:{name}（重启 serve 后生效）')
+    return jsonify(result), 201
+
+
 @ai_opencode_admin_bp.delete('/agents/<name>')
 @require_permission('admin.ai_agent_write')
 def delete_agent(name):

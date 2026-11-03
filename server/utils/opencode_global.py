@@ -667,6 +667,48 @@ def write_agent(name: str, fields: dict | None = None,
     return {'name': name, 'changed': True}
 
 
+def import_agent(name: str) -> dict:
+    """把 serve 实际加载、但文件不在平台管理目录的外部 agent 固化为平台文件。
+
+    背景（2026-11-03）：用户把自定义 agent 放在 OC 原生家目录
+    （~/.config/opencode/agent 等），merged_agents 里呈现为 external 只读，
+    此前甚至被误读成「内置」。live /agent 响应带完整 prompt 正文
+    （Agent.Info schema 含 prompt 字段），足以忠实重建 .md：
+    frontmatter(name/description/mode/model/temperature/topP) + body。
+
+    安全语义：native 内置不导入（原生内置无需固化副本）；平台目录已有同名
+    文件时 CONFLICT——绝不覆盖既有平台文件。导入后重启 serve 生效；若原
+    外部文件还在（如手动启动的 serve 仍读家目录），建议删除原文件防双份。
+    """
+    name = validate_name(name)
+    _live, live_agents = _runtime_lists()
+    info = next((a for a in live_agents if a.get('name') == name), None)
+    if info is None:
+        raise OpenCodeGlobalError(
+            'NOT_FOUND', f'运行中的 serve 未加载名为「{name}」的 agent', 404)
+    if info.get('native'):
+        raise OpenCodeGlobalError(
+            'BAD_REQUEST', '内置 agent 不支持导入（原生内置，无需固化副本）', 400)
+    if os.path.isfile(_agent_md_path(name)):
+        raise OpenCodeGlobalError(
+            'CONFLICT', f'平台目录已存在同名 agent 文件（{name}.md），如需覆盖请直接编辑', 409)
+    meta: dict = {'name': name}
+    if info.get('description'):
+        meta['description'] = str(info['description'])
+    mode = str(info.get('mode') or '').strip()
+    if mode:
+        meta['mode'] = mode
+    model = info.get('model')
+    if isinstance(model, dict) and model.get('providerID') and model.get('modelID'):
+        meta['model'] = f"{model['providerID']}/{model['modelID']}"
+    for live_key, meta_key in (('temperature', 'temperature'), ('topP', 'top_p')):
+        val = info.get(live_key)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            meta[meta_key] = float(val)
+    content = serialize_frontmatter(meta, str(info.get('prompt') or ''))
+    return write_agent(name, content=content)
+
+
 def delete_agent(name: str) -> None:
     name = validate_name(name)
     md = _agent_md_path(name)
@@ -826,12 +868,15 @@ def merged_agents() -> dict:
             'mode': str(a.get('mode') or ''),
             'model': ((a.get('model') or {}).get('modelID')
                       if isinstance(a.get('model'), dict) else '') or '',
-            'source': 'builtin' if a.get('native') else 'plugin',
+            # 非 native 的 live-only = 文件不在平台管理目录（OC 家目录/插件
+            # 加载）——标 external 对齐 skills 侧同一约定，UI 提供「导入」
+            # 固化为平台文件后即可编辑，而非误导性的 builtin/plugin 只读。
+            'source': 'builtin' if a.get('native') else 'external',
             'native': bool(a.get('native')),
             'runtime': 'loaded',
             'size': None, 'mtime': None,
         })
-    order = {'file': 0, 'builtin': 1, 'plugin': 2}
+    order = {'file': 0, 'builtin': 1, 'external': 2, 'plugin': 3}
     items.sort(key=lambda it: (order.get(it['source'], 9), it['name'].lower()))
     return {'items': items,
             'pendingCount': sum(1 for it in items if it['runtime'] == 'pending')}

@@ -47,7 +47,7 @@ export interface GlobalAgentItem {
   description: string
   mode: string
   model: string
-  source: 'file' | 'builtin' | 'plugin'
+  source: 'file' | 'builtin' | 'external' | 'plugin'
   native: boolean
   runtime: RuntimeStatus
   size: number | null
@@ -218,6 +218,13 @@ export function setGlobalOpencodeAgentDisabled(name: string, disabled: boolean) 
   return post<{ name: string; disable: boolean }>(
     `${BASE}/agents/${encodeURIComponent(name)}/${disabled ? 'disable' : 'enable'}`,
   )
+}
+
+/** 把外部 agent（文件在平台目录外，serve 已加载）固化为平台管理文件，
+ *  导入后可编辑/删除；重启 serve 生效。 */
+export function importGlobalOpencodeAgent(name: string) {
+  return post<{ name: string; changed: boolean }>(
+    `${BASE}/agents/${encodeURIComponent(name)}/import`)
 }
 
 export function getEffectStatus() {

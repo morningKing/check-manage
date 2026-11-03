@@ -122,7 +122,11 @@
                   <el-button v-else link type="primary" @click="openAgentEdit(row)">编辑</el-button>
                   <el-button link type="danger" @click="onDeleteAgent(row)">删除</el-button>
                 </template>
-                <span v-else class="oc-runtime__readonly-hint">只读（插件）</span>
+                <template v-else-if="row.source === 'external'">
+                  <el-button link type="primary" @click="onImportAgent(row)">导入</el-button>
+                  <span class="oc-runtime__readonly-hint">平台目录外</span>
+                </template>
+                <span v-else class="oc-runtime__readonly-hint">只读</span>
               </template>
               <span v-else class="oc-runtime__readonly-hint">只读</span>
             </template>
@@ -672,6 +676,23 @@ async function onToggleAgent(row: GlobalAgentItem, disable: boolean) {
   try {
     await api.setGlobalOpencodeAgentDisabled(row.fileName || row.name, disable)
     ElMessage.success(disable ? '已禁用（重启后生效）' : '已启用（重启后生效）')
+    refreshAgents()
+    refreshOverview()
+  } catch (e: unknown) { ElMessage.error(errText(e)) }
+}
+
+// 外部 agent（文件在平台目录外，如 OC 家目录/插件）导入为平台管理文件：
+// 用 serve 已加载的定义（含 prompt 正文）重建 .md，导入后可编辑/删除。
+async function onImportAgent(row: GlobalAgentItem) {
+  try {
+    await ElMessageBox.confirm(
+      `把外部 Agent「${row.name}」导入平台管理目录？导入后即可在本页编辑/删除，重启 serve 后生效。` +
+      '若原文件仍在其他目录（如 OC 家目录），建议删除原文件避免双份。',
+      '导入确认', { type: 'info' })
+  } catch { return }
+  try {
+    await api.importGlobalOpencodeAgent(row.name)
+    ElMessage.success('已导入平台目录，重启 serve 后生效')
     refreshAgents()
     refreshOverview()
   } catch (e: unknown) { ElMessage.error(errText(e)) }
