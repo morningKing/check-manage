@@ -110,6 +110,34 @@ def _alias_text(a):
     return a.name + (' as ' + a.asname if a.asname else '')
 
 
+def _local_binding_names(tree):
+    """Names the file binds in ANY scope — conservative shadow-collision set.
+
+    Covers: Store/Del Name targets (assignments, for targets, with-as,
+    comprehension and walrus targets), def/class names, function args,
+    except-handler names, and import bindings (`import a[.b]` binds the root
+    `a`; `import a as b` / `from m import n [as c]` bind the alias).
+    """
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                names.add(a.asname or a.name.split('.')[0])
+        elif isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name != '*':
+                    names.add(a.asname or a.name)
+    return names
+
+
 def analyze(path):
     """-> (edits, problems). edits = [(start, end, text)], non-overlapping."""
     with open(path, 'r', encoding='utf-8-sig', newline='') as f:
@@ -123,6 +151,7 @@ def analyze(path):
     edits = []
     problems = []
     emitted = set()        # old names already bound by a rewritten import
+    newly_bound = set()    # names the rewrite binds that the file did NOT bind before
     unmoved_chain = False  # file still uses utils.<unmoved> via attribute chains
 
     import_nodes = []      # (node, kind, payload); sorted by source order later
@@ -207,6 +236,10 @@ def analyze(path):
                         froms.append('from %s import %s as %s' % (parent, leaf, bind))
                         if bind == mod:
                             emitted.add(mod)
+                            if a.asname is None:
+                                # `import utils.X` originally bound the root
+                                # `utils`; the rewrite binds X — a NEW name.
+                                newly_bound.add(mod)
                     else:
                         plain.append(_alias_text(a))
                 else:
@@ -219,8 +252,23 @@ def analyze(path):
             import_edits.append((span[0], span[1], text))
 
     # ---- chain bindings not provided by any rewritten import ----
-    pending = [_binding_line(m) for m in sorted(set(MAPPING) & chain_mods)
-               if m not in emitted]
+    # An injected `from common import X as X` introduces the name X into the
+    # file. If X is already bound anywhere in the file (arg, local Store,
+    # def/class, except name, another import...), the injection would shadow
+    # it — syntax-legal, so the apply-time ast.parse backstop cannot catch
+    # it. Same hazard for a rewritten unaliased `import utils.X`: the
+    # original line bound the root `utils`, the rewrite binds X. Docstring
+    # contract: report the file for manual handling (exit 2), leave the file
+    # completely untouched (no partial rewrites).
+    pending_mods = [m for m in sorted(set(MAPPING) & chain_mods)
+                    if m not in emitted]
+    new_names = set(pending_mods) | newly_bound
+    if new_names:
+        clashes = sorted(new_names & _local_binding_names(tree))
+        if clashes:
+            return [], ['%s: injected binding would shadow file-local '
+                        'name(s): %s' % (rel, ', '.join(clashes))]
+    pending = [_binding_line(m) for m in pending_mods]
     if pending:
         blk = '\n'.join(pending) + '\n'
         host = import_edits[0] if import_edits else None
