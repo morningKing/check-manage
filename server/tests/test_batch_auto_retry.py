@@ -56,6 +56,9 @@ def user_id(db_conn):
     db_conn.commit()
     yield uid
     with db_conn.cursor() as cur:
+        # child.retry 等批事件挂在批次上，先于批次行删除（与 stall_diagnosis 同）
+        cur.execute("DELETE FROM ai_batch_events WHERE batch_id IN "
+                    "(SELECT id FROM ai_chat_batches WHERE user_id = %s)", (uid,))
         cur.execute("DELETE FROM ai_chat_sessions WHERE user_id = %s", (uid,))
         cur.execute("DELETE FROM ai_chat_batches WHERE user_id = %s", (uid,))
         cur.execute("DELETE FROM users WHERE id = %s", (uid,))
@@ -236,6 +239,138 @@ def test_network_exception_requeues_fresh(db_conn, user_id, monkeypatch, tmp_pat
 
 
 # ---------------------------------------------------------------------------
+# 重试原因三渠道留痕（2026-11-03）：可重试异常的原因此前在三个渠道同时
+# 丢失——重排清空 error_message、静态续跑提示词只说「因异常中断」、事件只
+# 覆盖 stall——生产 ai-chat.log 里 auto-retry 行前后没有任何异常记录，事后
+# 无法取证。现要求：原因同时落在续跑提示词（对话内可见）、attempt
+# error_message、child.retry 批事件。
+# ---------------------------------------------------------------------------
+
+def _child_retry_events(db_conn, bid):
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT payload FROM ai_batch_events "
+                    "WHERE batch_id=%s AND event_type='child.retry' "
+                    "ORDER BY event_seq", (bid,))
+        return [r[0] for r in cur.fetchall()]
+
+
+def _latest_attempt(db_conn, sid):
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, error_code, error_message "
+                    "FROM ai_execution_attempts WHERE session_id=%s "
+                    "ORDER BY attempt_no DESC LIMIT 1", (sid,))
+        return cur.fetchone()
+
+
+def _run_one_row(sid, user_id, bid, tmp_path, oc=None):
+    return {'id': sid, 'user_id': user_id, 'batch_id': bid,
+            'batch_input_file': 'x.csv', 'input_files': None,
+            'scan_task_id': None, 'opencode_session_id': oc,
+            'workspace_path': str(tmp_path), 'continue_prompt': None,
+            'agent': '', 'model': '', 'fencing_token': 0}
+
+
+def test_stall_retry_reason_in_prompt_event_attempt(
+        db_conn, user_id, claim_guard, monkeypatch, tmp_path):
+    """stall 自动重试：原因三渠道齐全——续跑提示词带「没有任何新进展」、
+    child.retry 事件带 reason、attempt 落 recovering/AUTO_RETRY+error_message。"""
+    import utils.batch_engine as eng
+    monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
+    bid, sids = _seed_batch(db_conn, user_id)
+    sid = sids[0]
+    claim_guard(sid)
+    worker = _stall_worker(monkeypatch)
+    _patch_oc(monkeypatch,
+              create_session=staticmethod(
+                  lambda directory='', title='': 'oc-stall'),
+              send_message=staticmethod(lambda *a, **k: None),
+              list_messages=staticmethod(
+                  lambda oc, directory='': [_idle_msg()]))
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
+
+    worker._run_one(_run_one_row(sid, user_id, bid, tmp_path))
+
+    status, retry_count, cp, err, oc = _row(db_conn, sid)
+    assert status == 'pending'
+    assert cp and '没有任何新进展' in cp        # 渠道1：对话内可见的原因
+    evs = _child_retry_events(db_conn, bid)
+    assert len(evs) == 1 and evs[0]['reason']  # 渠道2：child.retry 事件
+    assert evs[0]['retry'] == 1 and evs[0]['max'] == worker.MAX_AUTO_RETRY
+    att = _latest_attempt(db_conn, sid)        # 渠道3：attempt error_message
+    assert att[0] == 'recovering' and att[1] == 'AUTO_RETRY'
+    assert att[2] and '没有任何新进展' in att[2]
+
+
+def test_turn_failed_retry_carries_provider_error(
+        db_conn, user_id, claim_guard, monkeypatch, tmp_path):
+    """provider 白名单错误（APIError）自动重试：提示词与留痕渠道都带错误名
+    ——不再只有一句「因异常中断」（事故形态：整批 APIError 重试成功后，
+    原因在任何渠道都查不到）。"""
+    import utils.batch_engine as eng
+    monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
+    bid, sids = _seed_batch(db_conn, user_id)
+    sid = sids[0]
+    claim_guard(sid)
+    worker = _stall_worker(monkeypatch)
+    api_err = [{'role': 'assistant', 'finished': True, 'finish': 'stop',
+                'running_tool': False,
+                'content': [{'type': 'text', 'text': ''}], 'id': 'm1',
+                'error': {'name': 'APIError',
+                          'data': {'message': 'upstream 503'}}}]
+    _patch_oc(monkeypatch,
+              create_session=staticmethod(
+                  lambda directory='', title='': 'oc-api'),
+              send_message=staticmethod(lambda *a, **k: None),
+              list_messages=staticmethod(lambda oc, directory='': api_err))
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
+
+    worker._run_one(_run_one_row(sid, user_id, bid, tmp_path))
+
+    status, retry_count, cp, err, oc = _row(db_conn, sid)
+    assert status == 'pending'                 # APIError 在重试白名单内
+    assert cp and 'APIError' in cp
+    evs = _child_retry_events(db_conn, bid)
+    assert evs and 'APIError' in evs[0]['reason']
+    att = _latest_attempt(db_conn, sid)
+    assert att[1] == 'AUTO_RETRY' and att[2] and 'APIError' in att[2]
+
+
+def test_network_retry_reason_in_event(db_conn, user_id, monkeypatch, tmp_path):
+    """create_session 网络异常 → 全新重排（无续跑提示词，且失败发生在
+    create_attempt 之前、无 attempt 行）：child.retry 事件是该路径唯一的
+    持久原因证据。"""
+    import utils.batch_engine as eng
+    bid, sids = _seed_batch(db_conn, user_id)
+    sid = sids[0]
+    worker = _stall_worker(monkeypatch)
+
+    def _refused(*a, **k):
+        raise requests.exceptions.ConnectionError('connection refused')
+
+    _patch_oc(monkeypatch, create_session=staticmethod(_refused))
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
+
+    worker._run_one(_run_one_row(sid, user_id, bid, tmp_path))
+
+    status, retry_count, cp, err, oc = _row(db_conn, sid)
+    assert status == 'pending' and cp is None   # 从未开跑：仍不置续跑提示词
+    evs = _child_retry_events(db_conn, bid)
+    assert evs and 'ConnectionError' in evs[0]['reason']
+
+
+# ---------------------------------------------------------------------------
 # 运行中对账器
 # ---------------------------------------------------------------------------
 
@@ -291,6 +426,7 @@ def test_reconcile_alive_session_requeues(db_conn, user_id, claim_guard, monkeyp
     assert status == 'pending'                    # 活着但没人轮询 → 重新排队续跑
     assert retry_count == 1
     assert cp and '继续' in cp
+    assert '失去联系' in cp                        # 重排原因进提示词，不止「异常中断」
 
 
 def test_reconcile_outage_skips_rows(db_conn, user_id, claim_guard, monkeypatch):

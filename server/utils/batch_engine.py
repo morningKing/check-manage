@@ -824,10 +824,13 @@ class BatchWorker:
     RETRYABLE_TURN_FAILED = {'APIError', 'UnknownError',
                              'MessageOutputLengthError', 'StructuredOutputError'}
     # 自动续跑时注入的提示词：与 resume 同语义——从原会话上下文继续。
+    # 带原因版由 _auto_retry_prompt 组合（对齐 _maybe_gate_retry 的定向修复
+    # 范式）——原因不随重试丢失是 2026-11-03 取证缺口修复的三渠道之一。
+    AUTO_RETRY_PROMPT_TAIL = (
+        '请先查看工作区现状与已有对话上下文，从中断处继续完成原任务；'
+        '已完成的部分不要重做，最终给出完整结果。')
     AUTO_RETRY_CONTINUE_PROMPT = (
-        '上一轮执行因异常中断（系统已自动重试）。请先查看工作区现状与已有'
-        '对话上下文，从中断处继续完成原任务；已完成的部分不要重做，最终给出'
-        '完整结果。')
+        '上一轮执行因异常中断（系统已自动重试）。' + AUTO_RETRY_PROMPT_TAIL)
     # How often (seconds) the poll loop checks for & auto-rejects pending
     # question-tool requests. OpenCode parks the turn on an unanswered question
     # indefinitely; the reject resolves the tool call and the model continues.
@@ -1767,9 +1770,11 @@ class BatchWorker:
             return
         except (_SessionTimeout, _TurnFailed) as e:
             # 可重试类失败（停滞/工具卡死/部分 provider 错误）先自动重新排队；
-            # 预算用尽或不属于白名单才落 failed。
+            # 预算用尽或不属于白名单才落 failed。原因透传给重排（提示词/事件/
+            # attempt 三渠道留痕）——异常文本两者都已自带可读中文/错误名。
             retried = self._is_retryable(e) and self._maybe_auto_retry(
-                sid, generation=generation)
+                sid, generation=generation, reason=str(e)[:300],
+                batch_id=batch_id)
             # 停滞/卡死每次尝试都落一条 child.stall 事件（含判定现场）——
             # error_message 只保留最后一次，事件是逐次重试原因的唯一持久证据。
             diag = getattr(e, 'diagnosis', None)
@@ -1798,7 +1803,11 @@ class BatchWorker:
                 session_row, False, elapsed=time.monotonic() - turn_start, error=err)
         except Exception as e:
             # 网络类异常（OpenCode 不可达等）可自动重试；其余直接失败。
-            if isinstance(e, requests.exceptions.RequestException)                     and self._maybe_auto_retry(sid, generation=generation):
+            if isinstance(e, requests.exceptions.RequestException) \
+                    and self._maybe_auto_retry(
+                        sid, generation=generation,
+                        reason=f'{type(e).__name__}: {e}'[:300],
+                        batch_id=batch_id):
                 return
             err = f'{type(e).__name__}: {e}'[:500]
             self._mark_failed(sid, batch_id, error=err, generation=generation,
@@ -1974,14 +1983,17 @@ class BatchWorker:
                 row = cur.fetchone()
         return row[0] if row else None
 
-    def _close_attempt_for_requeue(self, session_id: str, reason: str):
+    def _close_attempt_for_requeue(self, session_id: str, reason: str,
+                                   error_message: str | None = None):
         """重排（gate retry / auto retry / 对账重排）前的 attempt 收口（F9）：
         最新 running attempt 落 'recovering'（不是 completed/failed——该轮
         没有真正收敛），并把 id 记入 _parent_attempt 供下一次 create_attempt
-        串 parent_attempt_id 链。"""
+        串 parent_attempt_id 链。error_message 落具体异常文本（≤2000 字由
+        finish_latest_running 截断）——error_code 只是类别，取证要靠它。"""
         from utils import execution_audit
         closed = execution_audit.finish_latest_running(
-            session_id, 'recovering', error_code=reason)
+            session_id, 'recovering', error_code=reason,
+            error_message=error_message)
         if closed:
             self._parent_attempt[session_id] = closed
 
@@ -2062,7 +2074,8 @@ class BatchWorker:
             logger.info('action gate retry skipped sid=%s '
                         '(row no longer requeueable)', session_id)
             return False
-        self._close_attempt_for_requeue(session_id, 'GATE_RETRY')
+        self._close_attempt_for_requeue(session_id, 'GATE_RETRY',
+                                        error_message=repair)
         logger.warning('action gate retry sid=%s (re-queued with repair prompt)',
                        session_id)
         return True
@@ -3455,16 +3468,34 @@ class BatchWorker:
             return True
         return False
 
+    @classmethod
+    def _auto_retry_prompt(cls, reason: str | None) -> str:
+        """自动续跑提示词（带原因版）。无原因回落静态文案（兼容既有调用）；
+        有原因时拼进括号——这是重试原因在对话内可见的唯一渠道（对齐
+        _maybe_gate_retry 把失败明细拼进定向修复提示词的范式）。"""
+        if not reason:
+            return cls.AUTO_RETRY_CONTINUE_PROMPT
+        return ('上一轮执行因异常中断（' + reason[:300].rstrip('。')
+                + '，系统已自动重试）。' + cls.AUTO_RETRY_PROMPT_TAIL)
+
     def _maybe_auto_retry(self, session_id: str,
-                          generation: int | None = None) -> bool:
+                          generation: int | None = None,
+                          reason: str | None = None,
+                          batch_id: str | None = None) -> bool:
         """可重试失败时把子任务重新排队（状态回 pending，不占批次计数）。
 
         已开跑过的（有 OpenCode 会话）置 continue_prompt 走 continue 模式，
         在原会话/原工作区上续跑；从未开跑的原样重排。预算（MAX_AUTO_RETRY）
         从 DB 现读——claim 行里的快照在本轮已过期。预算用尽返回 False，由
-        调用方走既有 failed 路径。"""
+        调用方走既有 failed 路径。
+
+        reason 三渠道留痕（2026-11-03，此前重排即丢失、事后无法取证）：
+        续跑提示词（对话内可见）+ attempt error_message + child.retry 批事件；
+        日志行同步带原因。error_message 在重排时仍清空——pending 不是终局，
+        原因去事件/attempt 里查。"""
         if self.MAX_AUTO_RETRY <= 0:
             return False
+        prompt = self._auto_retry_prompt(reason)
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -3486,7 +3517,7 @@ class BatchWorker:
                     "                      ELSE continue_prompt END "
                     "WHERE id = %s AND status = 'running' "
                     "  AND NOT cancel_requested AND NOT pause_requested",
-                    (oc, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
+                    (oc, prompt, session_id))
                 requeued = cur.rowcount > 0
         if not requeued:
             # F1（pending-flip 修复）：行已被并发收口（终态）或用户已置
@@ -3496,9 +3527,23 @@ class BatchWorker:
             logger.info('batch auto-retry skipped sid=%s '
                         '(row no longer requeueable)', session_id)
             return False
-        self._close_attempt_for_requeue(session_id, 'AUTO_RETRY')
-        logger.warning('batch auto-retry sid=%s attempt=%d/%d (re-queued as pending%s)',
+        self._close_attempt_for_requeue(session_id, 'AUTO_RETRY',
+                                        error_message=reason)
+        # 每次重试一条 child.retry（与 child.stall 的判定现场互补：那是
+        # 触发瞬间快照，这是重试动作记录）——error_message 只剩最后一次，
+        # 事件才是逐次重试原因的持久证据。append_event 自身 best-effort。
+        if batch_id:
+            from utils import batch_events as _batch_events
+            _batch_events.append_event(
+                batch_id, 'child.retry', aggregate_type='session',
+                aggregate_id=session_id, execution_generation=generation,
+                payload={'session_id': session_id, 'reason': reason,
+                         'retry': retry_count + 1,
+                         'max': self.MAX_AUTO_RETRY})
+        logger.warning('batch auto-retry sid=%s attempt=%d/%d reason=%s '
+                       '(re-queued as pending%s)',
                        session_id, retry_count + 1, self.MAX_AUTO_RETRY,
+                       reason or 'unknown',
                        ', continue on same opencode session' if oc else '')
         self.notify()  # 立刻唤醒调度器接续
         return True
@@ -3771,6 +3816,8 @@ class BatchWorker:
         worker 失联期间用户按下的中断/暂停必须保留，重排回 pending 后由
         _cancel_pending_requests 正常消费（cancelled / paused），而不是
         抹掉标志让任务原样重跑。"""
+        lost_reason = ('执行工作进程与该子任务失去联系（可能因服务重启或崩溃），'
+                       '对账器已自动重排续跑')
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT retry_count, fencing_token "
@@ -3793,7 +3840,8 @@ class BatchWorker:
                     "    active_turn_id = NULL, "
                     "    continue_prompt = CASE WHEN %s THEN %s ELSE continue_prompt END "
                     "WHERE id = %s AND status = 'running'",
-                    (continue_on_same, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
+                    (continue_on_same, self._auto_retry_prompt(lost_reason),
+                     session_id))
                 requeued = cur.rowcount > 0
                 # P1 §5.3 checkpoint 写入时机：recovery（重排换代前的最后快照）
                 if requeued:
@@ -3809,7 +3857,8 @@ class BatchWorker:
                         pass
             conn.commit()
         if requeued:
-            self._close_attempt_for_requeue(session_id, 'RECONCILE_REQUEUE')
+            self._close_attempt_for_requeue(session_id, 'RECONCILE_REQUEUE',
+                                            error_message=lost_reason)
             logger.warning('reconcile re-queued lost running session sid=%s '
                            '(continue_on_same=%s)', session_id, continue_on_same)
             if batch_id is not None:
