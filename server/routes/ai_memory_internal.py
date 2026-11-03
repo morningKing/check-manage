@@ -61,7 +61,7 @@ def runtime_events():
         return jsonify({'error': 'forbidden'}), 403
     body = request.get_json(force=True) or {}
     kind = body.get('kind') or 'skill'
-    from utils import skillopt
+    from ai.skills import skillopt as skillopt
     if kind == 'skill':
         result = skillopt.record_runtime_skill_event(body)
         return jsonify(result)

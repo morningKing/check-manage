@@ -17,8 +17,8 @@ def test_create_session_posts_title_and_binds_directory_via_query():
     fake_resp.json.return_value = {"id": "ses_42", "directory": "/tmp/ws"}
     fake_resp.raise_for_status = MagicMock()
 
-    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake_resp) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         client = OpenCodeClient("http://127.0.0.1:4096")
         sid = client.create_session(directory="/tmp/ws", title="t")
     assert sid == "ses_42"
@@ -34,8 +34,8 @@ def test_send_prompt_async_sends_parts_array():
     fake_resp = MagicMock()
     fake_resp.status_code = 204
     fake_resp.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake_resp) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async("ses_42", "hello")
     args, kwargs = post.call_args
     assert args[0].endswith("/session/ses_42/prompt_async")
@@ -46,8 +46,8 @@ def test_send_prompt_async_includes_model_when_given():
     fake_resp = MagicMock()
     fake_resp.status_code = 204
     fake_resp.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake_resp) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async(
             "ses_42", "hi", model="testprovider/test-model-v1")
     _, kwargs = post.call_args
@@ -57,7 +57,7 @@ def test_send_prompt_async_includes_model_when_given():
 
 def test_no_register_mcp_method():
     """MCP is wired via per-directory opencode.json, not an API call."""
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
     assert not hasattr(OpenCodeClient("http://x"), "register_mcp")
 
 
@@ -65,8 +65,8 @@ def test_delete_session_calls_delete():
     fake_resp = MagicMock()
     fake_resp.status_code = 200
     fake_resp.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.delete", return_value=fake_resp) as dele:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.delete", return_value=fake_resp) as dele:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").delete_session("ses_42")
     args, _ = dele.call_args
     assert args[0].endswith("/session/ses_42")
@@ -86,8 +86,8 @@ def test_subscribe_events_scopes_by_directory_and_parses_data_frames():
     fake_resp.__enter__ = lambda self: self
     fake_resp.__exit__ = lambda self, *a: None
 
-    with patch("utils.opencode_client.requests.get", return_value=fake_resp) as get:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.get", return_value=fake_resp) as get:
+        from ai.opencode.opencode_client import OpenCodeClient
         events = list(OpenCodeClient("http://127.0.0.1:4096").subscribe_events(directory="/ws"))
     # Must scope by ?directory= — a directory-scoped session's message/idle events
     # are delivered only on the per-directory event stream (un-scoped /event yields
@@ -105,8 +105,8 @@ def test_send_prompt_async_includes_directory_when_given():
     fake_resp = MagicMock()
     fake_resp.status_code = 204
     fake_resp.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake_resp) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async("ses_42", "hi", directory="/tmp/ws")
     _, kwargs = post.call_args
     assert kwargs["params"] == {"directory": "/tmp/ws"}
@@ -117,8 +117,8 @@ def test_send_prompt_async_omits_directory_when_empty():
     fake_resp = MagicMock()
     fake_resp.status_code = 204
     fake_resp.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake_resp) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async("ses_42", "hi")
     _, kwargs = post.call_args
     assert kwargs.get("params") is None
@@ -129,8 +129,8 @@ def test_list_mcp_scopes_by_directory_and_returns_servers():
     fake_resp.status_code = 200
     fake_resp.json.return_value = {"check-manage": {"status": "connected"}}
     fake_resp.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.get", return_value=fake_resp) as get:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.get", return_value=fake_resp) as get:
+        from ai.opencode.opencode_client import OpenCodeClient
         out = OpenCodeClient("http://127.0.0.1:4096").list_mcp("/ws")
     assert out == {"check-manage": {"status": "connected"}}
     args, kwargs = get.call_args
@@ -142,16 +142,16 @@ def test_list_mcp_omits_directory_when_empty():
     fake_resp = MagicMock()
     fake_resp.json.return_value = {}
     fake_resp.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.get", return_value=fake_resp) as get:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.get", return_value=fake_resp) as get:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").list_mcp()
     assert get.call_args.kwargs.get("params") is None
 
 
 def test_list_commands_scopes_by_directory():
     fake = MagicMock(); fake.json.return_value = [{"name": "init", "description": "x"}]; fake.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.get", return_value=fake) as get:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.get", return_value=fake) as get:
+        from ai.opencode.opencode_client import OpenCodeClient
         out = OpenCodeClient("http://x").list_commands("/ws")
     assert out == [{"name": "init", "description": "x"}]
     a, k = get.call_args; assert a[0].endswith("/command"); assert k["params"] == {"directory": "/ws"}
@@ -159,8 +159,8 @@ def test_list_commands_scopes_by_directory():
 
 def test_list_skills_scopes_by_directory():
     fake = MagicMock(); fake.json.return_value = [{"name": "clawhub", "description": "y"}]; fake.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.get", return_value=fake) as get:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.get", return_value=fake) as get:
+        from ai.opencode.opencode_client import OpenCodeClient
         out = OpenCodeClient("http://x").list_skills("/ws")
     assert out[0]["name"] == "clawhub"
     a, k = get.call_args; assert a[0].endswith("/skill"); assert k["params"] == {"directory": "/ws"}
@@ -168,8 +168,8 @@ def test_list_skills_scopes_by_directory():
 
 def test_abort_session_posts_to_abort_with_directory():
     fake = MagicMock(); fake.status_code = 200; fake.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.post", return_value=fake) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://x").abort_session("ses_1", directory="/ws")
     a, k = post.call_args
     assert a[0].endswith("/session/ses_1/abort")
@@ -178,8 +178,8 @@ def test_abort_session_posts_to_abort_with_directory():
 
 def test_run_command_posts_command_and_arguments():
     fake = MagicMock(); fake.status_code = 202; fake.raise_for_status = MagicMock()
-    with patch("utils.opencode_client.requests.post", return_value=fake) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://x").run_command("ses_1", "init", "do it",
                                                 model="testprovider/test-model-v1", directory="/ws")
     a, k = post.call_args
@@ -192,8 +192,8 @@ def test_run_command_posts_command_and_arguments():
 
 def test_send_prompt_async_appends_agent_parts():
     fake_resp = MagicMock(); fake_resp.raise_for_status.return_value = None
-    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
-        from utils.opencode_client import OpenCodeClient
+    with patch("ai.opencode.opencode_client.requests.post", return_value=fake_resp) as post:
+        from ai.opencode.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async(
             "ses_42", "ask @general please",
             agent_parts=[{"name": "general", "value": "@general", "start": 4, "end": 12}],

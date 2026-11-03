@@ -19,7 +19,7 @@ class OpenCodeLocalRuntime(AgentRuntime):
                 'network_isolation': False, 'process_tree_kill': False}
 
     def _client(self):
-        from utils.opencode_client import OpenCodeClient
+        from ai.opencode.opencode_client import OpenCodeClient
         from config import OPENCODE_BASE_URL
         return OpenCodeClient(OPENCODE_BASE_URL)
 

@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.global_skills import (BUILTIN_HASH_MARKER, _dir_hash,
+from ai.skills.global_skills import (BUILTIN_HASH_MARKER, _dir_hash,
                                  global_skills_root)
 
 
@@ -56,7 +56,7 @@ def test_refresh_updates_unmodified_install(skill_env):
     with open(os.path.join(f['repo_dir'], 'SKILL.md'), 'w', encoding='utf-8') as fh:
         fh.write(f"---\nname: {f['name']}\ndescription: {f['desc']} v2\n---\n\nv2 新配方\n")
 
-    from utils.global_skills import _refresh_builtin
+    from ai.skills.global_skills import _refresh_builtin
     assert _refresh_builtin(f['dest'], f['desc'] + ' v2',
                             repo_skills_dir=f['repo_dir']) is True
 
@@ -81,7 +81,7 @@ def test_refresh_protects_admin_modified(skill_env):
     with open(os.path.join(f['repo_dir'], 'SKILL.md'), 'w', encoding='utf-8') as fh:
         fh.write(f"---\nname: {f['name']}\ndescription: {f['desc']} v2\n---\n\nv2\n")
 
-    from utils.global_skills import _refresh_builtin
+    from ai.skills.global_skills import _refresh_builtin
     assert _refresh_builtin(f['dest'], f['desc'],
                             repo_skills_dir=f['repo_dir']) is False
     with open(os.path.join(f['dest'], 'SKILL.md'), encoding='utf-8') as fh:
@@ -94,7 +94,7 @@ def test_refresh_idempotent_when_repo_unchanged(skill_env):
     with open(os.path.join(f['dest'], BUILTIN_HASH_MARKER), 'w', encoding='utf-8') as fh:
         fh.write(_dir_hash(f['dest']))
 
-    from utils.global_skills import _refresh_builtin
+    from ai.skills.global_skills import _refresh_builtin
     assert _refresh_builtin(f['dest'], f['desc'],
                             repo_skills_dir=f['repo_dir']) is False
     with open(os.path.join(f['dest'], 'SKILL.md'), encoding='utf-8') as fh:
@@ -115,6 +115,6 @@ def test_fresh_install_marker_stable_across_boots(skill_env):
               encoding='utf-8') as fh:
         fh.write(_dir_hash(f['dest']))
 
-    from utils.global_skills import _refresh_builtin
+    from ai.skills.global_skills import _refresh_builtin
     assert _refresh_builtin(f['dest'], f['desc'],
                             repo_skills_dir=f['repo_dir']) is False

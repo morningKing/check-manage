@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.skill_fit import (FitParseError, match_steps, parse_cached,
+from ai.skills.skill_fit import (FitParseError, match_steps, parse_cached,
                              parse_fit_steps)
 
 SKILL_MD = """---
@@ -142,7 +142,7 @@ def test_compute_attempt_fit_records_no_steps_for_invoked_skill(
     import hashlib
     import uuid as _uuid
     from db import get_db
-    from utils import skill_fit
+    from ai.skills import skill_fit as skill_fit
 
     uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
     # 定义文件写在 pytest 的临时目录内（显式做边界断言，写入前校验包含关系）
@@ -233,7 +233,7 @@ def test_compute_attempt_fit_end_to_end(db_conn, tmp_path, monkeypatch):
     import hashlib
     import uuid as _uuid
     from db import get_db
-    from utils import skill_fit
+    from ai.skills import skill_fit as skill_fit
 
     uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
     # 定义文件：一个 expect 命中（bash git clone）、一个 expect 缺失（无 glob 调用）
@@ -342,7 +342,7 @@ def test_compute_attempt_fit_skills_without_invocation_evidence(db_conn, tmp_pat
     import hashlib
     import uuid as _uuid
     from db import get_db
-    from utils import skill_fit
+    from ai.skills import skill_fit as skill_fit
 
     uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
     skill_dir = os.path.join(str(tmp_path), 'inv-skill')
@@ -441,7 +441,7 @@ def test_compute_attempt_fit_ignores_error_state_calls(db_conn, tmp_path):
     import hashlib
     import uuid as _uuid
     from db import get_db
-    from utils import skill_fit
+    from ai.skills import skill_fit as skill_fit
 
     uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
     skill_dir = os.path.join(str(tmp_path), 'err-skill')
@@ -534,7 +534,7 @@ def test_compute_for_session_hook_invoked(db_conn, monkeypatch):
     有 attempt → 委托 compute_attempt_fit（打桩计数，入参是 attempt id）。"""
     import uuid as _uuid
     from db import get_db
-    from utils import skill_fit
+    from ai.skills import skill_fit as skill_fit
 
     uid, sid, att_sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(5))
     try:
@@ -583,7 +583,7 @@ def test_compute_registers_def_versions(db_conn, tmp_path):
     import hashlib
     import uuid as _uuid
     from db import get_db
-    from utils import skill_fit
+    from ai.skills import skill_fit as skill_fit
 
     uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
     skill_dir = os.path.join(str(tmp_path), 'reg-skill')
@@ -768,7 +768,7 @@ def test_resolve_definition_path_prefers_hash_then_existing(db_conn, tmp_path):
     的注入（manifest_latest）；全部文件缺失/无记录 → None。"""
     import hashlib
     import uuid as _uuid
-    from utils.skill_fit import resolve_definition_path
+    from ai.skills.skill_fit import resolve_definition_path
     old_md = tmp_path / 'old'
     old_md.mkdir()
     (old_md / 'SKILL.md').write_text('old version', encoding='utf-8')
@@ -807,14 +807,13 @@ def test_resolve_definition_path_falls_back_to_oc_global(tmp_path, monkeypatch):
     manifest 注入记录，生成器/回滚的路径定位回落 OC 受管技能根——按名字
     找到技能目录里的 SKILL.md 即返回（source='oc_global'），带正文 hash。"""
     import os as _os
-    import utils.opencode_global as ocg
     gdir = tmp_path / 'oc-global'
     (gdir / 'skill' / 'my-oc-skill').mkdir(parents=True)
     body = '---\nname: my-oc-skill\n---\nbody'
     # write_bytes：Windows 文本模式会把 \n 转成 \r\n，sha256 就对不上正文了
     (gdir / 'skill' / 'my-oc-skill' / 'SKILL.md').write_bytes(body.encode('utf-8'))
-    monkeypatch.setattr(ocg.config, 'OPENCODE_GLOBAL_DIR', str(gdir))
-    from utils.skill_fit import resolve_definition_path
+    monkeypatch.setattr('config.OPENCODE_GLOBAL_DIR', str(gdir))
+    from ai.skills.skill_fit import resolve_definition_path
     r = resolve_definition_path('skill', 'my-oc-skill')
     assert r is not None
     assert r['source'] == 'oc_global'

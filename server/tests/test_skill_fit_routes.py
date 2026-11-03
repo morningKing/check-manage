@@ -176,7 +176,7 @@ def test_skill_def_steps_generate_allows_workspace_path(client, admin_headers,
     路径一并拦死的回归（AI 通道打桩，不产生 LLM 调用）。"""
     import config as _config
     import routes.ai_session_admin as _admin
-    import utils.skill_fit_ai as _fa
+    from ai.skills import skill_fit_ai as _fa
     monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
     monkeypatch.setattr(_fa, '_llm_json', lambda system, user: {'steps': [
         {'id': 'clone', 'name': '克隆仓库',
@@ -199,10 +199,9 @@ def test_skill_def_steps_generate_allows_oc_global_skill_path(
     认 AI 工作区根/平台全局技能根，系统技能一律 400，生成器/回写不可达。"""
     import config as _config
     import routes.ai_session_admin as _admin
-    import utils.opencode_global as _ocg
-    import utils.skill_fit_ai as _fa
+    from ai.skills import skill_fit_ai as _fa
     monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path / 'ws-root'))
-    monkeypatch.setattr(_ocg.config, 'OPENCODE_GLOBAL_DIR',
+    monkeypatch.setattr('config.OPENCODE_GLOBAL_DIR',
                         str(tmp_path / 'oc-global'))
     monkeypatch.setattr(_fa, '_llm_json', lambda system, user: {'steps': [
         {'id': 'clone', 'name': '克隆仓库',
@@ -383,7 +382,7 @@ def test_skill_def_steps_apply_registers_version(client, admin_headers, db_conn,
 
 def _seed_two_versions(db_conn, name):
     """种子：同一定义两个已归档版本 + 一个未归档版本。返回 (id_v1, id_v2, id_v0)。"""
-    from utils.skill_fit import register_def_version
+    from ai.skills.skill_fit import register_def_version
     h1 = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
     h2 = hashlib.sha256('v1 正文\n+v2 新增行'.encode('utf-8')).hexdigest()
     ids = {}
@@ -433,7 +432,7 @@ def test_skill_def_version_content_endpoint(client, admin_headers, db_conn):
 
 def test_skill_def_versions_compare_endpoint(client, admin_headers, db_conn):
     """compare 端点：相邻版本 unified diff；未归档 400；跨定义 400。"""
-    from utils.skill_fit import register_def_version
+    from ai.skills.skill_fit import register_def_version
     name = f'cmp-skill-{uuid.uuid4().hex[:6]}'
     v1, v2, v0 = _seed_two_versions(db_conn, name)
     other = f'cmp-skill-{uuid.uuid4().hex[:6]}'
@@ -500,7 +499,7 @@ def test_skill_def_version_rollback(client, admin_headers, db_conn, tmp_path,
     target = tmp_path / f'{name}' / 'SKILL.md'
     target.parent.mkdir(parents=True)
     target.write_text('当前已是新版正文', encoding='utf-8')
-    from utils.skill_fit import register_def_version
+    from ai.skills.skill_fit import register_def_version
     h_old = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
     # FK 链种子初始化在 try 之前，保证 finally 清理不依赖用例中途失败点
     uid, bid, sid, attempt = (str(uuid.uuid4()), str(uuid.uuid4()),
@@ -561,7 +560,7 @@ def test_skill_def_version_rollback_error_paths(client, admin_headers, db_conn,
     import routes.ai_session_admin as _admin
     monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
     monkeypatch.setattr(_admin, 'log_operation', lambda *a, **kw: None)
-    from utils.skill_fit import register_def_version
+    from ai.skills.skill_fit import register_def_version
     name = f'rlb-skill-{uuid.uuid4().hex[:6]}'
     name2 = name  # 404 分支用第二个定义；预先赋值保证 finally 可清理
     # FK 链种子（escape 用例的 manifest 依赖）——变量初始化在 try 之前，
@@ -676,7 +675,7 @@ def test_skill_def_steps_generate_by_name(client, admin_headers, db_conn,
     用户不再手输绝对路径；响应带 path/source 供前端回填。"""
     import config as _config
     import routes.ai_session_admin as _admin
-    import utils.skill_fit_ai as _fa
+    from ai.skills import skill_fit_ai as _fa
     monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
     monkeypatch.setattr(_fa, '_llm_json', lambda system, user: {'steps': [
         {'id': 'clone', 'name': '克隆仓库',

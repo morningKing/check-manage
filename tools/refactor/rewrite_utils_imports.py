@@ -65,6 +65,21 @@ MAPPING = {
     'suggest_editor_rules': 'editor.suggest_editor_rules',
     'suggest_editor_rule_ai': 'editor.suggest_editor_rule_ai',
     'suggest_editor_attachments': 'editor.suggest_editor_attachments',
+    # ---- batch 2: ai/opencode/ + ai/skills/ ----
+    'opencode_client': 'ai.opencode.opencode_client',
+    'opencode_ownership': 'ai.opencode.opencode_ownership',
+    'opencode_launch': 'ai.opencode.opencode_launch',
+    'opencode_parts': 'ai.opencode.opencode_parts',
+    'subagent_reuse_plugin': 'ai.opencode.subagent_reuse_plugin',
+    'tool_timeout_plugin': 'ai.opencode.tool_timeout_plugin',
+    'plugin_registry': 'ai.opencode.plugin_registry',
+    'opencode_global': 'ai.opencode.opencode_global',
+    'global_skills': 'ai.skills.global_skills',
+    'skill_fit': 'ai.skills.skill_fit',
+    'skill_fit_ai': 'ai.skills.skill_fit_ai',
+    'skillopt': 'ai.skills.skillopt',
+    'skill_candidate_eval': 'ai.skills.skill_candidate_eval',
+    'skill_upload': 'ai.skills.skill_upload',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

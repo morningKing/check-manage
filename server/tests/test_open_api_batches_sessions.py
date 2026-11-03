@@ -681,7 +681,7 @@ class TestListAgents:
         _auth_passes(mock_cursor)
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
-             patch('utils.opencode_client.OpenCodeClient.list_agents',
+             patch('ai.opencode.opencode_client.OpenCodeClient.list_agents',
                    side_effect=ConnectionError('refused')):
             resp = client.get(f'{BASE}/agents', headers=HDR)
         assert resp.status_code == 502
@@ -697,7 +697,7 @@ class TestListAgents:
         ]
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
-             patch('utils.opencode_client.OpenCodeClient.list_agents',
+             patch('ai.opencode.opencode_client.OpenCodeClient.list_agents',
                    return_value=raw):
             resp = client.get(f'{BASE}/agents', headers=HDR)
         assert resp.status_code == 200
@@ -719,7 +719,7 @@ class TestListModels:
         _auth_passes(mock_cursor)
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
-             patch('utils.opencode_client.OpenCodeClient.list_providers',
+             patch('ai.opencode.opencode_client.OpenCodeClient.list_providers',
                    side_effect=ConnectionError('refused')):
             resp = client.get(f'{BASE}/models', headers=HDR)
         assert resp.status_code == 502
@@ -742,7 +742,7 @@ class TestListModels:
         }
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
-             patch('utils.opencode_client.OpenCodeClient.list_providers',
+             patch('ai.opencode.opencode_client.OpenCodeClient.list_providers',
                    return_value=providers), \
              patch('config.get_default_chat_model', return_value='openai/gpt-4'):
             resp = client.get(f'{BASE}/models', headers=HDR)

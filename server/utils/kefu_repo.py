@@ -14,7 +14,7 @@ from utils.kefu_guardrail import assemble_system_prompt
 from utils.workspace import create_session_workspace, write_opencode_config
 from data.mcp_servers import internal_mcp_enabled, INTERNAL_MCP_NAME as MCP_NAME
 from utils.session_token import generate_token
-from utils.opencode_client import OpenCodeClient
+from ai.opencode.opencode_client import OpenCodeClient
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, get_default_chat_model,

@@ -181,11 +181,11 @@ except Exception as _e:
 # confirmed）与审计事件保留策略（明文 30 天/行 180 天）
 try:
     import os as _os
-    from utils.opencode_global import OPENCODE_GLOBAL_DIR as _OGD  # noqa
+    from ai.opencode.opencode_global import OPENCODE_GLOBAL_DIR as _OGD  # noqa
 except Exception:
     _OGD = None
 try:
-    from utils import skillopt as _sk
+    from ai.skills import skillopt as _sk
     # 插件运行在 OpenCode 宿主进程内，直连 Flask 网关最短路径；端口跟随
     # FLASK_PORT，路径必须与 routes/ai_memory_internal.py 的实际路由一致。
     from config import FLASK_PORT as _FPORT
@@ -225,7 +225,7 @@ try:
     # 子代理会话复用插件（tool.execute.before 强制注入 task_id）：与 SkillOpt
     # 插件同目录部署；OC serve 启动时加载——部署后需重启 serve 生效。
     try:
-        from utils.subagent_reuse_plugin import ensure_subagent_reuse_plugin
+        from ai.opencode.subagent_reuse_plugin import ensure_subagent_reuse_plugin
         _sru_ep = f'http://127.0.0.1:{_FPORT}/ai/subagent-internal'
         ensure_subagent_reuse_plugin(_OGD, _sru_ep,
                                      _os.getenv('MCP_INTERNAL_TOKEN', ''))
@@ -244,7 +244,7 @@ try:
     # 补齐交互侧门限——OC 内置工具仅 bash/webfetch 自带超时，其余无门限。
     # serve 启动时加载——部署后需重启 serve 生效。
     try:
-        from utils.tool_timeout_plugin import (ensure_tool_timeout_plugin,
+        from ai.opencode.tool_timeout_plugin import (ensure_tool_timeout_plugin,
                                                DEFAULT_EXEMPT, DEFAULT_TIMEOUT_MS)
         _tt_ms = int(_os.getenv('OPENCODE_TOOL_TIMEOUT_MS', '') or DEFAULT_TIMEOUT_MS)
         _tt_exempt = (_os.getenv('OPENCODE_TOOL_TIMEOUT_EXEMPT', '') or DEFAULT_EXEMPT)
@@ -707,7 +707,7 @@ except Exception as _e:
 
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
-    from utils.global_skills import ensure_builtin_skills
+    from ai.skills.global_skills import ensure_builtin_skills
     _builtin = ensure_builtin_skills()
     if _builtin:
         logging.info('builtin skills installed: %s', ', '.join(_builtin))
@@ -735,7 +735,7 @@ app.register_blueprint(kefu_public_bp)
 # Flask 蓝图首次注册后 setup 锁定，之后再 before_request 会 AssertionError。
 # smart-writing 禁用即全蓝图 41 端点 404 PLUGIN_DISABLED（gate 内含
 # url_prefix 一致性启动校验）。
-from utils.plugin_registry import gate_plugin  # noqa: E402
+from ai.opencode.plugin_registry import gate_plugin  # noqa: E402
 gate_plugin(suggest_editor_bp, 'smart-writing')
 app.register_blueprint(suggest_editor_bp)
 # 第一方插件管理 API（plugin-architecture spec §4）——同样先于 catch-all

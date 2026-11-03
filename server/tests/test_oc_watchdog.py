@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from utils import oc_watchdog
-from utils import opencode_global as ocg
+from ai.opencode import opencode_global as ocg
 
 
 @pytest.fixture(autouse=True)

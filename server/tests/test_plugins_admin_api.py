@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from auth import create_token  # noqa: E402
-from utils import plugin_registry as pr  # noqa: E402
+from ai.opencode import plugin_registry as pr  # noqa: E402
 
 ADMIN = {'id': 'user-admin', 'username': 'admin', 'role': 'admin'}
 GUEST = {'id': 'user-guest', 'username': 'guest', 'role': 'guest'}

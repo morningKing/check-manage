@@ -150,7 +150,7 @@ def apply_event(state, evt, opencode_session_id):
                 # 只有 subtask 分支记录 error —— 顶层出错时本轮既不持久化也
                 # 不结束，用户界面上就只是"思考中"消失，什么都没有。现在顶层
                 # 也记进 scope['error']，由 _flatten_scope 落成 error part。
-                from utils.opencode_parts import format_opencode_error
+                from ai.opencode.opencode_parts import format_opencode_error
                 scope['error'] = format_opencode_error(info['error'])
                 if is_subtask:
                     scope['status'] = 'failed'
@@ -184,7 +184,7 @@ def apply_event(state, evt, opencode_session_id):
                                 {'id': pid, 'agent': inp.get('subagent_type'),
                                  'description': inp.get('description')},
                                 child_sid, prompt=inp.get('prompt'))
-                from utils.opencode_parts import map_part
+                from ai.opencode.opencode_parts import map_part
                 mapped = map_part(part)
                 if pid not in scope['parts_by_id']:
                     scope['part_order'].append(pid)
@@ -219,7 +219,7 @@ def apply_event(state, evt, opencode_session_id):
         err = props.get('error')
         if not err:
             return None
-        from utils.opencode_parts import format_opencode_error
+        from ai.opencode.opencode_parts import format_opencode_error
         scope['error'] = format_opencode_error(err)
         if is_subtask:
             scope['status'] = 'failed'
@@ -307,7 +307,7 @@ def _flatten_scope(scope, subtask_status, subtask_id_map=None):
     过滤"（build_content 原有行为，见 Task 2 的行为不变约束）；subtask 分支
     每次都用当前的 `subtask_status` 重新调 map_part，状态不会定型不变。
     `subtask_id_map` 把 subtask part 的 id 映射到正确的子会话 sessionID。"""
-    from utils.opencode_parts import map_part
+    from ai.opencode.opencode_parts import map_part
     # /command 路径同一消息里会同时有 subtask part 和 tool:'task' part，都指向
     # 同一个子会话。先收集 subtask part 的占位（agent/description 更准确），
     # tool part 派生的占位在去重时让位——但仍出现在 tool part 自己的位置上。
@@ -750,14 +750,14 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                 from utils import execution_audit as _ea
                 if _audit_attempt:
                     # SkillOpt P2：启发式 Skill 调用采集（runtime confirmed 行优先）
-                    from utils import skillopt as _sk
+                    from ai.skills import skillopt as _sk
                     from utils.execution_audit import get_manifests as _gm
                     _sk.collect_skill_invocations(
                         _audit_attempt, sid, _gm(_audit_attempt),
                         state.get('messages') or [])
                     # SkillOpt 拟合收敛钩子：回合收口即按会话算拟合
                     # （best-effort，无 attempt/异常都不影响主流程）。
-                    from utils import skill_fit as _sfit
+                    from ai.skills import skill_fit as _sfit
                     _sfit.compute_for_session(sid)
                     if sig == 'idle':
                         # 采集后立即收口：插件的 session.idle 上报与本地收敛是

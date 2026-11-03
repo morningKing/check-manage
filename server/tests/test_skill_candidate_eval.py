@@ -3,11 +3,11 @@
 import json
 import uuid
 
-from utils.skill_candidate_eval import (
+from ai.skills.skill_candidate_eval import (
     apply_edits, collect_validation_sets, run_validation, score_steps_on_attempts,
     structural_guard,
 )
-from utils.skill_fit import parse_fit_steps
+from ai.skills.skill_fit import parse_fit_steps
 
 # 定义两步：clone（新旧同）+ install（旧模式 'pip install -r requirements'
 # 拼错路径；候选改成 'pip install'）。边界轨迹只跑了错误路径 → 旧定义

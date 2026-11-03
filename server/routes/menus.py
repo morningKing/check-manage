@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from db import get_db
 from auth import login_required, require_permission
 from common.operation_log import log_operation
-from utils import plugin_registry
+from ai.opencode import plugin_registry as plugin_registry
 import json
 import psycopg2.errors
 

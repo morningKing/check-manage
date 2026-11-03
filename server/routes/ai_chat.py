@@ -48,7 +48,7 @@ from flask import (
 from common.filename import safe_filename
 from db import get_db
 from auth import login_required, login_required_sse, write_required, require_permission
-from utils.opencode_client import OpenCodeClient
+from ai.opencode.opencode_client import OpenCodeClient
 from utils.runtime import get_runtime
 from utils.workspace import (
     create_session_workspace, write_opencode_config,
@@ -74,7 +74,7 @@ from data.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
 from common.py_runner import run_python_in_workspace
-from utils.skill_upload import extract_skill_zip, SkillUploadError
+from ai.skills.skill_upload import extract_skill_zip, SkillUploadError
 from utils.memory import search_memory, render_memory_block
 from common.operation_log import log_operation
 from config import (
@@ -171,7 +171,7 @@ def create_session():
 
     # 3.5) Inject global skills into the workspace
     try:
-        from utils.global_skills import inject_global_skills
+        from ai.skills.global_skills import inject_global_skills
         inject_global_skills(workspace_path, AI_WORKSPACE_ROOT)
     except Exception:
         pass  # best-effort

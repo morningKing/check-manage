@@ -165,7 +165,7 @@ def analyze_session(session_id):
     log_operation('run', 'ai_trace_analysis', session_id, session_id,
                   '管理员触发 AI 会话执行轨迹分析（产生 LLM 调用成本）')
     from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, get_default_chat_model
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
     from utils.workspace import create_session_workspace, write_opencode_config
     from utils.session_token import generate_token
     from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
@@ -216,9 +216,9 @@ def analyze_session(session_id):
     import json as _json
     from utils.workspace import cleanup_session_workspace, create_session_workspace
     from config import AI_WORKSPACE_ROOT
-    from utils.opencode_client import OpenCodeClient as _OC  # noqa: F401 (alias below)
+    from ai.opencode.opencode_client import OpenCodeClient as _OC  # noqa: F401 (alias below)
     from utils import execution_audit
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
 
     analysis_model = get_default_chat_model()
     analysis_skill = 'trace-analyzer'
@@ -229,7 +229,7 @@ def analyze_session(session_id):
     # Locate the platform trace-analyzer skill BEFORE creating anything —
     # a missing analyzer must fail the request (fail-closed), not spawn a
     # blind session that wanders the filesystem.
-    from utils.global_skills import inject_single_skill
+    from ai.skills.global_skills import inject_single_skill
 
     analysis_sid = 'sess_' + secrets.token_hex(6)
     analysis_id = 'ana_' + secrets.token_hex(6)
@@ -1106,7 +1106,7 @@ def skill_fit_recompute(attempt_id):
     (attempt_id, def_name) upsert（唯一索引 uq_skill_fit_attempt_def），
     重复调用行数不膨胀，结果以最后一次为准。"""
     from db import get_db
-    from utils import skill_fit
+    from ai.skills import skill_fit as skill_fit
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM ai_execution_attempts WHERE id = %s",
@@ -1398,8 +1398,8 @@ def _path_in_allowed_roots(path: str) -> bool:
     read_skill_file 的 normpath+commonpath 模式——commonpath 相等比较
     （优于 startswith 前缀碰撞），跨盘符等无法比较的情形一律视为逃逸。"""
     from config import AI_WORKSPACE_ROOT
-    from utils.global_skills import global_skills_root
-    from utils.opencode_global import skill_roots
+    from ai.skills.global_skills import global_skills_root
+    from ai.opencode.opencode_global import skill_roots
     roots = {os.path.realpath(AI_WORKSPACE_ROOT),
              os.path.realpath(global_skills_root(AI_WORKSPACE_ROOT))}
     roots.update(os.path.realpath(r) for r in skill_roots())
@@ -1420,7 +1420,7 @@ def skill_def_steps_resolve():
     最新注入记录优先、hash 一致者优先、文件须仍存在（utils.skill_fit
     .resolve_definition_path）。无可用记录 404——前端回落为手动填路径。
     路径 confinement 由 generate/apply 在读取/写盘前执行，与手输一致。"""
-    from utils.skill_fit import resolve_definition_path
+    from ai.skills.skill_fit import resolve_definition_path
     body = request.get_json(silent=True) or {}
     kind = (body.get('kind') or '').strip()
     name = (body.get('name') or '').strip()
@@ -1440,8 +1440,8 @@ def skill_def_steps_generate():
     contentHash?}——后者由最新 manifest 注入记录自动定位路径（hash 一致
     优先），免去用户手输绝对路径。path 逃出允许根 400；定位/读文件失败
     404；AI 失败 502。响应附 path/source（定位来源），前端可回填输入框。"""
-    from utils import skill_fit_ai
-    from utils.skill_fit import resolve_definition_path
+    from ai.skills import skill_fit_ai as skill_fit_ai
+    from ai.skills.skill_fit import resolve_definition_path
     body = request.get_json(silent=True) or {}
     kind = (body.get('kind') or '').strip()
     path = (body.get('path') or '').strip()
@@ -1482,8 +1482,8 @@ def skill_def_steps_apply():
     非法 400 且不写文件；文件不存在/定位失败 404。写盘成功后按落盘内容
     登记定义版本并归档正文（spec §4.2）：bytes 回读保证 hash 与正文自洽，
     默认 label「AI步骤优化 <YYYY-MM-DD>」，body.versionLabel 可覆盖。"""
-    from utils import skill_fit_ai
-    from utils.skill_fit import register_def_version, resolve_definition_path
+    from ai.skills import skill_fit_ai as skill_fit_ai
+    from ai.skills.skill_fit import register_def_version, resolve_definition_path
     body = request.get_json(silent=True) or {}
     kind = (body.get('kind') or '').strip()
     path = (body.get('path') or '').strip()
@@ -1542,7 +1542,7 @@ def skill_def_steps_preview():
     """步骤试算预览（spec §5）：建议 steps 对历史 attempt 的实际轨迹做
     贪心匹配，返回 per_step/steps_total/steps_hit/score/status——纯试算
     不落库。steps 非法（缺 id/expect 非数组）400；attempt 不存在 404。"""
-    from utils import skill_fit_ai
+    from ai.skills import skill_fit_ai as skill_fit_ai
     body = request.get_json(silent=True) or {}
     attempt_id = (body.get('attemptId') or '').strip()
     steps = body.get('steps')
@@ -1564,7 +1564,7 @@ def skill_fit_diagnose(result_id):
     {cause, suggestions[], revised_steps} 写入 diagnosis 列；
     (result_id, def_hash, 轨迹签名) 进程内缓存，同签名重复点击不再打 LLM。
     结果行不存在 404；非 partial/diverged 400；AI 失败 502。"""
-    from utils import skill_fit_ai
+    from ai.skills import skill_fit_ai as skill_fit_ai
     try:
         diagnosis = skill_fit_ai.diagnose_result(result_id)
     except LookupError as e:
@@ -1740,7 +1740,7 @@ def _create_candidate_from_fit(cur, fit_result_id: str, body: dict) -> dict:
     优先诊断里的 edits，body 可显式给 fallbackText 整块降级。R2 去重：
     同 (def, 基线, diff) 的未决候选唯一；R3：expect 收窄须 expectedRepair。"""
     import json as _json
-    from utils.skill_candidate_eval import apply_edits, structural_guard
+    from ai.skills.skill_candidate_eval import apply_edits, structural_guard
     cur.execute(
         "SELECT def_kind, def_name, def_hash, diagnosis "
         "FROM ai_skill_fit_results WHERE id = %s", (fit_result_id,))
@@ -1877,7 +1877,7 @@ def skill_candidate_list():
 @ai_execution_admin_bp.post('/skill-candidates/<cid>/validate')
 @require_permission('admin.ai_chat_admin')
 def skill_candidate_validate(cid):
-    from utils.skill_candidate_eval import run_validation
+    from ai.skills.skill_candidate_eval import run_validation
     try:
         v = run_validation(cid)
     except LookupError as e:
@@ -1892,7 +1892,7 @@ def skill_candidate_validate(cid):
 @ai_execution_admin_bp.post('/skill-candidates/<cid>/promote')
 @require_permission('admin.ai_chat_admin')
 def skill_candidate_promote(cid):
-    from utils.skill_fit import register_def_version, resolve_definition_path
+    from ai.skills.skill_fit import register_def_version, resolve_definition_path
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1928,7 +1928,7 @@ def skill_candidate_promote(cid):
             if fallback:
                 new_text = fallback
             else:
-                from utils.skill_candidate_eval import apply_edits
+                from ai.skills.skill_candidate_eval import apply_edits
                 new_text, err = apply_edits(
                     base_text, edits_raw if isinstance(edits_raw, list) else [])
                 if err:

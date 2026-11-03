@@ -28,7 +28,7 @@ import os
 from flask import Blueprint, g, jsonify, request
 
 from auth import require_permission
-from utils import opencode_global as ocg
+from ai.opencode import opencode_global as ocg
 from common.operation_log import log_operation
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def overview():
     skills = ocg.merged_skills()
     agents = ocg.merged_agents()
     from config import OPENCODE_RESTART_POLICY
-    from utils import opencode_launch
+    from ai.opencode import opencode_launch as opencode_launch
     from utils import oc_watchdog
     return jsonify({
         'globalDir': ocg.global_dir(),
@@ -168,7 +168,7 @@ def publish_platform_skill():
         return jsonify({'error': '平台技能不存在'}), 404
     name = row[0]
     from config import AI_WORKSPACE_ROOT
-    from utils.global_skills import global_skills_root
+    from ai.skills.global_skills import global_skills_root
     src = os.path.join(global_skills_root(AI_WORKSPACE_ROOT), name)
     try:
         installed = ocg.publish_platform_skill(src, name, overwrite=overwrite)
@@ -349,7 +349,7 @@ def runtime_status():
     哈希）、待生效数量与运行中负载。runtimeInSync=True 表示运行时已加载的
     内容与磁盘一致（pendingCount==0 且 serve 健康）——「已保存 ≠ 已生效」
     的判定就在这里。"""
-    from utils import opencode_ownership as ownership
+    from ai.opencode import opencode_ownership as ownership
     serve = ocg.serve_health()
     skills = ocg.merged_skills()
     agents = ocg.merged_agents()

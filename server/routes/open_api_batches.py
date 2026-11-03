@@ -279,7 +279,7 @@ def list_agents():
     返回 primary（可用于批任务 agent 参数）和 subagent（仅供参考）两组。
     过滤掉 OpenCode 内部 agent（compaction/title/summary）。
     """
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
     from config import OPENCODE_BASE_URL
     try:
         raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()
@@ -306,7 +306,7 @@ def list_models():
     只返回已连接的 provider 下的模型。id 格式为 `<providerID>/<modelID>`，
     可直接作为创建批任务时的 model 参数。
     """
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
     from config import OPENCODE_BASE_URL, get_default_chat_model
     try:
         provider_info = OpenCodeClient(OPENCODE_BASE_URL).list_providers()
@@ -346,7 +346,7 @@ def list_skills():
 
     只返回 enabled 的 skill。
     """
-    from utils.global_skills import list_global_skills
+    from ai.skills.global_skills import list_global_skills
     skills = [
         {'name': s['name'], 'description': s.get('description', '')}
         for s in list_global_skills()

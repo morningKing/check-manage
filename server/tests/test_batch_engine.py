@@ -2183,7 +2183,7 @@ def test_batch_terminal_cleans_oc_sessions(db_conn, monkeypatch):
     import uuid as _uuid
     from db import get_db
     import utils.batch_engine as eng
-    import utils.opencode_client as oc_mod
+    from ai.opencode import opencode_client as oc_mod
 
     uid = str(_uuid.uuid4())
     bid = str(_uuid.uuid4())

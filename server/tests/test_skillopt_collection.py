@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 def test_platform_session_id_falls_back_to_subtask(db_conn):
     import uuid as _uuid
     from db import get_db
-    from utils.skillopt import _platform_session_id
+    from ai.skills.skillopt import _platform_session_id
     uid, bid = str(_uuid.uuid4()), str(_uuid.uuid4())
     root, sub_oc = str(_uuid.uuid4()), f'ses_sub{_uuid.uuid4().hex[:8]}'
     with get_db() as conn:
@@ -47,7 +47,7 @@ def test_runtime_event_from_subagent_records_subtask(db_conn):
     """subagent 的 skill 上报：归属根会话 + subtask_id 标注 + outcome 收口。"""
     import uuid as _uuid
     from db import get_db
-    from utils.skillopt import record_runtime_skill_event
+    from ai.skills.skillopt import record_runtime_skill_event
     uid, bid = str(_uuid.uuid4()), str(_uuid.uuid4())
     root, sub_oc = str(_uuid.uuid4()), f'ses_sub{_uuid.uuid4().hex[:8]}'
     with get_db() as conn:

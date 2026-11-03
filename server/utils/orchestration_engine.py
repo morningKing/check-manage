@@ -470,7 +470,7 @@ def _abort_timeout_child(session_id: str | None) -> None:
         oc_sid, ws = row if row else (None, None)
         if not oc_sid:
             return
-        from utils.opencode_client import OpenCodeClient
+        from ai.opencode.opencode_client import OpenCodeClient
         from config import OPENCODE_BASE_URL
         OpenCodeClient(OPENCODE_BASE_URL).abort_session(oc_sid,
                                                         directory=ws or '')

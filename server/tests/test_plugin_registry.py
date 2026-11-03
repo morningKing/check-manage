@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import plugin_registry as pr  # noqa: E402
+from ai.opencode import plugin_registry as pr  # noqa: E402
 
 
 @pytest.fixture

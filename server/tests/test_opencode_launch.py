@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import opencode_launch as launch
+from ai.opencode import opencode_launch as launch
 
 
 def test_default_is_argv_bin_serve(monkeypatch):

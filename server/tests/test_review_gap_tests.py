@@ -1027,7 +1027,7 @@ def test_force_stop_batch_cancels_running(db_conn, user_id, monkeypatch):
     aborted = []
     fake_oc = MagicMock()
     fake_oc.abort_session.side_effect = lambda oc, **k: aborted.append(oc)
-    import utils.opencode_client as _ocmod
+    from ai.opencode import opencode_client as _ocmod
     monkeypatch.setattr(_ocmod, 'OpenCodeClient', lambda base_url: fake_oc)
     r = force_stop_batch(bid, operator='test-admin')
     assert r['cancelled'] == 2
@@ -1926,7 +1926,7 @@ def test_runtime_get_client_returns_opencode_client():
     """P3-A8：get_client() 返回 OpenCodeClient 实例（与直连构造同型，
     行为不变可回退）。"""
     from utils.runtime import get_runtime
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
     client = get_runtime().get_client()
     assert isinstance(client, OpenCodeClient)
 
@@ -1936,7 +1936,7 @@ def test_facade_client_prefers_runtime_and_falls_back(monkeypatch):
     （返回 None / 抛异常 / 无 get_client）时兜底直连，不 crash。"""
     from utils import runtime as rt_mod
     import utils.batch_engine as eng
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
 
     sentinel = object()
 
@@ -2277,7 +2277,7 @@ def test_step_timeout_aborts_child_session(db_conn, user_id, monkeypatch):
         aborted = []
         fake_oc = MagicMock()
         fake_oc.abort_session.side_effect = lambda oc, **k: aborted.append(oc)
-        import utils.opencode_client as _ocmod
+        from ai.opencode import opencode_client as _ocmod
         monkeypatch.setattr(_ocmod, 'OpenCodeClient', lambda base_url: fake_oc)
 
         eng2._advance_run(run['id'])

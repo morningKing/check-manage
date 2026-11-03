@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.opencode_launch import child_env
+from ai.opencode.opencode_launch import child_env
 
 
 def test_sets_python_utf8_and_locale_when_absent():

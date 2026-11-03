@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, g, request
 
 from auth import login_required, require_permission
 from db import get_db
-from utils import plugin_registry
+from ai.opencode import plugin_registry as plugin_registry
 from common.operation_log import log_operation
 
 plugins_bp = Blueprint('plugins', __name__, url_prefix='/plugins')

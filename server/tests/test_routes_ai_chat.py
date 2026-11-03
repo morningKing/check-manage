@@ -1304,7 +1304,7 @@ def test_upload_skill_no_file_400(setup):
 
 def test_upload_skill_util_error_400(setup):
     from io import BytesIO
-    from utils.skill_upload import SkillUploadError
+    from ai.skills.skill_upload import SkillUploadError
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
     with patch('routes.ai_chat.extract_skill_zip',

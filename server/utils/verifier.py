@@ -103,7 +103,7 @@ def _default_client():
     """生产默认判官客户端：沿用仓库惯例惰性构造 OpenCodeClient(OPENCODE_BASE_URL)
     ——调用时才建，不在模块 import 时构造（同 batch_engine._client 与交互路径）。
     utils.opencode_client 是类模块而非客户端实例，不可直接当 client 用。"""
-    from utils.opencode_client import OpenCodeClient
+    from ai.opencode.opencode_client import OpenCodeClient
     from config import OPENCODE_BASE_URL
     return OpenCodeClient(OPENCODE_BASE_URL)
 

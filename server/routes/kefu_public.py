@@ -11,7 +11,7 @@ from db import get_db
 from utils import kefu_repo
 from utils import kefu_event_bus
 from common.rate_limit import RateLimiter
-from utils.opencode_client import OpenCodeClient
+from ai.opencode.opencode_client import OpenCodeClient
 from utils.chat_persist import (
     ensure_listener, new_state, apply_event, persist_turn,
     event_session_id, has_listener,

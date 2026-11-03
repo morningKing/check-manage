@@ -466,7 +466,7 @@ def _resolve_oc_global_fallback(kind: str, name: str) -> dict | None:
     if kind != 'skill':
         return None
     try:
-        from utils.opencode_global import find_skill_dir
+        from ai.opencode.opencode_global import find_skill_dir
         d = find_skill_dir(name)
     except Exception as e:  # noqa: BLE001 — 名称非法/目录异常按未定位处理
         log.warning('resolve oc global fallback(%s) failed: %s', name, e)

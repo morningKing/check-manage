@@ -279,7 +279,7 @@ def _scan_platform_skill_manifests(workspace_path: str | None,
         return out
     workspace_root = '/'.join(parts[:-2])
     try:
-        from utils.global_skills import global_skills_root, list_global_skills
+        from ai.skills.global_skills import global_skills_root, list_global_skills
         skills = [s for s in list_global_skills()
                   if s.get('enabled') and s.get('name') not in existing_names]
         gs_root = global_skills_root(workspace_root)
@@ -310,7 +310,7 @@ def _scan_oc_global_skill_manifests(existing_names: set[str]) -> list[dict]:
     挂进受管根的同名条目按 existing_names 去重，不重复出行。"""
     out: list[dict] = []
     try:
-        from utils.opencode_global import skill_roots
+        from ai.opencode.opencode_global import skill_roots
         roots = skill_roots()
     except Exception as e:  # noqa: BLE001 — manifest 收集绝不阻断主流程
         logger.warning('scan oc global skill manifests failed: %s', e)
@@ -425,7 +425,7 @@ def register_definition_versions(manifests: list[dict]) -> int:
     （check-first：已知 hash 不重读文件）。重读文件 sha256 与 manifest hash
     不一致（两次读之间被改）只登记 hash 不归档——正文无法自证与 hash 对应，
     warning 留痕。返回新登记行数。失败经 _safe 吞掉，不阻断执行链路。"""
-    from utils.skill_fit import register_def_version
+    from ai.skills.skill_fit import register_def_version
 
     def _impl() -> int:
         from db import get_db

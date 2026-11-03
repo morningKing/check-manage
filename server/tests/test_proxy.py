@@ -86,7 +86,7 @@ def test_serve_log_unified_with_restart_path():
     """2026-10-15：proxy 自启动 serve 的 stdio 与平台重启端点/watchdog 统一
     落 server/oc-serve.log——插件 console 输出只有这一个落点，/admin/logs
     也只读这个文件（此前 proxy 写 proxy-opencode.log，生产查日志要看两个）。"""
-    from utils.opencode_global import serve_stdio_file
+    from ai.opencode.opencode_global import serve_stdio_file
     assert proxy.OPENCODE_LOG.endswith('oc-serve.log')
     # 函数解析出的路径与 proxy 常量指向同一文件（append 打开，不写入即关）
     fh = serve_stdio_file()

@@ -17,7 +17,8 @@ from contextlib import contextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import opencode_global as ocg
+from ai.opencode import opencode_global as ocg
+from ai.opencode.opencode_global import global_write as ocgw
 
 
 @pytest.fixture
@@ -194,7 +195,7 @@ def test_merged_skills_sources_and_pending(gdir, monkeypatch):
         {'name': 'ext', 'description': 'e',
          'location': os.path.join(os.path.expanduser('~'), '.claude', 'skills', 'ext', 'SKILL.md')},
     ]
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: (live, []))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: (live, []))
     out = ocg.merged_skills()
     by = {it['name']: it for it in out['items']}
     assert by['mine']['source'] == 'global' and by['mine']['runtime'] == 'loaded'
@@ -218,7 +219,7 @@ def test_merged_skills_deleted_file_still_loaded(gdir, monkeypatch):
         {'name': 'ext', 'description': 'e',
          'location': os.path.join(os.path.expanduser('~'), '.claude', 'skills', 'ext', 'SKILL.md')},
     ]
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: (live, []))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: (live, []))
     by = {it['name']: it for it in ocg.merged_skills()['items']}
     assert by['gone-skill']['source'] == 'global'
     assert by['gone-skill']['runtime'] == 'loaded'
@@ -234,7 +235,7 @@ def test_merged_agents_sources_and_states(gdir, monkeypatch):
         {'name': 'plan', 'mode': 'primary', 'native': True, 'model': None},
         {'name': 'plugin-one', 'mode': 'primary', 'native': False, 'model': None},
     ]
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], live_agents))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: ([], live_agents))
     out = ocg.merged_agents()
     by = {it['name']: it for it in out['items']}
     assert by['my-agent']['source'] == 'file' and by['my-agent']['runtime'] == 'loaded'
@@ -410,7 +411,7 @@ def test_publish_route(gdir, admin_headers, monkeypatch):
     plat_root.mkdir(parents=True)
     (plat_root / 'SKILL.md').write_text(
         '---\nname: pub-route\ndescription: "p"\n---\nx', encoding='utf-8')
-    monkeypatch.setattr('utils.global_skills.global_skills_root',
+    monkeypatch.setattr('ai.skills.global_skills.global_skills_root',
                         lambda *a, **kw: str(gdir / 'platform-skills'))
 
     client = _client()
@@ -437,13 +438,13 @@ def test_restart_guard_and_force(gdir, admin_headers, monkeypatch, tmp_path):
     assert r.get_json()['activeWorkload']['batchChildren'] == 2
 
     # ownership registry redirected to a throwaway dir
-    from utils import opencode_ownership as ownership
+    from ai.opencode import opencode_ownership as ownership
     monkeypatch.setattr(ownership, 'runtime_dir', lambda: str(tmp_path / 'own'))
 
     # A listener with NO ownership record must never be killed (Spec §11.2:
     # 外部托管模式下不得根据端口直接杀进程).
-    monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [4321])
-    monkeypatch.setattr(ocg, '_kill_pids',
+    monkeypatch.setattr(ocgw, '_serve_pids_on_port', lambda port: [4321])
+    monkeypatch.setattr(ocgw, '_kill_pids',
                         lambda pids: pytest.fail('external process was killed'))
     r = client.post('/ai/opencode/restart', headers=admin_headers,
                     json={'force': True})
@@ -453,16 +454,16 @@ def test_restart_guard_and_force(gdir, admin_headers, monkeypatch, tmp_path):
     # platform-owned listener (recorded at spawn time) → restart proceeds
     ownership.record(4321, ocg.serve_port())
     killed: list[int] = []
-    monkeypatch.setattr(ocg, '_kill_pids', lambda pids: killed.extend(pids))
+    monkeypatch.setattr(ocgw, '_kill_pids', lambda pids: killed.extend(pids))
     # 2026-10-15：spawn 块会把分隔行写进真实 oc-serve.log（即使 Popen 被
     # mock）——测试重定向到临时文件，避免用例污染真实日志（曾致排查误判：
     # 10:45 的四条假分隔行被当成真实重启记录）
-    monkeypatch.setattr(ocg, 'serve_stdio_file',
+    monkeypatch.setattr(ocgw, 'serve_stdio_file',
                         lambda: open(tmp_path / 'oc-serve.log', 'a',
                                      encoding='utf-8'))
-    with patch('utils.opencode_global.subprocess.Popen') as popen, \
-         patch.object(ocg.time, 'sleep'), \
-         patch.object(ocg, 'serve_health',
+    with patch('ai.opencode.opencode_global.global_write.subprocess.Popen') as popen, \
+         patch.object(ocgw.time, 'sleep'), \
+         patch.object(ocgw, 'serve_health',
                       return_value={'healthy': True, 'version': '1.15.1'}):
         r = client.post('/ai/opencode/restart', headers=admin_headers,
                         json={'force': True})
@@ -480,9 +481,9 @@ def test_restart_guard_and_force(gdir, admin_headers, monkeypatch, tmp_path):
         tmp_path / 'oc-serve.log').read_text(encoding='utf-8')
 
     # health never comes back → 502
-    with patch('utils.opencode_global.subprocess.Popen'), \
-         patch.object(ocg.time, 'sleep'), \
-         patch.object(ocg, 'serve_health',
+    with patch('ai.opencode.opencode_global.global_write.subprocess.Popen'), \
+         patch.object(ocgw.time, 'sleep'), \
+         patch.object(ocgw, 'serve_health',
                       return_value={'healthy': False, 'version': None}):
         monkeypatch.setattr('config.OPENCODE_RESTART_TIMEOUT_SEC', 10)
         r = client.post('/ai/opencode/restart', headers=admin_headers,
@@ -581,7 +582,7 @@ def test_config_generation_changes_with_content(gdir):
 
 
 def test_ownership_lifecycle(tmp_path, monkeypatch):
-    from utils import opencode_ownership as ownership
+    from ai.opencode import opencode_ownership as ownership
     monkeypatch.setattr(ownership, 'runtime_dir', lambda: str(tmp_path / 'own'))
 
     assert ownership.read() is None
@@ -607,7 +608,7 @@ def test_ownership_lifecycle(tmp_path, monkeypatch):
 
 
 def test_serve_env_pins_global_dir(monkeypatch):
-    from utils import opencode_launch
+    from ai.opencode import opencode_launch as opencode_launch
     monkeypatch.setenv('OPENCODE_GLOBAL_DIR', 'D:/custom/oc')
     env = opencode_launch.serve_env({})
     assert env['OPENCODE_GLOBAL_DIR'] == 'D:/custom/oc'
@@ -643,18 +644,18 @@ def test_runtime_apply_route_refuses_when_busy(gdir, admin_headers, monkeypatch)
 
     # idle → the restart orchestration runs (platform-owned registry assumed
     # empty → but nothing listens, so the kill branch is skipped entirely)
-    from utils import opencode_ownership as ownership
+    from ai.opencode import opencode_ownership as ownership
     monkeypatch.setattr(ocg, 'active_workload',
                         lambda: {'batchChildren': 0, 'interactiveSessions': 0,
                                  'activeBatches': 0})
     monkeypatch.setattr(ownership, 'runtime_dir', lambda: str(gdir.parent / 'own'))
-    monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [])
+    monkeypatch.setattr(ocgw, '_serve_pids_on_port', lambda port: [])
     # spawn 分隔行重定向（勿写真实 oc-serve.log，同 test_restart_guard_and_force）
-    monkeypatch.setattr(ocg, 'serve_stdio_file',
+    monkeypatch.setattr(ocgw, 'serve_stdio_file',
                         lambda: open(gdir / 'oc-serve.log', 'a', encoding='utf-8'))
-    with patch('utils.opencode_global.subprocess.Popen') as popen, \
-         patch.object(ocg.time, 'sleep'), \
-         patch.object(ocg, 'serve_health',
+    with patch('ai.opencode.opencode_global.global_write.subprocess.Popen') as popen, \
+         patch.object(ocgw.time, 'sleep'), \
+         patch.object(ocgw, 'serve_health',
                       return_value={'healthy': True, 'version': '1.15.1'}):
         r = client.post('/ai/opencode/runtime/apply', headers=admin_headers, json={})
     assert r.status_code == 200
@@ -705,8 +706,8 @@ def test_permission_split_apply_and_restart(gdir, admin_headers, monkeypatch):
     monkeypatch.setattr(ocg, 'active_workload',
                         lambda: {'batchChildren': 0, 'interactiveSessions': 0,
                                  'activeBatches': 0})
-    monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [])
-    monkeypatch.setattr(ocg, '_kill_pids', lambda pids: None)
+    monkeypatch.setattr(ocgw, '_serve_pids_on_port', lambda port: [])
+    monkeypatch.setattr(ocgw, '_kill_pids', lambda pids: None)
 
     monkeypatch.setattr('common.permissions.can_admin',
                         _grant_only('admin.ai_runtime_read'))
@@ -718,11 +719,11 @@ def test_permission_split_apply_and_restart(gdir, admin_headers, monkeypatch):
     monkeypatch.setattr('common.permissions.can_admin',
                         _grant_only('admin.ai_runtime_restart'))
     # spawn 分隔行重定向（勿写真实 oc-serve.log，同 test_restart_guard_and_force）
-    monkeypatch.setattr(ocg, 'serve_stdio_file',
+    monkeypatch.setattr(ocgw, 'serve_stdio_file',
                         lambda: open(gdir / 'oc-serve.log', 'a', encoding='utf-8'))
-    with patch('utils.opencode_global.subprocess.Popen'), \
-         patch.object(ocg.time, 'sleep'), \
-         patch.object(ocg, 'serve_health',
+    with patch('ai.opencode.opencode_global.global_write.subprocess.Popen'), \
+         patch.object(ocgw.time, 'sleep'), \
+         patch.object(ocgw, 'serve_health',
                       return_value={'healthy': True, 'version': 'x'}):
         assert client.post('/ai/opencode/restart',
                            headers=admin_headers, json={}).status_code == 200
@@ -730,7 +731,7 @@ def test_permission_split_apply_and_restart(gdir, admin_headers, monkeypatch):
         monkeypatch.setattr(ocg, 'active_workload',
                             lambda: {'batchChildren': 3, 'interactiveSessions': 1,
                                      'activeBatches': 0})
-        monkeypatch.setattr(ocg, '_serve_pids_on_port',
+        monkeypatch.setattr(ocgw, '_serve_pids_on_port',
                             lambda port: pytest.fail('must not touch listeners'))
         r = client.post('/ai/opencode/restart',
                         headers=admin_headers, json={'force': True})
@@ -816,8 +817,8 @@ def test_merged_skills_classifies_config_area_as_global(gdir):
         {'name': 'in-config', 'location': os.path.join(str(gdir), 'skills', 'in-config', 'SKILL.md')},
         {'name': 'plugin-skill', 'location': os.path.join(str(gdir.parent), '.cache', 'node_modules', 'x', 'SKILL.md')},
     ]
-    with mock.patch.object(ocg, 'list_skill_files', return_value=[]), \
-         mock.patch.object(ocg, '_runtime_lists', return_value=(live, [])), \
+    with mock.patch.object(ocgw, 'list_skill_files', return_value=[]), \
+         mock.patch.object(ocgw, '_runtime_lists', return_value=(live, [])), \
          mock.patch.object(ocg, 'serve_health', return_value={'healthy': True, 'version': 'x'}):
         merged = ocg.merged_skills()
     by = {i['name']: i for i in merged['items']}
@@ -839,7 +840,7 @@ _EXT_LIVE = [{'name': 'ext-agent', 'description': 'from home dir',
 def test_merged_agents_labels_non_native_external(gdir, monkeypatch):
     """live-only 非 native（OC 家目录/插件加载）标 external，而非误导性的
     builtin/plugin——文件只是不在平台管理目录，导入后即可编辑。"""
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
     out = ocg.merged_agents()
     by = {it['name']: it for it in out['items']}
     assert by['ext-agent']['source'] == 'external'
@@ -850,7 +851,7 @@ def test_merged_agents_labels_non_native_external(gdir, monkeypatch):
 def test_import_agent_reconstructs_file(gdir, monkeypatch):
     """导入 = 用 live /agent 响应（含 prompt 正文）忠实重建平台目录文件：
     frontmatter(name/description/mode/model/temperature/topP) + body。"""
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
     res = ocg.import_agent('ext-agent')
     assert res['changed'] is True
     got = ocg.read_agent('ext-agent')
@@ -869,12 +870,12 @@ def test_import_agent_reconstructs_file(gdir, monkeypatch):
 
 def test_import_agent_rejects_native_and_missing(gdir, monkeypatch):
     monkeypatch.setattr(
-        ocg, '_runtime_lists',
+        ocgw, '_runtime_lists',
         lambda: ([], [{'name': 'build', 'native': True, 'mode': 'primary'}]))
     with pytest.raises(ocg.OpenCodeGlobalError) as ei:
         ocg.import_agent('build')
     assert ei.value.code == 'BAD_REQUEST'
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], []))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: ([], []))
     with pytest.raises(ocg.OpenCodeGlobalError) as ei:
         ocg.import_agent('ghost')
     assert ei.value.status == 404
@@ -882,7 +883,7 @@ def test_import_agent_rejects_native_and_missing(gdir, monkeypatch):
 
 def test_import_agent_conflict_on_existing_file(gdir, monkeypatch):
     ocg.write_agent('ext-agent', fields={'description': 'platform copy'}, body='x')
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
     with pytest.raises(ocg.OpenCodeGlobalError) as ei:
         ocg.import_agent('ext-agent')
     assert ei.value.code == 'CONFLICT'
@@ -890,7 +891,7 @@ def test_import_agent_conflict_on_existing_file(gdir, monkeypatch):
 
 
 def test_import_agent_route(gdir, admin_headers, monkeypatch):
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
     client = _client()
     r = client.post('/ai/opencode/agents/ext-agent/import', headers=admin_headers)
     assert r.status_code == 201 and r.get_json()['changed'] is True
@@ -899,6 +900,6 @@ def test_import_agent_route(gdir, admin_headers, monkeypatch):
     from auth import create_token
     dev = {'Authorization': 'Bearer ' + create_token(
         {'id': 'u-dev', 'username': 'dev', 'role': 'developer'})}
-    monkeypatch.setattr(ocg, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
+    monkeypatch.setattr(ocgw, '_runtime_lists', lambda: ([], list(_EXT_LIVE)))
     r = client.post('/ai/opencode/agents/ext-agent/import', headers=dev)
     assert r.status_code == 403

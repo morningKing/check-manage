@@ -52,8 +52,8 @@ try:
 except Exception:  # noqa: BLE001 —— 缺 dotenv 时按进程环境继续
     pass
 
-from utils import opencode_ownership  # noqa: E402
-from utils.opencode_global import serve_listener_pids  # noqa: E402
+from ai.opencode import opencode_ownership as opencode_ownership  # noqa: E402
+from ai.opencode.opencode_global import serve_listener_pids  # noqa: E402
 
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OC_SERVE_LOG = os.path.join(SERVER_DIR, 'oc-serve.log')

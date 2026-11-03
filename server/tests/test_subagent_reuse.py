@@ -310,7 +310,7 @@ def test_write_subtask_pins_latest_session(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_plugin_deploy_idempotent(tmp_path):
-    from utils.subagent_reuse_plugin import ensure_subagent_reuse_plugin
+    from ai.opencode.subagent_reuse_plugin import ensure_subagent_reuse_plugin
     gd = str(tmp_path / 'oc-global')
     ep = 'http://127.0.0.1:3002/ai/subagent-internal'
     p1 = ensure_subagent_reuse_plugin(gd, ep, 'tok-1')

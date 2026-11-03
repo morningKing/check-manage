@@ -49,7 +49,7 @@ def _def_versions(cur, kind, name):
 
 def test_register_def_version_content_backfill_and_no_overwrite(db_conn):
     """新 hash 带正文注册；无正文行被后到注册补齐；已有正文永不覆盖。"""
-    from utils.skill_fit import register_def_version
+    from ai.skills.skill_fit import register_def_version
     name = f'arch-skill-{uuid.uuid4().hex[:8]}'
     h = hashlib.sha256(b'v1').hexdigest()
     try:
@@ -76,7 +76,7 @@ def test_register_def_version_content_backfill_and_no_overwrite(db_conn):
 
 def test_register_def_version_empty_hash_allowed(db_conn):
     """manifest 无 hash 按空串注册（content_hash NOT NULL 兜底，现状行为保持）。"""
-    from utils.skill_fit import register_def_version
+    from ai.skills.skill_fit import register_def_version
     name = f'arch-skill-{uuid.uuid4().hex[:8]}'
     try:
         with db_conn.cursor() as cur:

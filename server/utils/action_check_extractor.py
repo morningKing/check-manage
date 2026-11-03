@@ -64,7 +64,7 @@ def _load_skill_texts(skill_names) -> list:
     wanted = [str(n) for n in (skill_names or []) if n]
     if not wanted:
         return []
-    from utils.global_skills import global_skills_root, list_global_skills
+    from ai.skills.global_skills import global_skills_root, list_global_skills
     from config import AI_WORKSPACE_ROOT
     root = global_skills_root(AI_WORKSPACE_ROOT)
     enabled = {s.get('name') for s in list_global_skills() if s.get('enabled')}

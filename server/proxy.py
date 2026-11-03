@@ -31,8 +31,8 @@ from dotenv import load_dotenv
 # routes/open_api_batches.py 的 before_request）。该模块零依赖，可以在这个
 # 独立进程里安全 import —— 不会把 Flask/db 那一坨拖进来。
 from common.upload_limits import body_limit_for_path
-from utils import opencode_launch
-from utils.opencode_global import serve_listener_pids, serve_stdio_file
+from ai.opencode import opencode_launch as opencode_launch
+from ai.opencode.opencode_global import serve_listener_pids, serve_stdio_file
 
 # 启动前残留清理（prestart_cleanup）用的快照/树杀原语——实现在 scripts/
 # （stale_check 踩平了 wmic CSV/列表格式的坑，stack_stop 有树杀），复用不重写。
@@ -90,7 +90,7 @@ def se_plugin_enabled() -> bool:
     TTL 缓存）。库不可达 fail-open：开关面故障不应立刻掐断在线协作，
     进程轮询下一轮自愈。"""
     try:
-        from utils.plugin_registry import plugin_enabled
+        from ai.opencode.plugin_registry import plugin_enabled
         return plugin_enabled('smart-writing')
     except Exception:
         return True
@@ -829,8 +829,8 @@ def record_serve_ownership(timeout=25):
     不阻断启动流程。"""
     try:
         from urllib.parse import urlparse
-        from utils.opencode_global import serve_listener_pids
-        from utils import opencode_ownership
+        from ai.opencode.opencode_global import serve_listener_pids
+        from ai.opencode import opencode_ownership as opencode_ownership
         port = urlparse(OPENCODE_BASE_URL).port or 4096
         deadline = time.time() + timeout
         while time.time() < deadline:

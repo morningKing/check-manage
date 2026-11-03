@@ -191,7 +191,7 @@ def test_mark_cancelled_wins_over_repark_flag(db_conn, seeded_paused_child, monk
     monkeypatch.setattr(BatchWorker, '_resolve_generation',
                         lambda self, sid, gen: gen)
     import utils.execution_audit as _audit
-    import utils.skill_fit as _sfit
+    from ai.skills import skill_fit as _sfit
     monkeypatch.setattr(_audit, 'finish_latest_running', lambda *a, **k: None)
     monkeypatch.setattr(_sfit, 'compute_for_session', lambda *a, **k: None)
     w._mark_cancelled(seeded_paused_child['sid'], seeded_paused_child['bid'],

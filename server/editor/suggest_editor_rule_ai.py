@@ -16,7 +16,7 @@ import time
 import uuid
 
 from config import OPENCODE_BASE_URL, get_default_chat_model
-from utils.opencode_client import OpenCodeClient, OpenCodeError
+from ai.opencode.opencode_client import OpenCodeClient, OpenCodeError
 from editor.suggest_editor_rules import RuleValidationError, validate_rules
 
 logger = logging.getLogger(__name__)

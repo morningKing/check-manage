@@ -214,7 +214,7 @@ class Stack:
                 return p
         from dotenv import load_dotenv
         load_dotenv(SERVER_DIR / '.env')     # opencode_bin() 读 os.environ——先让 .env 的 OPENCODE_BIN 入环境
-        from utils.opencode_launch import opencode_bin, serve_env
+        from ai.opencode.opencode_launch import opencode_bin, serve_env
         gd = tempfile.mkdtemp(prefix='stress-oc-global-')
         self.tmp_dirs.append(gd)
         env = serve_env({**os.environ, 'OPENCODE_GLOBAL_DIR': gd})

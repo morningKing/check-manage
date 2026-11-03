@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.skillopt as so
+from ai.skills import skillopt as so
 
 
 def _mock_db(fetchone=None, fetchall=None):
@@ -27,7 +27,7 @@ def _mock_db(fetchone=None, fetchall=None):
 
 def test_upsert_maps_status_to_outcome():
     fake, cur, conn = _mock_db()
-    with patch('utils.skillopt.get_db', fake):
+    with patch('ai.skills.skillopt.get_db', fake):
         iid = so.upsert_invocation('sess_1', 'att_1', 'pdf', status='error')
     assert iid and iid.startswith('inv_')
     sql, params = cur.execute.call_args.args
@@ -37,7 +37,7 @@ def test_upsert_maps_status_to_outcome():
 
 def test_upsert_running_has_null_outcome_and_hash_normalized():
     fake, cur, _ = _mock_db()
-    with patch('utils.skillopt.get_db', fake):
+    with patch('ai.skills.skillopt.get_db', fake):
         so.upsert_invocation('sess_1', 'att_1', 'pdf', skill_hash=None,
                              status='running')
     params = cur.execute.call_args.args[1]
@@ -48,7 +48,7 @@ def test_upsert_running_has_null_outcome_and_hash_normalized():
 def test_upsert_db_failure_returns_none_not_raise():
     def boom(*a, **k):
         raise RuntimeError('db down')
-    with patch('utils.skillopt.get_db', boom):
+    with patch('ai.skills.skillopt.get_db', boom):
         assert so.upsert_invocation('s', 'a', 'pdf') is None
 
 
@@ -61,13 +61,13 @@ def test_platform_id_passthrough():
 
 def test_opencode_id_maps_to_platform_session():
     fake, cur, _ = _mock_db(fetchone=('sess_real',))
-    with patch('utils.skillopt.get_db', fake):
+    with patch('ai.skills.skillopt.get_db', fake):
         assert so._platform_session_id('ses_oc123') == 'sess_real'
 
 
 def test_unmappable_opencode_id_returns_empty():
     fake, cur, _ = _mock_db(fetchone=None)
-    with patch('utils.skillopt.get_db', fake):
+    with patch('ai.skills.skillopt.get_db', fake):
         assert so._platform_session_id('ses_unknown') == ''
 
 
@@ -80,7 +80,7 @@ def test_runtime_event_missing_fields_rejected():
 
 def test_runtime_event_confirms_invocation_and_manifest():
     fake, cur, _ = _mock_db(fetchone=('sess_real',))
-    with patch('utils.skillopt.get_db', fake), \
+    with patch('ai.skills.skillopt.get_db', fake), \
          patch('utils.execution_audit.get_attempts',
                lambda sid, limit=3: [{'id': 'att_9'}]), \
          patch('utils.execution_audit.set_manifest_result') as smr, \
@@ -101,7 +101,7 @@ def test_runtime_event_confirms_invocation_and_manifest():
 
 def test_mark_idle_closes_running_invocations():
     fake, cur, _ = _mock_db(fetchone=('sess_real',))
-    with patch('utils.skillopt.get_db', fake):
+    with patch('ai.skills.skillopt.get_db', fake):
         so.mark_session_idle('ses_oc1')
     sql, params = cur.execute.call_args.args
     assert 'SET outcome=\'completed\'' in sql
@@ -110,7 +110,7 @@ def test_mark_idle_closes_running_invocations():
 
 def test_mark_idle_unmappable_noop():
     fake, cur, _ = _mock_db(fetchone=None)
-    with patch('utils.skillopt.get_db', fake):
+    with patch('ai.skills.skillopt.get_db', fake):
         so.mark_session_idle('ses_x')
     # 映射查询可以发生，但不允许有任何 invocations 收口 UPDATE
     assert not any('ai_skill_invocations' in str(c.args[0])
@@ -125,7 +125,7 @@ def test_collect_skips_runtime_confirmed_skills():
                  {'kind': 'skill', 'name': 'xlsx', 'content_hash': 'h2'},
                  {'kind': 'agent', 'name': 'a', 'content_hash': 'h3'}]
     # runtime 行已确认 pdf：按 skill_name 跳过，只为 xlsx 写 inferred 行
-    with patch('utils.skillopt.get_db', fake), \
+    with patch('ai.skills.skillopt.get_db', fake), \
          patch.object(so, '_existing_invocations',
                       return_value=(set(), {'pdf'})):
         n = so.collect_skill_invocations('att_1', 'sess_1', manifests, [])
@@ -141,7 +141,7 @@ def test_collect_counts_tool_calls_as_evidence():
     messages = [{'role': 'assistant', 'content': [
         {'type': 'tool_use'}, {'type': 'tool_use'}]},
         {'role': 'user', 'content': [{'type': 'tool_use'}]}]  # user 不计
-    with patch('utils.skillopt.get_db', fake), \
+    with patch('ai.skills.skillopt.get_db', fake), \
          patch.object(so, '_existing_invocations', return_value=(set(), set())):
         n = so.collect_skill_invocations('att_1', 'sess_1',
                                          [{'kind': 'skill', 'name': 'pdf',
@@ -175,7 +175,7 @@ def test_plugin_empty_dir_returns_none():
 def test_retention_clears_payload_then_deletes_rows():
     fake, cur, conn = _mock_db()
     cur.rowcount = 7
-    with patch('utils.skillopt.get_db', fake), \
+    with patch('ai.skills.skillopt.get_db', fake), \
          patch.dict(os.environ, {'EXECUTION_AUDIT_EVENT_PLAINTEXT_DAYS': '30',
                                  'EXECUTION_AUDIT_EVENT_ROWS_DAYS': '180'}):
         out = so.apply_retention()

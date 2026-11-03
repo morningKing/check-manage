@@ -37,7 +37,7 @@ def test_se_process_action():
 def test_se_plugin_enabled_fails_open(monkeypatch):
     import proxy
     def boom(pid): raise RuntimeError('db down')
-    monkeypatch.setattr('utils.plugin_registry.plugin_enabled', boom)
+    monkeypatch.setattr('ai.opencode.plugin_registry.plugin_enabled', boom)
     assert proxy.se_plugin_enabled() is True   # fail-open：开关面故障不掐在线协作
 
 
@@ -50,7 +50,7 @@ def test_se_plugin_enabled_reads_registry(monkeypatch):
         calls.append(pid)
         return False
 
-    monkeypatch.setattr('utils.plugin_registry.plugin_enabled', fake)
+    monkeypatch.setattr('ai.opencode.plugin_registry.plugin_enabled', fake)
     assert proxy.se_plugin_enabled() is False
     assert calls == ['smart-writing']
 

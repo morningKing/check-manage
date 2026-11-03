@@ -117,7 +117,7 @@ class _OpenCodeFacade:
             inner = getattr(rt, '_client', None)  # 旧 adapter 无 get_client 的兼容回退
             if callable(inner):
                 return inner()
-        from utils.opencode_client import OpenCodeClient
+        from ai.opencode.opencode_client import OpenCodeClient
         from config import OPENCODE_BASE_URL
         return OpenCodeClient(OPENCODE_BASE_URL)
 
@@ -509,7 +509,7 @@ def _cleanup_batch_oc_sessions(batch_id: str) -> None:
     if os.getenv('AI_BATCH_KEEP_OC_SESSIONS', '') == '1':
         return
     try:
-        from utils.opencode_client import OpenCodeClient
+        from ai.opencode.opencode_client import OpenCodeClient
         from config import OPENCODE_BASE_URL
         client = OpenCodeClient(OPENCODE_BASE_URL)
         with get_db() as conn:
@@ -635,7 +635,7 @@ class _TurnFailed(Exception):
     """
 
     def __init__(self, error: dict):
-        from utils.opencode_parts import format_opencode_error
+        from ai.opencode.opencode_parts import format_opencode_error
         self.error = error or {}
         super().__init__(format_opencode_error(self.error))
         self.name = self.error.get('name') or 'UnknownError'
@@ -732,7 +732,7 @@ def subtask_status_from_messages(messages: list) -> tuple[str, str | None]:
     """从子代理自己的原始消息列表判定当前状态：('failed', 原因) / ('completed', None)
     / ('running', None)。跟批任务顶层的完成/报错判定同源（复用
     opencode_parts.format_opencode_error），不是另起一套。"""
-    from utils.opencode_parts import format_opencode_error
+    from ai.opencode.opencode_parts import format_opencode_error
     for m in reversed(messages or []):
         info = m.get('info') or {}
         if info.get('role') != 'assistant':
@@ -1536,7 +1536,7 @@ class BatchWorker:
                 # Skills always come from the upload root (config), regardless
                 # of where this child's workspace/staging lives.
                 try:
-                    from utils.global_skills import inject_global_skills
+                    from ai.skills.global_skills import inject_global_skills
                     injected = inject_global_skills(ws, AI_WORKSPACE_ROOT)
                     if injected:
                         self._persist_provision_notice(
@@ -3039,7 +3039,7 @@ class BatchWorker:
         Task 4/5 接入前那样卡死在默认的 'running'。`subtask_id_map` 把 subtask
         part 的 id 映射到正确的子会话 sessionID（修复 SubtaskPart.sessionID
         实际是父会话的 bug）。"""
-        from utils.opencode_parts import map_part
+        from ai.opencode.opencode_parts import map_part
         # /command 路径同一消息里 subtask part 与 tool:'task' part 并存且指向
         # 同一子会话：subtask part 的占位元数据（agent/description）更准确，
         # 先收集，tool part 派生的占位去重时让位。
@@ -3470,7 +3470,7 @@ class BatchWorker:
             from utils import execution_audit
             execution_audit.finish_latest_running(session_id, 'stopped',
                                                   error_code='TAKEOVER_REPARK')
-            from utils import skill_fit as _sfit
+            from ai.skills import skill_fit as _sfit
             _sfit.compute_for_session(session_id)
             return
         res = batch_repo.transition_child(
@@ -3486,7 +3486,7 @@ class BatchWorker:
         from utils import execution_audit
         execution_audit.finish_latest_running(session_id, 'completed')
         # SkillOpt 拟合收敛钩子：attempt 收口即算拟合（best-effort，失败仅记日志）
-        from utils import skill_fit as _sfit
+        from ai.skills import skill_fit as _sfit
         _sfit.compute_for_session(session_id)
         if res.get('batch_status') in ('completed', 'partial', 'failed'):
             _notify_callback(batch_id, res['batch_status'],
@@ -3508,7 +3508,7 @@ class BatchWorker:
             # 必须在 failed 审计之前判定——接管轮按 stopped 收口，绝不记 failed。
             execution_audit.finish_latest_running(session_id, 'stopped',
                                                   error_code='TAKEOVER_REPARK')
-            from utils import skill_fit as _sfit
+            from ai.skills import skill_fit as _sfit
             _sfit.compute_for_session(session_id)
             return
         # 本 attempt 确实跑完并失败：无论会话行 CAS 是否命中都收口审计，
@@ -3517,7 +3517,7 @@ class BatchWorker:
             session_id, 'failed', error_code='CHILD_FAILED', error_message=error)
         # SkillOpt 拟合收敛钩子：finish 已执行即算拟合（CAS 未命中 early-return
         # 也在其后，不能放到方法尾部，否则漏掉 miss 路径）。
-        from utils import skill_fit as _sfit
+        from ai.skills import skill_fit as _sfit
         _sfit.compute_for_session(session_id)
         res = batch_repo.transition_child(
             session_id, 'failed',
@@ -3548,7 +3548,7 @@ class BatchWorker:
             session_id, 'stopped', error_code='CANCELLED')
         # SkillOpt 拟合收敛钩子：finish 已执行即算拟合（同 _mark_failed，钩子
         # 必须在 CAS 未命中 early-return 之前）。
-        from utils import skill_fit as _sfit
+        from ai.skills import skill_fit as _sfit
         _sfit.compute_for_session(session_id)
         res = batch_repo.transition_child(
             session_id, 'cancelled',
@@ -3780,7 +3780,7 @@ class BatchWorker:
             error_message=reason)
         # SkillOpt 拟合收敛钩子：finish 已执行即算拟合（同 _mark_failed，钩子
         # 必须在 CAS 未命中 early-return 之前）。
-        from utils import skill_fit as _sfit
+        from ai.skills import skill_fit as _sfit
         _sfit.compute_for_session(session_id)
         res = batch_repo.transition_child(
             session_id, 'needs_review',

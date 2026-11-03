@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.opencode_parts import map_part, format_opencode_error  # noqa: E402
+from ai.opencode.opencode_parts import map_part, format_opencode_error  # noqa: E402
 
 
 def test_map_part_text_unconditional_no_empty_filter():

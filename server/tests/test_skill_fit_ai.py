@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 def _patch_ai(monkeypatch, content):
     """照抄 test_action_check_extractor.py 的打桩模式：AI 设置 + HTTP 会话。"""
-    import utils.skill_fit_ai as fa
+    from ai.skills import skill_fit_ai as fa
     monkeypatch.setattr(fa, 'get_ai_settings',
                         lambda: {'enabled': True, 'apiKey': 'k', 'endpoint': 'http://x',
                                  'model': 'm', 'timeout': 5, 'maxTokens': 1024})
@@ -33,7 +33,7 @@ GOOD_STEPS = _json.dumps({'steps': [
 
 def test_generate_steps_schema_constrained(monkeypatch):
     _patch_ai(monkeypatch, GOOD_STEPS)
-    from utils.skill_fit_ai import generate_steps
+    from ai.skills.skill_fit_ai import generate_steps
     steps = generate_steps('# 数据拉取技能\n1. clone 2. report')
     assert [s['id'] for s in steps] == ['clone', 'report']
     assert steps[0]['expect'] == [{'tool': 'bash', 'args_pattern': 'git clone'}]
@@ -41,13 +41,13 @@ def test_generate_steps_schema_constrained(monkeypatch):
 
 def test_generate_steps_invalid_output_raises(monkeypatch):
     _patch_ai(monkeypatch, '完全不是 JSON')
-    from utils.skill_fit_ai import generate_steps
+    from ai.skills.skill_fit_ai import generate_steps
     with pytest.raises(RuntimeError):
         generate_steps('x')
 
 
 def test_apply_steps_merges_frontmatter(tmp_path):
-    from utils.skill_fit_ai import apply_steps
+    from ai.skills.skill_fit_ai import apply_steps
     f = tmp_path / 'SKILL.md'
     f.write_text('---\ndescription: 数据拉取\n其他: 保留\n---\n\n正文内容。\n',
                  encoding='utf-8')
@@ -61,7 +61,7 @@ def test_apply_steps_merges_frontmatter(tmp_path):
 
 
 def test_apply_steps_rejects_bad_regex(tmp_path):
-    from utils.skill_fit_ai import apply_steps
+    from ai.skills.skill_fit_ai import apply_steps
     f = tmp_path / 'SKILL.md'
     f.write_text('---\ndescription: x\n---\n正文\n', encoding='utf-8')
     with pytest.raises(ValueError):
@@ -76,7 +76,7 @@ PG_ONLY_PATTERN = r'\y'
 
 
 def test_apply_steps_rejects_pg_only_regex(tmp_path):
-    from utils.skill_fit_ai import apply_steps
+    from ai.skills.skill_fit_ai import apply_steps
     f = tmp_path / 'SKILL.md'
     f.write_text('---\ndescription: x\n---\n正文\n', encoding='utf-8')
     with pytest.raises(ValueError):
@@ -89,7 +89,7 @@ def test_apply_steps_rejects_pg_only_regex(tmp_path):
 def test_preview_steps_rejects_py_invalid_regex():
     """终审 Fix 2：preview 对每个 args_pattern 补 Python re 编译校验——
     非法 → ValueError（路由层 400），且在 DB 查询前即拒绝。"""
-    from utils.skill_fit_ai import preview_steps
+    from ai.skills.skill_fit_ai import preview_steps
     with pytest.raises(ValueError):
         preview_steps([{'id': 'a', 'name': 'A',
                         'expect': [{'tool': 'bash',
@@ -102,7 +102,7 @@ def test_diagnose_shape_and_cache(monkeypatch, db_conn, tmp_path):
     同轨迹签名二次调用不再打 LLM（缓存命中）。"""
     import uuid as _uuid
     from db import get_db
-    import utils.skill_fit_ai as fa
+    from ai.skills import skill_fit_ai as fa
     uid, sid, attempt, result = (str(_uuid.uuid4()) for _ in range(4))
     md = tmp_path / 'SKILL.md'
     md.write_text('---\nfit:\n  steps:\n    - id: a\n      name: A\n'
@@ -130,7 +130,7 @@ def test_diagnose_shape_and_cache(monkeypatch, db_conn, tmp_path):
     monkeypatch.setattr(fa, '_llm_json',
                         lambda system, user: calls.append(1) or diagnosis)
     try:
-        from utils.skill_fit_ai import diagnose_result
+        from ai.skills.skill_fit_ai import diagnose_result
         d1 = diagnose_result(result, get_db=get_db)
         assert d1['cause'] == 'definition_stale'
         d2 = diagnose_result(result, get_db=get_db)
@@ -155,7 +155,7 @@ def test_preview_steps_matches(tmp_path):
     status='fit'、score=100（纯试算，无结果行落库）。"""
     import uuid as _uuid
     from db import get_db
-    from utils.skill_fit_ai import preview_steps
+    from ai.skills.skill_fit_ai import preview_steps
     uid, sid, attempt, part = (str(_uuid.uuid4()) for _ in range(4))
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -206,7 +206,7 @@ def client():
     db.get_db mock 窗口内首次导入时绑到 mock 连接。权限判定走 conftest
     autouse 的 RBAC 预置缓存（admin=superuser），不需要 DB。"""
     import db as _db
-    import utils.skill_fit_ai as fa
+    from ai.skills import skill_fit_ai as fa
     from app import app as flask_app
     fa._default_get_db = _db.get_db
     flask_app.config['TESTING'] = True
@@ -224,7 +224,7 @@ def test_preview_steps_attempt_missing_404(client, admin_headers):
 
 def test_normalize_diagnosis_accepts_edits_and_contract_fields():
     """O2/Task8：诊断 schema 最小 diff 化——edits/expected_repair/possibly_harmed。"""
-    from utils.skill_fit_ai import _normalize_diagnosis
+    from ai.skills.skill_fit_ai import _normalize_diagnosis
     d = _normalize_diagnosis({
         'cause': 'definition_stale',
         'suggestions': ['放宽安装步骤匹配'],
@@ -242,7 +242,7 @@ def test_normalize_diagnosis_accepts_edits_and_contract_fields():
 def test_normalize_diagnosis_defaults_for_new_fields():
     """新字段缺省安全：无 edits/expected_repair/possibly_harmed 时给空值，
     既有用例（旧 schema）不回归。"""
-    from utils.skill_fit_ai import _normalize_diagnosis
+    from ai.skills.skill_fit_ai import _normalize_diagnosis
     d = _normalize_diagnosis({'cause': 'order_deviation', 'suggestions': []})
     assert d['edits'] == []
     assert d['expected_repair'] == ''
@@ -253,7 +253,7 @@ def test_evolution_context_lists_rejected_and_holdout(db_conn):
     """R1（Self-Harness）：诊断输入须包含此前被拒/过期候选与保留集成功行为。"""
     import json as _j
     import uuid as _u
-    from utils.skill_fit_ai import evolution_context
+    from ai.skills.skill_fit_ai import evolution_context
     name = f'eco_{_u.uuid4().hex[:8]}'
     old_str = "args_pattern: 'pip install -r requirements'"
     edits_json = _j.dumps([{'old_str': old_str, 'new_str': 'x', 'reason': 'r'}])

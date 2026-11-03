@@ -1636,7 +1636,7 @@ def force_stop_batch(batch_id: str, *, operator: str,
                     "   AND a.status IN ('running', 'recovering')", (r[0],))
         conn.commit()
     # OpenCode abort（best-effort，会话可能已不存在）
-    from utils.opencode_client import OpenCodeClient as _OCClient
+    from ai.opencode.opencode_client import OpenCodeClient as _OCClient
     from config import OPENCODE_BASE_URL as _OC_URL
     client = _OCClient(_OC_URL)
     for r in rows:

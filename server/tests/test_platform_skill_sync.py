@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from utils.global_skills import (PLATFORM_SYNC_MARKER,
+from ai.skills.global_skills import (PLATFORM_SYNC_MARKER,
                                  sync_platform_skills_to_oc_global)
 
 

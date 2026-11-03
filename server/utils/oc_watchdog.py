@@ -72,7 +72,7 @@ def tick() -> dict:
     所有可能失败的依赖（健康检查/租约/重启）都吞异常记状态——看门狗自身
     故障绝不能反过来打断 Flask。
     """
-    from utils import opencode_global as ocg
+    from ai.opencode import opencode_global as ocg
 
     _update(lastCheckAt=_now_iso())
     try:

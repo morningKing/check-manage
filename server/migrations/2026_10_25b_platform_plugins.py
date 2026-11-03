@@ -10,7 +10,7 @@ from db import get_db
 
 
 def run():
-    from utils.plugin_registry import PLUGINS
+    from ai.opencode.plugin_registry import PLUGINS
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(

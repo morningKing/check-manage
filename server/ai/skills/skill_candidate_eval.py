@@ -20,7 +20,7 @@ import secrets
 from datetime import datetime
 
 from db import get_db as _default_get_db
-from utils.skill_fit import _load_trace, match_steps, parse_fit_steps
+from ai.skills.skill_fit import _load_trace, match_steps, parse_fit_steps
 
 log = logging.getLogger(__name__)
 

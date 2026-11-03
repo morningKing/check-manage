@@ -96,7 +96,7 @@ def status(port: int, listener_pids: list[int] | None = None) -> dict:
     port-scan helper). Returns {mode, pid, recordedPid, recordedAt, listenerPids}.
     """
     if listener_pids is None:
-        from utils.opencode_global import serve_listener_pids
+        from ai.opencode.opencode_global import serve_listener_pids
         listener_pids = serve_listener_pids(port)
 
     rec = read()

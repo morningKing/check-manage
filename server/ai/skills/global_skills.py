@@ -400,7 +400,7 @@ def inject_global_skills(workspace_path: str,
     保留原签名：ai_chat.create_session 与 batch_engine._prepare_workspace
     两个调用点无需改动。workspace_path 参数已不使用（兼容保留）。
     """
-    from utils.opencode_launch import global_dir as _oc_global_dir
+    from ai.opencode.opencode_launch import global_dir as _oc_global_dir
 
     if workspace_root is None:
         parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
@@ -431,7 +431,7 @@ def inject_single_skill(workspace_path: str, skill_name: str,
     src = os.path.join(global_skills_root(workspace_root), skill_name)
     if not os.path.isdir(src):
         raise FileNotFoundError(f'平台技能 {skill_name} 不存在: {src}')
-    from utils.opencode_launch import global_dir as _oc_global_dir
+    from ai.opencode.opencode_launch import global_dir as _oc_global_dir
 
     synced = sync_platform_skills_to_oc_global(
         _oc_global_dir(), workspace_root,
@@ -470,7 +470,7 @@ def _refresh_builtin(dest_dir: str, description: str,
     repo_skills_dir 供测试注入,缺省为仓库 skills/ 下同名技能目录。"""
     marker = os.path.join(dest_dir, BUILTIN_HASH_MARKER)
     repo_dir = repo_skills_dir or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), '..', '..', 'skills',
+        os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'skills',
         os.path.basename(dest_dir))
     if not os.path.isdir(repo_dir):
         return False
@@ -511,7 +511,7 @@ def ensure_builtin_skills(workspace_root: str | None = None) -> list[str]:
     from config import AI_WORKSPACE_ROOT
 
     repo_dir = os.path.normpath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), '..', '..', 'skills'))
+        os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'skills'))
     if not os.path.isdir(repo_dir):
         return []
 
