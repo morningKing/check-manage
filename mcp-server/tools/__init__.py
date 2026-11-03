@@ -52,8 +52,11 @@ validate_registry(set(_TOOLS))
 
 
 def tool_specs() -> list[tuple[str, str]]:
-    """(name, description) for every registered tool — used by GET /tools."""
-    return [(spec.name, spec.description or "") for spec, _ in _TOOLS.values()]
+    """(name, description) for every available tool (globally disabled tools
+    are excluded, mirroring GET /tools)."""
+    from rbac import tool_globally_available
+    return [(spec.name, spec.description or "") for spec, _ in _TOOLS.values()
+            if tool_globally_available(spec.name)]
 
 
 def _dispatch_tool(name: str, arguments: dict, ctx):
@@ -63,11 +66,11 @@ def _dispatch_tool(name: str, arguments: dict, ctx):
     Raises ValueError for unknown tools, PermissionError when the caller's
     role is not permitted to invoke the tool.
     """
-    from rbac import tool_allowed
+    from rbac import tool_allowed_for_context
     entry = _TOOLS.get(name)
     if entry is None:
         raise ValueError(f"unknown tool: {name}")
-    if not tool_allowed(name, ctx.role):
+    if not tool_allowed_for_context(name, ctx):
         raise PermissionError(f"tool '{name}' not available for this session")
     result = entry[1](arguments, ctx)
     return [types.TextContent(type="text", text=str(result))]
@@ -78,13 +81,18 @@ def register_all(server: Server) -> None:
     async def _list_tools():
         try:
             from main import _resolve_context  # lazy import to avoid cycle
-            from rbac import tool_allowed
+            from rbac import tool_allowed_for_context
             ctx = _resolve_context()
-            return [spec for spec, _ in _TOOLS.values() if tool_allowed(spec.name, ctx.role)]
+            return [spec for spec, _ in _TOOLS.values()
+                    if tool_allowed_for_context(spec.name, ctx)]
         except Exception:
             # If context resolution fails (e.g. non-kefu session, missing header),
-            # fall back to returning all specs so legitimate sessions are unaffected.
-            return [spec for spec, _ in _TOOLS.values()]
+            # fall back to returning specs so legitimate sessions are unaffected —
+            # but never resurrect a globally disabled tool (register_action_check
+            # is off unless MCP_ENABLE_REGISTER_ACTION_CHECK=1).
+            from rbac import tool_globally_available
+            return [spec for spec, _ in _TOOLS.values()
+                    if tool_globally_available(spec.name)]
 
     @server.call_tool()
     async def _call(name: str, arguments: dict):
@@ -95,10 +103,14 @@ def register_all(server: Server) -> None:
 
 def tool_meta() -> list:
     """名称+描述（TOOL spec）+分组/读写元数据（registry）——/tools 端点与
-    启动快照同步共用，按 (group_order, name) 排序。"""
+    启动快照同步共用，按 (group_order, name) 排序。全局下架的工具（默认关
+    闭的 register_action_check）不进入目录，快照同步会随之删除旧行。"""
     from .registry import GROUPS, meta_of
+    from rbac import tool_globally_available
     out = []
     for spec, _ in _TOOLS.values():
+        if not tool_globally_available(spec.name):
+            continue
         m = meta_of(spec.name)
         if m is None:
             continue  # validate_registry 已确保不会发生

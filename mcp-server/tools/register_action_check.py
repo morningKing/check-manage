@@ -1,9 +1,14 @@
 """Tool: register_action_check — 交互会话内登记动作门禁期望(设计 §5.2 入口 C)。
 
-用例:主 agent 在派发子代理(或执行带"必经动作"的任务)之前,把"哪些动作必须
-发生"登记为期望;回合收敛(session.idle)时服务端按账本机械核对,不过门记录
-失败明细。模型可以登记,但**不能增删已登记的期望**——核对在服务端,登记后
-执行侧无干预路径。
+2026-11-03 起**默认下架**（`MCP_ENABLE_REGISTER_ACTION_CHECK` 未设为 1 时
+不进工具目录、不可分发）；即使显式启用，批任务子会话（`batch_id` 非空）
+也永久拒绝——批任务的门禁只能来自批配置/策略/模板/管理员补挂，模型不能
+在无人值守任务里自加不可见的门禁。
+
+用例（仅限交互会话）：用户**明确要求**把"哪些动作必须发生"登记为期望时，
+主 agent 才调用本工具；回合收敛(session.idle)时服务端按账本机械核对。
+模型可以登记,但**不能增删已登记的期望**——核对在服务端,登记后执行侧无
+干预路径。不要在未被要求时自行登记。
 
 强度说明:登记本身依赖模型调用(与批任务入口 A/B 的确定性登记相比弱一档),
 适用于临时/长尾需求;关键流程应走批定义或模板内嵌的 action_checks。
@@ -25,14 +30,13 @@ register_meta(NAME, group='exec', access='write')
 TOOL = types.Tool(
     name=NAME,
     description=(
-        "为本会话登记动作门禁期望:回合结束时服务端按工具调用账本逐条核对,"
-        "不过门的项会记录失败明细(动作级'到位'验证,如:某脚本被执行、某仓库"
-        "被克隆、某知识文件被读取)。请在派发子代理或开始执行关键动作**之前**"
-        "登记。参数:checks 数组,每项 {name, tool, args_pattern, min_count?, "
-        "scope?};tool 是工具名(bash/read/write/edit/grep/glob/task 等),"
-        "args_pattern 是匹配工具入参文本的 POSIX 正则(如 'git clone\\\\s+\\\\S*"
-        "acme/inspector'、'docs/knowledge/xxx\\\\.md'),scope 默认 tree(含全部"
-        "子代理的动作)。登记后不可由会话撤销。"
+        "【仅限用户明确要求时使用，不要自行登记】为本会话登记动作门禁期望:"
+        "回合结束时服务端按工具调用账本逐条核对,不过门的项会记录失败明细。"
+        "不要因为任务里出现'必须/确保/先确认'等措辞就自行调用。参数:checks "
+        "数组,每项 {name, tool, args_pattern, min_count?, scope?};tool 是工具名"
+        "(bash/read/write/edit/grep/glob/task 等),args_pattern 是匹配工具入参"
+        "文本的 POSIX 正则,scope 默认 tree(含全部子代理的动作)。登记后不可由"
+        "会话撤销。"
     ),
     inputSchema={
         "type": "object",

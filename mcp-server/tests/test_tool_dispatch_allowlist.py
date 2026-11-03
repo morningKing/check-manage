@@ -37,11 +37,13 @@ def test_dispatch_allows_public_kefu_query(monkeypatch):
 # list_tools filtering
 # ---------------------------------------------------------------------------
 
-def _filter_specs(role: str):
+def _filter_specs(role: str, session_id: str = "s1"):
     """Mirror the filtering logic in _list_tools for deterministic unit testing."""
     from tools import _TOOLS
-    from rbac import tool_allowed
-    return [spec for spec, _ in _TOOLS.values() if tool_allowed(spec.name, role)]
+    from rbac import tool_allowed_for_context
+    ctx = ToolContext(session_id=session_id, user_id="u1", role=role)
+    return [spec for spec, _ in _TOOLS.values()
+            if tool_allowed_for_context(spec.name, ctx)]
 
 
 def test_list_tools_hides_run_python_for_kefu_guest():
@@ -54,10 +56,12 @@ def test_list_tools_hides_run_python_for_kefu_guest():
         assert allowed in names, f"{allowed} must be visible to kefu-guest"
 
 
-def test_list_tools_shows_all_for_developer():
-    """developer role must see every registered tool."""
+def test_list_tools_shows_all_for_developer(monkeypatch):
+    """developer 能看到全部注册工具，但默认关闭的 register_action_check 除外。"""
     from tools import _TOOLS
+    monkeypatch.delenv("MCP_ENABLE_REGISTER_ACTION_CHECK", raising=False)
     all_specs = _filter_specs("developer")
-    assert len(all_specs) == len(_TOOLS), "developer must see all tools"
     names = {s.name for s in all_specs}
     assert "run_python" in names
+    assert "register_action_check" not in names
+    assert len(names) == len(_TOOLS) - 1

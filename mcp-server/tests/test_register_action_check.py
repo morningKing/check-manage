@@ -61,3 +61,57 @@ def test_kefu_guest_blocked_by_allowlist():
     from rbac import tool_allowed
     assert not tool_allowed('register_action_check', 'kefu-guest')
     assert tool_allowed('register_action_check', 'developer')
+
+
+# ---------------------------------------------------------------------------
+# 默认关闭 + 批子会话永久禁用（2026-11-03：模型不能自动给批任务加门禁）
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _deterministic_matrix(monkeypatch):
+    import rbac
+    rbac._reset_cache()
+    monkeypatch.setattr(rbac, '_fetch_rules', lambda: {})
+    yield
+    rbac._reset_cache()
+
+
+def test_disabled_by_default_for_interactive(monkeypatch):
+    monkeypatch.delenv('MCP_ENABLE_REGISTER_ACTION_CHECK', raising=False)
+    from rbac import tool_allowed_for_context
+    assert not tool_allowed_for_context('register_action_check', _ctx())
+
+
+def test_enabled_for_interactive_when_env_on(monkeypatch):
+    monkeypatch.setenv('MCP_ENABLE_REGISTER_ACTION_CHECK', '1')
+    import rbac
+    monkeypatch.setattr(rbac, '_session_in_batch', lambda _sid: False)
+    assert rbac.tool_allowed_for_context('register_action_check', _ctx())
+
+
+def test_batch_child_denied_even_when_env_on(monkeypatch):
+    monkeypatch.setenv('MCP_ENABLE_REGISTER_ACTION_CHECK', '1')
+    import rbac
+    monkeypatch.setattr(rbac, '_session_in_batch', lambda _sid: True)
+    assert not rbac.tool_allowed_for_context('register_action_check', _ctx())
+
+
+def test_dispatch_denied_by_default(monkeypatch):
+    monkeypatch.delenv('MCP_ENABLE_REGISTER_ACTION_CHECK', raising=False)
+    from tools import _dispatch_tool
+    with pytest.raises(PermissionError):
+        _dispatch_tool('register_action_check', {'checks': []}, _ctx())
+
+
+def test_tool_meta_hides_disabled_tool(monkeypatch):
+    monkeypatch.delenv('MCP_ENABLE_REGISTER_ACTION_CHECK', raising=False)
+    from tools import tool_meta
+    names = {m['name'] for m in tool_meta()}
+    assert 'register_action_check' not in names
+
+
+def test_tool_meta_shows_tool_when_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv('MCP_ENABLE_REGISTER_ACTION_CHECK', '1')
+    from tools import tool_meta
+    names = {m['name'] for m in tool_meta()}
+    assert 'register_action_check' in names

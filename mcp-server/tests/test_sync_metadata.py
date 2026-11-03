@@ -19,18 +19,21 @@ def _make_fake_db():
 
 def test_sync_upserts_snapshot_and_seeds_defaults(monkeypatch):
     import sync_metadata
+    # 默认下架 register_action_check（2026-11-03）：快照 26 个工具、104 条规则
+    monkeypatch.delenv('MCP_ENABLE_REGISTER_ACTION_CHECK', raising=False)
     fake_db, cur = _make_fake_db()
     monkeypatch.setattr(sync_metadata, 'get_db', fake_db)
     out = sync_metadata.sync_metadata_to_db()
-    assert out['tools'] == 27
-    assert out['rules_seeded'] == 27 * 4
+    assert out['tools'] == 26
+    assert out['rules_seeded'] == 26 * 4
 
-    # 第一次 executemany = 快照 upsert（27 行，含分组元数据）
+    # 第一次 executemany = 快照 upsert（26 行，含分组元数据）
     snap = cur.executemany.call_args_list[0]
     rows = snap.args[1]
     by_name = {r[0]: r for r in rows}
     assert set(by_name) == {r[0] for r in rows}
-    assert len(rows) == 27
+    assert len(rows) == 26
+    assert 'register_action_check' not in by_name
     q = by_name['query_collection']
     assert q[1] == 'data-query' and q[2] == '数据查询' and q[5] == 'read'
 

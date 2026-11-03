@@ -1093,12 +1093,17 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
         with db_ctx() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT opencode_session_id FROM ai_chat_sessions "
+                    "SELECT opencode_session_id, batch_id FROM ai_chat_sessions "
                     "WHERE id = %s",
                     (session_id,),
                 )
                 row = cur.fetchone()
-                oc_sid = row[0] if row else None
+                oc_sid, batch_id = (row[0], row[1]) if row else (None, None)
+                # 批任务忽略模型自登记（source='mcp'）的期望：register_action_check
+                # 默认下架且批子会话永久禁用后，存量行/旧 MCP 进程写入的行不能再
+                # 影响批任务终态核对。交互会话保持原语义（显式开启开关时仍生效）。
+                # `NOT %s` 参数化（True=批任务 → 排除 mcp 行），SQL 保持字面量。
+                exclude_mcp = bool(batch_id)
                 if not ledger_healthy or not oc_sid:
                     # H3 残留修复：inconclusive 时也带回「已登记期望条数」——
                     # 入口 D 补挂的期望只存在于 per-session 行（批级 applicable
@@ -1108,8 +1113,9 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                         "SELECT count(*) FROM action_expectations "
                         "WHERE scope_id = %s AND scope_type IN ('session','tree') "
                         "  AND mode IN ('post', 'checkpoint') "
-                        "  AND (mode = 'post' OR assert_spec IS NOT NULL)",
-                        (session_id,),
+                        "  AND (mode = 'post' OR assert_spec IS NOT NULL) "
+                        "  AND (NOT %s OR COALESCE(source, '') <> 'mcp')",
+                        (session_id, exclude_mcp),
                     )
                     expected_n = cur.fetchone()[0]
                     return {'status': 'inconclusive', 'results': [],
@@ -1124,9 +1130,10 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                     WHERE scope_id = %s AND scope_type IN ('session','tree')
                       AND (mode = 'post'
                            OR (mode = 'checkpoint' AND assert_spec IS NOT NULL))
+                      AND (NOT %s OR COALESCE(source, '') <> 'mcp')
                     ORDER BY id
                     """,
-                    (session_id,),
+                    (session_id, exclude_mcp),
                 )
                 exps = cur.fetchall()
                 if not exps:
@@ -1222,8 +1229,11 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                         "SELECT count(*) FROM action_expectations "
                         "WHERE scope_id = %s AND scope_type IN ('session','tree') "
                         "  AND mode IN ('post', 'checkpoint') "
-                        "  AND (mode = 'post' OR assert_spec IS NOT NULL)",
-                        (session_id,),
+                        "  AND (mode = 'post' OR assert_spec IS NOT NULL) "
+                        "  AND (NOT EXISTS (SELECT 1 FROM ai_chat_sessions s "
+                        "                   WHERE s.id = %s AND s.batch_id IS NOT NULL) "
+                        "       OR COALESCE(source, '') <> 'mcp')",
+                        (session_id, session_id),
                     )
                     expected_n = cur.fetchone()[0]
         except Exception:  # noqa: BLE001

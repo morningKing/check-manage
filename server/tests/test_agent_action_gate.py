@@ -541,6 +541,33 @@ def test_gate_passed_when_no_expectations(gate_fixture):
     assert res == {'status': 'passed', 'results': []}
 
 
+def test_batch_gate_ignores_mcp_self_registered(gate_fixture):
+    """批子会话忽略 source='mcp' 的期望（2026-11-03）。
+
+    register_action_check 已默认下架且批子会话永久禁用；这条 SQL 过滤兜底
+    存量行与尚未重启的旧 MCP 进程写入的行——它们不得再把批任务判失败。
+    """
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO action_expectations "
+                "(scope_type, scope_id, name, tool, args_pattern, source, last_status) "
+                "VALUES ('tree',%s,'模型自加','bash','never-run','mcp','pending')",
+                (f['sid'],))
+        conn.commit()
+    # 只有 mcp 行 → 批任务视为无期望（passed）
+    assert agent_ledger.check_session_gate(f['sid']) == {
+        'status': 'passed', 'results': []}
+    # 普通批侧期望仍正常核对，不是一刀切忽略
+    agent_ledger.register_session_expectations(f['sid'], [
+        {'name': '必须读知识库', 'tool': 'read', 'args_pattern': r'k\.md'},
+    ])
+    res = agent_ledger.check_session_gate(f['sid'])
+    assert res['status'] == 'failed'
+    assert [r['name'] for r in res['results']] == ['必须读知识库']
+
+
 def test_gate_session_scope_ignores_subagent(gate_fixture):
     f = gate_fixture
     agent_ledger.register_session_expectations(f['sid'], [
