@@ -110,7 +110,7 @@ server/
 | subagent_reuse_plugin.py | ai/opencode/subagent_reuse_plugin.py |
 | tool_timeout_plugin.py | ai/opencode/tool_timeout_plugin.py |
 | plugin_registry.py | ai/opencode/plugin_registry.py |
-| opencode_global.py 1129 | **拆 3 文件**：ai/opencode/global_paths.py（目录发现：global_dir/skills_dir/agents_dir/skill_roots/find_skill_dir）、ai/opencode/global_guard.py（validate_name/resolve_under/_reject_symlink_components/_check_content_size/_check_dir_size）、ai/opencode/global_write.py（_atomic_write 及其余写入函数） |
+| opencode_global.py 1129 | **ai/opencode/opencode_global/ 子包**（聚合 `__init__` 导出全部原符号）：global_paths.py（目录发现：global_dir/skills_dir/agents_dir/skill_roots/find_skill_dir/OPENCODE_GLOBAL_DIR）、global_guard.py（validate_name/resolve_under/_reject_symlink_components/_check_content_size/_check_dir_size）、global_write.py（_atomic_write 及其余写入函数） |
 
 ### 4.4 ai/skills/（6 文件）
 
@@ -140,7 +140,7 @@ skill_candidate_eval.py、skill_upload.py → 同名移入 ai/skills/。
 
 | 原文件 | 新路径 |
 |---|---|
-| orchestration_engine.py 1104 | **拆 3 文件**：ai/orchestration/runs.py（create/get/list_run + _advance_run 状态机）、ai/orchestration/steps.py（_launch_agent_step/_run_edges/_render_prompt 等步骤启动）、ai/orchestration/approvals.py（_open_approval/_open_policy_approval/_abort_timeout_child） |
+| orchestration_engine.py 1104 | **ai/orchestration/engine/ 子包**（聚合 `__init__` 导出全部原符号）：runs.py（create/get/list_run + _advance_run 状态机）、steps.py（_launch_agent_step/_run_edges/_render_prompt 等步骤启动）、approvals.py（_open_approval/_open_policy_approval/_abort_timeout_child） |
 | orchestration_defs.py | ai/orchestration/orchestration_defs.py |
 | approval_repo.py | ai/orchestration/approval_repo.py |
 | gate_policy_repo.py | ai/gate/gate_policy_repo.py |
