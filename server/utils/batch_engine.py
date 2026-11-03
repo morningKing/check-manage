@@ -2805,6 +2805,16 @@ class BatchWorker:
                                 msgs, baseline_ids, last_sig,
                                 directory, oc_session_id))
             elif now - last_progress_at > self.STALL_TIMEOUT_SEC:
+                # 判死必须真死：不 abort 的话原回合在 OpenCode 里继续跑、
+                # 继续输出甚至完成——与任务行 failed 状态分裂（生产实测
+                # 「报 181 秒无进展但会话还在继续输出」，2026-11-03）。对齐
+                # tool-stuck 路径的 abort（先停掉别空转烧 token）；若判定后
+                # 走自动重试，continue_prompt 发进被 abort 的会话继续，同
+                # tool-stuck 的既有语义。
+                try:
+                    opencode_client.abort_session(oc_session_id, directory=directory)
+                except Exception:
+                    traceback.print_exc()
                 raise _SessionTimeout(
                     int(now - last_progress_at),
                     reason='stalled (no progress)',

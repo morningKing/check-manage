@@ -136,6 +136,29 @@ def test_tool_stuck_diagnosis_records_running_tool(monkeypatch):
     assert d['pendingQuestions'] == 0
 
 
+def test_stall_verdict_aborts_opencode_turn(monkeypatch):
+    """stalled 判死必须 abort 原回合：不 abort 的话原回合在 OpenCode 里
+    继续跑、继续输出甚至完成——与任务行 failed 状态分裂（生产实测
+    「报 181 秒无进展但会话还在继续输出」，2026-11-03）。tool-stuck 路径
+    早有同款 abort（先停掉别空转烧 token），stall 路径对齐。"""
+    frozen = {'role': 'assistant', 'finished': False, 'finish': None,
+              'running_tool': False, 'id': 'm1', 'error': None, 'content': []}
+    worker, eng = _diag_worker(
+        monkeypatch, lambda: [frozen],
+        list_questions=lambda: [], list_permissions=lambda: [])
+    worker.STALL_TIMEOUT_SEC = 0.15
+    aborted = []
+    monkeypatch.setattr(eng.opencode_client, 'abort_session',
+                        staticmethod(lambda oc, directory='': aborted.append(oc)),
+                        raising=False)
+
+    with pytest.raises(eng._SessionTimeout) as ei:
+        worker._await_finished('oc-diag', 'sid-test')
+
+    assert ei.value.reason == 'stalled (no progress)'
+    assert aborted == ['oc-diag']            # 判死即停，不留分裂状态
+
+
 _ROW_FIELDS = ('id', 'user_id', 'batch_id', 'batch_input_file', 'input_files',
                'scan_task_id', 'opencode_session_id', 'workspace_path',
                'continue_prompt', 'agent', 'model', 'fencing_token')
