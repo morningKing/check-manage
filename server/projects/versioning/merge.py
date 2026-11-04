@@ -123,7 +123,7 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
             })
 
     # === Phase 2: Before Webhook 触发 ===
-    from utils.webhook_engine import fire_webhooks
+    from collab.webhook_engine import fire_webhooks
     preview_payload = {
         'event': 'merge',
         'timing': 'before',
@@ -502,7 +502,7 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
         # 获取项目名称已在前面获取，此处无需重复查询
 
     # === Phase 4: After Webhook 触发 + 回滚检查 ===
-    from utils.webhook_engine import build_merge_webhook_payload
+    from collab.webhook_engine import build_merge_webhook_payload
     after_payload = build_merge_webhook_payload(
         merge_id,
         merge_result,
@@ -807,7 +807,7 @@ def merge_project_version_detailed(version_id, target_branch, collection_decisio
 
     # 触发 webhook
     import uuid as uuid_module
-    from utils.webhook_engine import fire_webhooks, build_merge_webhook_payload
+    from collab.webhook_engine import fire_webhooks, build_merge_webhook_payload
     merge_id = merge_result.get('mergeId') or f'merge-{uuid_module.uuid4().hex[:12]}'
     webhook_payload = build_merge_webhook_payload(
         merge_id,

@@ -152,7 +152,7 @@ class TestPreviewMenuExport:
 
         # 模拟 get_menu_collections_with_info 的调用
         # 注意：函数是在 preview_menu_export 内部从 utils.menu_export 导入的
-        with patch('utils.menu_export.get_menu_collections_with_info') as mock_get_info:
+        with patch('collab.menu_export.get_menu_collections_with_info') as mock_get_info:
             mock_get_info.return_value = [
                 {'collection': 'inspection-case', 'pageName': '巡检用例', 'recordCount': 100},
             ]
@@ -191,7 +191,7 @@ class TestPreviewMenuExport:
             [],  # 可用脚本列表为空
         ]
 
-        with patch('utils.menu_export.get_menu_collections_with_info') as mock_get_info:
+        with patch('collab.menu_export.get_menu_collections_with_info') as mock_get_info:
             mock_get_info.return_value = []
 
             resp = client.post('/menuExport/preview',

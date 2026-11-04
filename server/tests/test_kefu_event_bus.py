@@ -1,5 +1,5 @@
 import queue
-from utils import kefu_event_bus as bus
+from collab import kefu_event_bus as bus
 
 
 def test_publish_delivers_to_subscribers_of_that_sid():

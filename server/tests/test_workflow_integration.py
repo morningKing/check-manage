@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import db as _db_module  # noqa: E402
 from db import get_db  # noqa: E402
-from utils import workflow_repo as repo  # noqa: E402
-from utils.workflow_engine import on_transition  # noqa: E402
+from collab import workflow_repo as repo  # noqa: E402
+from collab.workflow_engine import on_transition  # noqa: E402
 
 
 @pytest.fixture
@@ -284,7 +284,7 @@ def test_advance_denied_for_wrong_role():
         repo.create_instance(cur, iid, wid, 's1', req, rid, 'admin')
         conn.commit()
     try:
-        from utils.workflow_engine import WorkflowError
+        from collab.workflow_engine import WorkflowError
         with get_db() as conn:
             cur = conn.cursor()
             # 角色不符现在显式抛错（由调用方回滚），而非静默放过——避免「状态已改、实例未推进」分裂

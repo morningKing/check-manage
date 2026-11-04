@@ -11,7 +11,7 @@ from projects.branch_lock import check_branch_lock
 from data.sequences import allocate_sequence
 from common.search_text import compute_search_text
 from data.field_indexes import sql_literal
-from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
+from collab.row_action_engine import run_action, resolve_status_gate, RowActionError
 import psycopg2.extras
 import json
 import uuid
@@ -630,7 +630,7 @@ def create_item(collection):
 
     # Before webhook trigger
     try:
-        from utils.webhook_engine import fire_webhooks
+        from collab.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         before_result = fire_webhooks(
             'create', collection, rid, None, data,
@@ -711,7 +711,7 @@ def create_item(collection):
                   f'新增{page_name}「{record_name}」', branch_id=branch_id)
     # Fire cross-collection triggers
     try:
-        from utils.trigger_engine import fire_triggers
+        from collab.trigger_engine import fire_triggers
         with get_db() as tconn:
             tcur = tconn.cursor()
             user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
@@ -721,7 +721,7 @@ def create_item(collection):
         pass
     # Fire webhook triggers (after)
     try:
-        from utils.webhook_engine import fire_webhooks
+        from collab.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         fire_webhooks('create', collection, rid, None, data,
                        user.get('username', ''), branch_id=branch_id, timing='after')
@@ -754,7 +754,7 @@ def update_item(collection, item_id):
 
     # Before webhook trigger
     try:
-        from utils.webhook_engine import fire_webhooks
+        from collab.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         # Fetch old data for before webhook payload
         with get_db() as conn:
@@ -834,7 +834,7 @@ def update_item(collection, item_id):
             }), 409
         new_version = db_version + 1
         # Workflow validation: check status field transitions
-        from utils.workflow import validate_transition, execute_actions
+        from collab.workflow import validate_transition, execute_actions
         user_role = getattr(flask_g, 'current_user', {}).get('role', 'guest') if hasattr(flask_g, 'current_user') else 'guest'
         for field_cfg in (fields or []):
             wf = field_cfg.get('workflowConfig')
@@ -848,7 +848,7 @@ def update_item(collection, item_id):
                     if not allowed:
                         return jsonify({"error": error}), 400
                     execute_actions(actions, merged_data, collection, item_id, cur)
-                    from utils.workflow_engine import on_transition, WorkflowError
+                    from collab.workflow_engine import on_transition, WorkflowError
                     try:
                         on_transition(cur, collection, item_id, field_cfg['fieldName'],
                                       old_val, new_val, old_data, merged_data,
@@ -944,7 +944,7 @@ def update_item(collection, item_id):
         pass
     # Fire cross-collection triggers
     try:
-        from utils.trigger_engine import fire_triggers
+        from collab.trigger_engine import fire_triggers
         with get_db() as tconn:
             tcur = tconn.cursor()
             user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
@@ -954,7 +954,7 @@ def update_item(collection, item_id):
         pass
     # Fire webhook triggers (after)
     try:
-        from utils.webhook_engine import fire_webhooks
+        from collab.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         fire_webhooks('update', collection, item_id, old_data, data,
                        user.get('username', ''), branch_id=branch_id, timing='after')
@@ -1049,7 +1049,7 @@ def delete_item(collection, item_id):
         )
         # Fire webhook triggers before commit
         try:
-            from utils.webhook_engine import fire_webhooks
+            from collab.webhook_engine import fire_webhooks
             user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
             fire_webhooks('delete', collection, item_id, data_row[0] if data_row else None, None,
                           user.get('username', ''), cur=cur, branch_id=branch_id)
@@ -1317,7 +1317,7 @@ def batch_create_items(collection):
 
     # Fire webhook triggers for batch create / update
     try:
-        from utils.webhook_engine import fire_webhooks
+        from collab.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         for r in prepared_records:
             event = 'update' if r.get('is_update') else 'create'
@@ -1425,7 +1425,7 @@ def batch_delete_items(collection, **kwargs):
                       f'批量删除{page_name}「{summary}」', branch_id=branch_id)
         # Fire webhook triggers for batch delete
         try:
-            from utils.webhook_engine import fire_webhooks
+            from collab.webhook_engine import fire_webhooks
             user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
             for del_id in deletable_ids:
                 fire_webhooks('delete', collection, del_id, None, None,

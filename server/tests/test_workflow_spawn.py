@@ -1,6 +1,6 @@
 import psycopg2.extras
 from db import get_db
-from utils.workflow_engine import spawn_record
+from collab.workflow_engine import spawn_record
 
 
 def _mkpage(cur, coll, with_seq=True):

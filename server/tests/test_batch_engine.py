@@ -881,7 +881,7 @@ def test_recompute_batch_status_fires_callback_on_terminal(user_id, db_conn, mon
     M4 之后默认走 outbox 投递；本测试用 AI_DELIVERY_OUTBOX_ENABLED=0 锁定
     旧直发路径（该路径仍需保持可用，作为 outbox 的降级通道）。"""
     import threading
-    import utils.webhook_engine as wh
+    from collab import webhook_engine as wh
     from ai.batch.engine import _recompute_batch_status
 
     monkeypatch.setenv('AI_DELIVERY_OUTBOX_ENABLED', '0')
@@ -917,7 +917,7 @@ def test_recompute_batch_status_fires_callback_on_terminal(user_id, db_conn, mon
 
 def test_recompute_batch_status_no_callback_when_url_unset(user_id, db_conn, monkeypatch):
     """没配置 callback_url 的批任务收敛为终态时，不应触发任何 webhook 调用。"""
-    import utils.webhook_engine as wh
+    from collab import webhook_engine as wh
     from ai.batch.engine import _recompute_batch_status
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
@@ -1974,7 +1974,7 @@ def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
 
 def test_recompute_batch_status_enqueues_outbox_when_enabled(user_id, db_conn):
     """M4：outbox 启用（默认）时终态回调入队 ai_delivery_outbox 且不直发。"""
-    import utils.webhook_engine as wh
+    from collab import webhook_engine as wh
     from ai.batch.engine import _recompute_batch_status
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
@@ -1988,7 +1988,7 @@ def test_recompute_batch_status_enqueues_outbox_when_enabled(user_id, db_conn):
 
     fired = []
     monkey_wh = lambda **kw: fired.append(kw) or {'success': True}
-    import utils.webhook_engine as wh_mod
+    from collab import webhook_engine as wh_mod
     orig = wh_mod._fire_single_webhook
     wh_mod._fire_single_webhook = monkey_wh
     try:

@@ -49,7 +49,7 @@ def setup(mock_conn, mock_cursor):
         patch('routes.dynamic.get_validation_script', return_value=None),
         patch('routes.dynamic.check_branch_lock', return_value=None),
         patch('routes.dynamic._get_current_user_branch', return_value='main'),
-        patch('utils.webhook_engine.fire_webhooks', return_value={
+        patch('collab.webhook_engine.fire_webhooks', return_value={
             'beforeErrors': [],
             'afterErrors': [],
             'beforeBlocked': False,

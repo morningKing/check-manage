@@ -4,7 +4,7 @@
     cd server && python seed_kefu.py
 已存在同 slug 则跳过，绝不覆盖已有数据。
 """
-from utils import kefu_repo
+from collab import kefu_repo as kefu_repo
 
 DEMO_INSTANCE = {
     'slug': 'demo',

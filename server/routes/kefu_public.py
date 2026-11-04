@@ -8,8 +8,8 @@ import threading
 import queue as _queue
 from flask import Blueprint, request, jsonify, Response, stream_with_context, send_file
 from db import get_db
-from utils import kefu_repo
-from utils import kefu_event_bus
+from collab import kefu_repo as kefu_repo
+from collab import kefu_event_bus as kefu_event_bus
 from common.rate_limit import RateLimiter
 from ai.opencode.opencode_client import OpenCodeClient
 from ai.sessions.chat_persist import (

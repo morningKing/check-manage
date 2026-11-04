@@ -1,5 +1,5 @@
 import time
-from utils import kefu_sse_ticket as tk
+from collab import kefu_sse_ticket as tk
 
 
 def test_issue_then_consume_returns_user():

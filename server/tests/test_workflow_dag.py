@@ -1,8 +1,8 @@
 """DAG + 条件边路由回归：显式 edges、单条件路由、默认边、显式回退边。直连真实 DB。"""
 import psycopg2.extras
 from db import get_db
-from utils import workflow_repo as repo
-from utils.workflow_engine import on_transition, _eval_condition
+from collab import workflow_repo as repo
+from collab.workflow_engine import on_transition, _eval_condition
 
 
 def _page(cur, coll, fields):

@@ -267,7 +267,7 @@ def test_rule(rule_id):
         }
 
         # Import and call webhook engine
-        from utils.webhook_engine import _fire_single_webhook
+        from collab.webhook_engine import _fire_single_webhook
         result = _fire_single_webhook(
             rule_id, name, webhook_url, secret,
             'test', test_payload, timeout, retries
@@ -508,7 +508,7 @@ def test_webhook():
                     timeout = 30
                     retries = 3
 
-        from utils.webhook_engine import _fire_single_webhook
+        from collab.webhook_engine import _fire_single_webhook
         result = _fire_single_webhook(
             rule_id, name, webhook_url, secret,
             'test', test_payload, timeout, retries

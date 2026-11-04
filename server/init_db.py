@@ -1789,7 +1789,7 @@ def init_db():
     # 在就跳过"会在管理员手动删除演示客服后，任何一次重跑 init_db.py 都把它
     # 复活；改成只在全新库（一个 kefu 实例都没有）时才种一次。
     try:
-        from utils import kefu_repo
+        from collab import kefu_repo as kefu_repo
         if not kefu_repo.list_instances():
             from scripts.seed_kefu import seed_kefu_demo
             seed_kefu_demo()

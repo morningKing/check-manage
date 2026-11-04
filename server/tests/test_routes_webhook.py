@@ -161,7 +161,7 @@ class TestTestWebhookRule:
             '规则1', 'https://example.com', '', 30, 3, ['orders']
         )
         # Mock the webhook call
-        with patch('utils.webhook_engine._fire_single_webhook') as mock_fire:
+        with patch('collab.webhook_engine._fire_single_webhook') as mock_fire:
             mock_fire.return_value = {
                 'success': True,
                 'logId': 'wh-test1',
@@ -231,7 +231,7 @@ class TestWebhookEngine:
         client, mock_cursor, _, _ = setup
         mock_cursor.fetchall.return_value = []
 
-        from utils.webhook_engine import fire_webhooks
+        from collab.webhook_engine import fire_webhooks
         result = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
         assert result['beforeErrors'] == []
         assert result['afterErrors'] == []
@@ -245,9 +245,9 @@ class TestWebhookEngine:
             ('whrule-1', '规则1', 'create', {}, 'https://example.com', '', 30, 3, ['orders'], 'after', False),
         ]
 
-        with patch('utils.webhook_engine._fire_single_webhook') as mock_fire:
+        with patch('collab.webhook_engine._fire_single_webhook') as mock_fire:
             mock_fire.return_value = {'success': True}
-            from utils.webhook_engine import fire_webhooks
+            from collab.webhook_engine import fire_webhooks
             result = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
             assert result['afterErrors'] == []
             assert result['beforeBlocked'] == False
@@ -259,9 +259,9 @@ class TestWebhookEngine:
             ('whrule-1', '规则1', 'create', {}, 'https://example.com', '', 30, 3, ['orders'], 'after', False),
         ]
 
-        with patch('utils.webhook_engine._fire_single_webhook') as mock_fire:
+        with patch('collab.webhook_engine._fire_single_webhook') as mock_fire:
             mock_fire.return_value = {'success': False, 'errorMessage': 'Connection failed'}
-            from utils.webhook_engine import fire_webhooks
+            from collab.webhook_engine import fire_webhooks
             result = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
             assert len(result['afterErrors']) == 1
             assert result['afterErrors'][0]['rule_id'] == 'whrule-1'
@@ -273,15 +273,15 @@ class TestWebhookEngine:
             ('whrule-1', '全局规则', 'merge', {}, 'https://example.com', '', 30, 3, [], 'after', False),
         ]
 
-        with patch('utils.webhook_engine._fire_single_webhook') as mock_fire:
+        with patch('collab.webhook_engine._fire_single_webhook') as mock_fire:
             mock_fire.return_value = {'success': True}
-            from utils.webhook_engine import fire_webhooks
+            from collab.webhook_engine import fire_webhooks
             # merge event with None collection should match global rule
             result = fire_webhooks('merge', None, 'merge-1', None, {'summary': {}}, 'admin')
             assert result['afterErrors'] == []
 
     def test_check_condition_field_change(self, setup):
-        from utils.webhook_engine import _check_condition
+        from collab.webhook_engine import _check_condition
 
         # Update event with field change
         condition = {'field': 'status', 'value': 'completed'}
@@ -296,7 +296,7 @@ class TestWebhookEngine:
         assert result is False
 
     def test_build_merge_payload(self, setup):
-        from utils.webhook_engine import build_merge_webhook_payload
+        from collab.webhook_engine import build_merge_webhook_payload
 
         merge_result = {
             'mergeId': 'merge-1',

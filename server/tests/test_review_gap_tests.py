@@ -724,7 +724,7 @@ def test_deliver_one_real_classification(db_conn, user_id, monkeypatch):
     """网络层打桩（requests.post），走**真实** _fire_single_webhook +
     deliver_one（12 号 §6-2：monkeypatch deliver_one 不构成生产证据）。"""
     import requests as _rq
-    import utils.webhook_engine as wh
+    from collab import webhook_engine as wh
     from ai.batch import delivery_outbox as delivery_outbox
 
     bid, sids = _seed_batch(db_conn, user_id, 1)

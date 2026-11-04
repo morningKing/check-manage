@@ -291,7 +291,7 @@ def test_script(script_id):
         # 菜单级脚本 + 指定菜单：用真实 menu_data（该菜单下所有数据页）+ 引用解析，
         # 与生产 execute_menu_export 一致——菜单级脚本本应针对菜单测试，而非单个数据页。
         if scope == 'menu' and menu_id:
-            from utils.menu_export import get_menu_collections
+            from collab.menu_export import get_menu_collections
             from data.export_references import resolve_references
             from datetime import timezone as _tz
             cur.execute('SELECT name FROM menus WHERE id = %s', (menu_id,))
@@ -439,7 +439,7 @@ def debug_script(script_id):
 
         # 菜单级脚本 + 指定菜单：用真实多表 menu_data + 引用解析（与 test_script 一致）
         if scope == 'menu' and menu_id:
-            from utils.menu_export import get_menu_collections
+            from collab.menu_export import get_menu_collections
             from data.export_references import resolve_references
             cur.execute('SELECT name FROM menus WHERE id = %s', (menu_id,))
             mrow = cur.fetchone()

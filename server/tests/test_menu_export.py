@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.menu_export import (
+from collab.menu_export import (
     get_menu_collections,
     get_menu_collections_with_info,
     execute_menu_export,

@@ -23,7 +23,7 @@ def _db(rule_row=RULE_ROW):
 
 
 def test_build_payload_manual_carries_action_and_params():
-    from utils.webhook_engine import _build_payload
+    from collab.webhook_engine import _build_payload
     payload = _build_payload(
         'after', 'manual', 'orders', 'rec-1', None, {'status': '待审核'},
         'admin', 'wh-1', '推送外部', 'main', None,
@@ -39,7 +39,7 @@ def test_build_payload_manual_carries_action_and_params():
 
 
 def test_fire_webhook_rule_calls_single_webhook_with_rule_config():
-    import utils.webhook_engine as we
+    from collab import webhook_engine as we
     fake_get_db, _cur = _db()
     with patch('db.get_db', fake_get_db), \
          patch.object(we, '_fire_single_webhook',
@@ -60,7 +60,7 @@ def test_fire_webhook_rule_calls_single_webhook_with_rule_config():
 
 
 def test_fire_webhook_rule_missing_rule_raises():
-    import utils.webhook_engine as we
+    from collab import webhook_engine as we
     fake_get_db, _cur = _db(rule_row=None)
     with patch('db.get_db', fake_get_db):
         try:
@@ -74,7 +74,7 @@ def test_fire_webhook_rule_missing_rule_raises():
 
 def test_manual_rules_not_matched_by_data_events():
     """fire_webhooks 按 event 精确匹配，manual 规则不会被 create 触发。"""
-    import utils.webhook_engine as we
+    from collab import webhook_engine as we
     cur = MagicMock()
     cur.fetchall.return_value = []
     we.fire_webhooks('create', 'orders', 'rec-1', None, {'a': 1}, 'admin', cur=cur)

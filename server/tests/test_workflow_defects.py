@@ -4,8 +4,8 @@
 """
 import psycopg2.extras
 from db import get_db
-from utils import workflow_repo as repo
-from utils.workflow_engine import on_transition
+from collab import workflow_repo as repo
+from collab.workflow_engine import on_transition
 from tests.test_workflow_advance import _setup
 
 

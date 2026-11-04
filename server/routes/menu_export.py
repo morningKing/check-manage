@@ -8,7 +8,7 @@
 from flask import Blueprint, request, jsonify, Response, g
 from db import get_db
 from auth import login_required, write_required
-from utils.menu_export import execute_menu_export, batch_clear
+from collab.menu_export import execute_menu_export, batch_clear
 from common.operation_log import log_operation
 from urllib.parse import quote
 
@@ -181,7 +181,7 @@ def preview_menu_export():
         "availableScripts": [...]
     }
     """
-    from utils.menu_export import get_menu_collections_with_info
+    from collab.menu_export import get_menu_collections_with_info
 
     body = request.get_json(force=True)
     menu_ids = body.get('menuIds', [])

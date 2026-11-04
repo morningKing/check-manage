@@ -17,8 +17,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from db import get_db
-from utils.row_action_condition import evaluate
-from utils.webhook_engine import fire_webhook_rule
+from collab.row_action_condition import evaluate
+from collab.webhook_engine import fire_webhook_rule
 from ai.scan.ai_scan_engine import (
     claim_one, build_context_dir, assemble_prompt, _workspace_root, _revert_claimed,
 )

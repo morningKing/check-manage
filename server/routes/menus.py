@@ -334,7 +334,7 @@ def set_menu_export_script(menu_id):
 @menus_bp.route('/menus/<menu_id>/exportPreview', methods=['GET'])
 @login_required
 def get_menu_export_preview(menu_id):
-    from utils.menu_export import get_menu_collections_with_info
+    from collab.menu_export import get_menu_collections_with_info
 
     with get_db() as conn:
         cur = conn.cursor()

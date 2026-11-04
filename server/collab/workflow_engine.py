@@ -198,7 +198,7 @@ def on_transition(cur, collection, record_id, status_field, from_value, to_value
     无匹配实例则静默返回（普通状态变更不受影响）。
     branch_id：源记录所在分支——下游 spawn / 回退重置都在同一分支内，保证分支隔离。
     角色不符时抛 WorkflowError，由调用方回滚事务并报错（避免「状态已改、实例未推进」的分裂）。"""
-    from utils import workflow_repo as repo
+    from collab import workflow_repo as repo
     inst = repo.find_running_instance_by_record(cur, collection, record_id, for_update=True)
     if not inst:
         return

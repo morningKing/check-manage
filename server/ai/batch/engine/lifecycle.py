@@ -288,7 +288,7 @@ def _notify_callback(batch_id, status, callback_url, callback_secret,
         pass
     def _fire():
         try:
-            from utils.webhook_engine import _fire_single_webhook
+            from collab.webhook_engine import _fire_single_webhook
             _fire_single_webhook(
                 rule_id=f'batch-{batch_id}', rule_name='AI批任务完成回调',
                 webhook_url=callback_url, secret=callback_secret or '',

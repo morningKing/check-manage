@@ -20,7 +20,7 @@ from routes.open_api import check_collection_writable, get_request_branch_id
 from common.api_errors import (CONFLICT, FORBIDDEN, INTERNAL_ERROR, INVALID_ARGUMENT,
                               NOT_FOUND, err, register_error_handlers)
 from common.operation_log import log_api_operation
-from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
+from collab.row_action_engine import run_action, resolve_status_gate, RowActionError
 
 open_api_row_actions_bp = Blueprint(
     'open_api_row_actions', __name__, url_prefix='/v1/collections')

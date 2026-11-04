@@ -78,7 +78,7 @@ def test_submitted_status_omits_status_field(client, admin_headers):
 
 
 def test_engine_error_is_translated_to_its_status(client, admin_headers):
-    from utils.row_action_engine import RowActionError
+    from collab.row_action_engine import RowActionError
     with _patch_lookup(), \
          patch('routes.dynamic.run_action',
                side_effect=RowActionError('该行有正在执行的动作，请稍后再试', 409)):

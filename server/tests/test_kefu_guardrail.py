@@ -1,4 +1,4 @@
-from utils.kefu_guardrail import assemble_system_prompt, GUARDRAIL
+from collab.kefu_guardrail import assemble_system_prompt, GUARDRAIL
 
 
 def test_guardrail_always_present():

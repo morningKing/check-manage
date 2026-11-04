@@ -3,7 +3,7 @@ import uuid
 from flask import Blueprint, request, jsonify, g as flask_g
 from db import get_db
 from auth import login_required, write_required, require_permission  # server/auth.py
-from utils import workflow_repo as repo
+from collab import workflow_repo as repo
 
 workflows_bp = Blueprint('workflows', __name__)
 
@@ -61,7 +61,7 @@ def start_instance():
         inst = repo.create_instance(cur, inst_id, workflow_id, first['id'], collection, record_id,
                                     user.get('username', ''))
         conn.commit()
-        from utils.workflow_engine import _notify_roles
+        from collab.workflow_engine import _notify_roles
         with get_db() as c2:
             _notify_roles(c2.cursor(), first.get('assignedRoles', []), f'工作流待办：{first["name"]}',
                           '新流程已启动', collection, record_id)

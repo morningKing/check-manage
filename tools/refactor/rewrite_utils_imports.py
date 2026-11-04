@@ -141,6 +141,21 @@ MAPPING = {
     'project_version': 'projects.versioning',
     'backup': 'projects.backup',
     'cross_project_dependency': 'projects.dependencies',
+    # ---- batch 5c: collab/ ----
+    'workflow': 'collab.workflow',
+    'workflow_engine': 'collab.workflow_engine',
+    'workflow_repo': 'collab.workflow_repo',
+    'row_action_engine': 'collab.row_action_engine',
+    'row_action_validate': 'collab.row_action_validate',
+    'row_action_condition': 'collab.row_action_condition',
+    'trigger_engine': 'collab.trigger_engine',
+    'webhook': 'collab.webhook',
+    'webhook_engine': 'collab.webhook_engine',
+    'kefu_repo': 'collab.kefu_repo',
+    'kefu_event_bus': 'collab.kefu_event_bus',
+    'kefu_sse_ticket': 'collab.kefu_sse_ticket',
+    'kefu_guardrail': 'collab.kefu_guardrail',
+    'menu_export': 'collab.menu_export',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

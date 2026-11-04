@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.row_action_engine import RowActionError
+from collab.row_action_engine import RowActionError
 
 BASE = '/v1/collections'
 HDR = {'X-API-Key': 'cm_x'}

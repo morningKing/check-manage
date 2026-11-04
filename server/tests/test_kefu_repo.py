@@ -2,7 +2,7 @@
 """Unit tests for kefu_repo — mocked DB, no real PostgreSQL or OpenCode."""
 import json
 from unittest.mock import patch, MagicMock
-import utils.kefu_repo as repo
+from collab import kefu_repo as repo
 
 
 def _cm(conn):
@@ -21,12 +21,12 @@ def test_create_kefu_session_inserts_row_with_visitor(mock_conn, mock_cursor):
         'agent': '', 'model': '', 'system_prompt': '你是售前助手',
         'bot_user_id': 'kefu-bot',
     }
-    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)), \
-         patch('utils.kefu_repo.create_session_workspace', return_value='/ws/kf'), \
-         patch('utils.kefu_repo.write_opencode_config'), \
-         patch('utils.kefu_repo.generate_token', return_value='tok123'), \
-         patch('utils.kefu_repo.OpenCodeClient') as OC, \
-         patch('utils.kefu_repo._inject_system_prompt') as inj:
+    with patch('collab.kefu_repo.get_db', lambda: _cm(mock_conn)), \
+         patch('collab.kefu_repo.create_session_workspace', return_value='/ws/kf'), \
+         patch('collab.kefu_repo.write_opencode_config'), \
+         patch('collab.kefu_repo.generate_token', return_value='tok123'), \
+         patch('collab.kefu_repo.OpenCodeClient') as OC, \
+         patch('collab.kefu_repo._inject_system_prompt') as inj:
         OC.return_value.create_session.return_value = 'oc_sid_1'
         out = repo.create_kefu_session(instance, 'visitor-abc')
     assert out['id'].startswith('sess_')
@@ -48,12 +48,12 @@ def test_create_kefu_session_injects_guardrail(mock_conn, mock_cursor):
         'agent': '', 'model': 'anthropic/claude-3-5-sonnet', 'system_prompt': '你是售后',
         'bot_user_id': 'kefu-bot',
     }
-    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)), \
-         patch('utils.kefu_repo.create_session_workspace', return_value='/ws/kf2'), \
-         patch('utils.kefu_repo.write_opencode_config'), \
-         patch('utils.kefu_repo.generate_token', return_value='tok456'), \
-         patch('utils.kefu_repo.OpenCodeClient') as OC, \
-         patch('utils.kefu_repo._inject_system_prompt') as inj:
+    with patch('collab.kefu_repo.get_db', lambda: _cm(mock_conn)), \
+         patch('collab.kefu_repo.create_session_workspace', return_value='/ws/kf2'), \
+         patch('collab.kefu_repo.write_opencode_config'), \
+         patch('collab.kefu_repo.generate_token', return_value='tok456'), \
+         patch('collab.kefu_repo.OpenCodeClient') as OC, \
+         patch('collab.kefu_repo._inject_system_prompt') as inj:
         OC.return_value.create_session.return_value = 'oc_sid_2'
         out = repo.create_kefu_session(instance, 'visitor-xyz')
     inj.assert_called_once_with('/ws/kf2', instance)
@@ -68,13 +68,13 @@ def test_create_kefu_session_calls_ensure_bot_user(mock_conn, mock_cursor):
         'agent': '', 'model': '', 'system_prompt': '',
         'bot_user_id': 'kefu-bot',
     }
-    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)), \
-         patch('utils.kefu_repo.create_session_workspace', return_value='/ws/spot'), \
-         patch('utils.kefu_repo.write_opencode_config'), \
-         patch('utils.kefu_repo.generate_token', return_value='tok_spot'), \
-         patch('utils.kefu_repo.OpenCodeClient') as OC, \
-         patch('utils.kefu_repo._inject_system_prompt'), \
-         patch('utils.kefu_repo.ensure_bot_user') as mock_ensure:
+    with patch('collab.kefu_repo.get_db', lambda: _cm(mock_conn)), \
+         patch('collab.kefu_repo.create_session_workspace', return_value='/ws/spot'), \
+         patch('collab.kefu_repo.write_opencode_config'), \
+         patch('collab.kefu_repo.generate_token', return_value='tok_spot'), \
+         patch('collab.kefu_repo.OpenCodeClient') as OC, \
+         patch('collab.kefu_repo._inject_system_prompt'), \
+         patch('collab.kefu_repo.ensure_bot_user') as mock_ensure:
         OC.return_value.create_session.return_value = 'oc_spot'
         repo.create_kefu_session(instance, 'visitor-spot')
     mock_ensure.assert_called_once()
@@ -83,7 +83,7 @@ def test_create_kefu_session_calls_ensure_bot_user(mock_conn, mock_cursor):
 def test_load_kefu_session_returns_none_for_wrong_visitor(mock_conn, mock_cursor):
     """load_kefu_session returns None when row not found (mismatched visitor)."""
     mock_cursor.fetchone.return_value = None
-    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)):
+    with patch('collab.kefu_repo.get_db', lambda: _cm(mock_conn)):
         out = repo.load_kefu_session('sess_1', 'wrong-visitor')
     assert out is None
     # the query must filter by visitor_id AND kefu_instance_id IS NOT NULL

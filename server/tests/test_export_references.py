@@ -11,7 +11,7 @@ import psycopg2.extras
 from db import get_db
 from data.export_references import resolve_references, resolve_page_references
 from data.script_runner import run_menu_export_script, run_export_script
-from utils.menu_export import execute_menu_export
+from collab.menu_export import execute_menu_export
 
 
 def _seed_page(cur, coll, fields):

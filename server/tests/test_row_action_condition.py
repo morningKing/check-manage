@@ -13,10 +13,10 @@ CASES = json.loads(FIXTURE.read_text(encoding='utf-8'))
 
 @pytest.mark.parametrize('case', CASES, ids=[c['name'] for c in CASES])
 def test_evaluate_matches_fixture(case):
-    from utils.row_action_condition import evaluate
+    from collab.row_action_condition import evaluate
     assert evaluate(case['condition'], case['data']) is case['expected']
 
 
 def test_empty_dict_condition_passes():
-    from utils.row_action_condition import evaluate
+    from collab.row_action_condition import evaluate
     assert evaluate({}, {'status': 'x'}) is True

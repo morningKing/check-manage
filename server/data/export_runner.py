@@ -6,7 +6,7 @@ Flask 路由与 MCP 工具都调用本模块，确保「绑定校验 + RBAC + �
 from datetime import timezone
 from data.script_runner import run_export_script, run_menu_export_script
 from data.export_references import resolve_page_references, resolve_references
-from utils.menu_export import get_menu_collections
+from collab.menu_export import get_menu_collections
 
 SCRIPT_SELECT = 'id, name, script, output_format, scope, bound_collection, bound_menu_id'
 

@@ -5,7 +5,7 @@ from auth import login_required, require_permission
 from common.operation_log import log_operation
 from data.page_config_relations import get_page_config_relations
 from data.field_indexes import sync_field_indexes, mark_all_dropping
-from utils.row_action_validate import validate_row_actions
+from collab.row_action_validate import validate_row_actions
 from ai.scan.ai_schema_designer import draft_page_schema
 import psycopg2.extras
 

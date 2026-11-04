@@ -1,8 +1,8 @@
 """v2 并行多路分发回归：一个阶段扇出到多个并发分支，实例在所有分支结束后才完成。直连真实 DB。"""
 import psycopg2.extras
 from db import get_db
-from utils import workflow_repo as repo
-from utils.workflow_engine import on_transition
+from collab import workflow_repo as repo
+from collab.workflow_engine import on_transition
 
 SRC, A, B = 'zzpsrc', 'zzpa', 'zzpb'
 

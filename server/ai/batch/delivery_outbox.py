@@ -191,7 +191,7 @@ def deliver_one(row: dict) -> bool | str:
       'uncertain' 无响应（超时/连接拒绝/DNS）→ 结局未知，effect 落 unknown 触发 fail-safe。
     兼容旧 bool 消费方（drain_due_once 以 `is True` 判成功）。"""
     import json as _json
-    from utils.webhook_engine import _fire_single_webhook
+    from collab.webhook_engine import _fire_single_webhook
     try:
         res = _fire_single_webhook(
             rule_id=f'outbox-{row["id"]}', rule_name='AI批任务完成回调(outbox)',
