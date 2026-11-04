@@ -179,8 +179,18 @@ class _OpenCodeFacade:
             content: list = []
             running_tool = False
             resolved_tool_seen = False
+            open_steps = 0
             for p in parts:
                 t = p.get('type')
+                if t == 'step-start':
+                    # step 开始瞬间就落盘（实测与 reasoning part 同毫秒创建，
+                    # 而 reasoning 文本直到思考结束才可见）——「未配对的
+                    # step-start」是 step 进行中唯一的 REST 可见信号。
+                    open_steps += 1
+                    continue
+                if t == 'step-finish':
+                    open_steps = max(0, open_steps - 1)
+                    continue
                 if t == 'text' and p.get('text'):
                     content.append({'type': 'text', 'text': p.get('text', '')})
                 elif t == 'reasoning' and p.get('text'):
@@ -229,10 +239,11 @@ class _OpenCodeFacade:
             # 存在的旧消息，见 _snapshot_assistant_ids）。
             out.append({'role': 'assistant', 'finished': finished, 'content': content,
                         'finish': finish, 'running_tool': running_tool,
-                        'error': info.get('error'), 'id': info.get('id')})
+                        'error': info.get('error'), 'id': info.get('id'),
+                        'step_active': open_steps > 0})
         return out or [{'role': 'assistant', 'finished': False, 'content': [],
                         'finish': None, 'running_tool': False, 'error': None,
-                        'id': None}]
+                        'id': None, 'step_active': False}]
 
     def get_messages(self, oc_session_id: str, directory: str = '') -> list:
         """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by
@@ -614,6 +625,8 @@ def _format_diagnosis(d: dict) -> str:
                          if isinstance(t, dict))
         return (f"lastMsg={d.get('lastMsgId')} finish={d.get('finish')} "
                 f"runningTool={d.get('runningTool')} tools=[{tools}] "
+                f"stepActive={d.get('stepActive')} "
+                f"emptyParts={d.get('emptyParts')} "
                 f"pendingQ={d.get('pendingQuestions')} "
                 f"pendingP={d.get('pendingPermissions')} "
                 f"msgs={d.get('msgCount')}")
@@ -808,6 +821,14 @@ class BatchWorker:
     # _progress_signature / the active_tool reset in _await_finished), so a
     # working turn never trips this; only a genuinely dead one does.
     STALL_TIMEOUT_SEC = 180
+    # 思考盲区阈值（2026-11-04 生产误报）：OpenCode 对 reasoning 不做流式
+    # 落盘——实测 11429 字符的思考 part 存活 67.9s 期间 REST 全接口零增量
+    # （part/message/session 的 updated 全部冻结在思考结束时刻）。单次思考
+    # 超过 STALL_TIMEOUT_SEC 的活回合会被误判 stalled 并 abort。判定为
+    # 「思考盲区」（step 进行中，或最后一条消息无任何实质 part 且未终结，
+    # 见 _thinking_blindspot）的冻结改用本阈值——盲区与 provider 真死在
+    # 轮询视角不可区分，只能拉长不能免除。0 = 禁用分层（一律 STALL 阈值）。
+    THINKING_STALL_TIMEOUT_SEC = int(os.getenv('AI_BATCH_THINKING_STALL_SEC', '600'))
     # Tool-stuck watchdog: a tool call whose (name, status, output) signature
     # stays frozen this long is hung — question 挂起、MCP 服务无响应、bash 死循环
     # 都会被它接住（running tool 会让上面的 STALL 永远不触发，没有这道闸一个
@@ -2787,12 +2808,14 @@ class BatchWorker:
                 last_persist_at = time.time()
             active_tool = False
             finished_now = False
+            turn_last = None      # 本轮自己的最后一条 assistant（盲区判定用）
             for m in reversed(msgs):
                 if m.get('role') == 'assistant':
                     if baseline_ids and m.get('id') in baseline_ids:
                         continue  # message from before this (continued) turn
                     last_preview = self._preview_from(m)
                     last_message = m
+                    turn_last = m
                     # OpenCode 明说这一轮挂了 —— 立刻带着原因失败，不要等 STALL。
                     # 放在 finished 判断之前：出错的消息有时也会带上终态 finish，
                     # 那种情况下当成"成功"会更糟（子任务标 completed、输出为空）。
@@ -2858,21 +2881,33 @@ class BatchWorker:
                                 msgs, baseline_ids, last_sig,
                                 directory, oc_session_id))
             elif now - last_progress_at > self.STALL_TIMEOUT_SEC:
-                # 判死必须真死：不 abort 的话原回合在 OpenCode 里继续跑、
-                # 继续输出甚至完成——与任务行 failed 状态分裂（生产实测
-                # 「报 181 秒无进展但会话还在继续输出」，2026-11-03）。对齐
-                # tool-stuck 路径的 abort（先停掉别空转烧 token）；若判定后
-                # 走自动重试，continue_prompt 发进被 abort 的会话继续，同
-                # tool-stuck 的既有语义。
-                try:
-                    opencode_client.abort_session(oc_session_id, directory=directory)
-                except Exception:
-                    traceback.print_exc()
-                raise _SessionTimeout(
-                    int(now - last_progress_at),
-                    reason='stalled (no progress)',
-                    diagnosis=self._stall_diagnosis(
-                        msgs, baseline_ids, last_sig, directory, oc_session_id))
+                # 思考盲区分层（2026-11-04 生产误报）：OpenCode 不流式落盘
+                # reasoning，单次思考 >STALL 的活回合在轮询视角与真死不可
+                # 区分。盲区形态（step 进行中 / 无任何实质 part）改用更长的
+                # THINKING 阈值；其余冻结（已有输出后卡死）维持 STALL 秒杀。
+                frozen = now - last_progress_at
+                blindspot = self._thinking_blindspot(turn_last)
+                limit = (self.THINKING_STALL_TIMEOUT_SEC
+                         if blindspot and self.THINKING_STALL_TIMEOUT_SEC > 0
+                         else self.STALL_TIMEOUT_SEC)
+                if frozen > limit:
+                    # 判死必须真死：不 abort 的话原回合在 OpenCode 里继续跑、
+                    # 继续输出甚至完成——与任务行 failed 状态分裂（生产实测
+                    # 「报 181 秒无进展但会话还在继续输出」，2026-11-03）。对齐
+                    # tool-stuck 路径的 abort（先停掉别空转烧 token）；若判定后
+                    # 走自动重试，continue_prompt 发进被 abort 的会话继续，同
+                    # tool-stuck 的既有语义。
+                    try:
+                        opencode_client.abort_session(oc_session_id,
+                                                      directory=directory)
+                    except Exception:
+                        traceback.print_exc()
+                    raise _SessionTimeout(
+                        int(frozen),
+                        reason='stalled (no progress)',
+                        diagnosis=self._stall_diagnosis(
+                            msgs, baseline_ids, last_sig, directory,
+                            oc_session_id))
             time.sleep(self.POLL_INTERVAL_SEC)
         # 硬上限到点时若稳定窗已有 ≥1 次确认（回合实际已完结、只差确认轮询），
         # 按完成收口而不是超时——稳定窗不应把最后一刻完成的回合误判成超时失败。
@@ -2947,25 +2982,62 @@ class BatchWorker:
         return last_preview, last_message
 
     @staticmethod
+    def _has_substantive_part(msg: dict) -> bool:
+        """消息里是否有 REST 可见的实质内容（非空 text/reasoning 或工具
+        part）——思考盲区判定的底座：OpenCode 思考期间这些全都不存在。"""
+        content = msg.get('content') or []
+        return any(
+            ((p.get('type') in ('text', 'reasoning') and p.get('text'))
+             or p.get('type') == 'tool_use')
+            for p in content if isinstance(p, dict))
+
+    @staticmethod
+    def _thinking_blindspot(turn_last: dict | None) -> bool:
+        """本轮是否处于「思考盲区」：OpenCode 只在 step 结束时一次性落盘
+        reasoning 文本（实测 68s 的思考期间 part/message/session 的 REST
+        视角全部零增量），思考进行中的回合与 provider 真死在轮询视角不可
+        区分——只能识别形态、拉长阈值，不能免除判死。
+
+        形态二选一：
+        1. step 进行中（step-start 已落盘、step-finish 未落）——新版 OC
+           信号，消息里即便已有旧 step 的 text/tool part 也算；
+        2. 最后一条消息无任何实质 part（无非空 text/reasoning、无
+           tool_use）且未终结未报错——涵盖回合刚派发还没首条消息、以及
+           旧版 OC（无 step 标记）纯思考的兜底。"""
+        if turn_last is None:
+            return True     # 首条 assistant 还没落：模型在思考/网关在排队
+        if turn_last.get('error') or turn_last.get('finished'):
+            return False
+        if turn_last.get('step_active'):
+            return True
+        return not BatchWorker._has_substantive_part(turn_last)
+
+    @staticmethod
     def _progress_signature(msgs: list) -> tuple:
         """A cheap proxy for forward progress: (#assistant messages, total text
-        length, tool activity). Changes whenever the model emits a new message,
-        more text, OR a tool advances (new tool call / status change / growing
-        output) — so a delegating subagent (a long-running `task` tool) counts as
-        progress instead of looking 'stalled'."""
+        length, tool activity, open steps). Changes whenever the model emits a
+        new message, more text, OR a tool advances (new tool call / status
+        change / growing output) — so a delegating subagent (a long-running
+        `task` tool) counts as progress instead of looking 'stalled'.
+        step 标记同样算进展：step-start 在 step 开始瞬间落盘、step-finish 在
+        结束时落盘（reasoning 文本只在 step 结束时一次性可见），多回合
+        「思考→工具→再思考」的每个 step 边界都会刷新冻结计时。"""
         count = 0
         total_text = 0
         tool_sig: list = []
+        open_steps = 0
         for m in msgs:
             if m.get('role') == 'assistant':
                 count += 1
+                if m.get('step_active'):
+                    open_steps += 1
                 for p in (m.get('content') or []):
                     if p.get('type') in ('text', 'reasoning'):
                         total_text += len(p.get('text') or '')
                     elif p.get('type') == 'tool_use':
                         tool_sig.append((p.get('name'), p.get('status'),
                                          p.get('output_len') or 0))
-        return (count, total_text, tuple(tool_sig))
+        return (count, total_text, tuple(tool_sig), open_steps)
 
     def _stall_diagnosis(self, msgs: list, baseline_ids: set | None,
                          last_sig, directory: str,
@@ -2988,6 +3060,7 @@ class BatchWorker:
                 d['lastMsgId'] = m.get('id')
                 d['finish'] = m.get('finish')
                 d['runningTool'] = bool(m.get('running_tool'))
+                d['stepActive'] = bool(m.get('step_active'))
                 err = m.get('error')
                 if err:
                     d['msgError'] = (err.get('name')
@@ -2996,6 +3069,9 @@ class BatchWorker:
                          if isinstance(p, dict) and p.get('type') == 'tool_use']
                 d['toolParts'] = [{'name': p.get('name'), 'status': p.get('status')}
                                   for p in parts[-5:]]   # 最近 5 个，防长尾
+                # 思考盲区标志（2026-11-04）：事后区分「盲区误杀（真在思考）」
+                # 与「有输出后真死」——前者 emptyParts/stepActive 为真。
+                d['emptyParts'] = not self._has_substantive_part(m)
                 break
             if last_sig is not None:
                 d['sig'] = str(last_sig)
