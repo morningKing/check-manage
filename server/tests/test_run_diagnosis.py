@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 
-from utils.run_diagnosis import build_run_diagnosis, DIMENSION_KEYS
+from ai.batch.run_diagnosis import build_run_diagnosis, DIMENSION_KEYS
 
 
 def test_table_exists(db_conn):
@@ -123,7 +123,7 @@ def test_promise_action_lazy_fill_via_existing_audit(db_conn, monkeypatch):
     """lazy-fill：无步骤核对行时 best-effort 调既有 ensure_diagnosis_for_session
     现算再读（2026-10-27 认可）；直接种子了 step 行的上面几个用例即证明
     「已有行不触发」。"""
-    import utils.trace_auditor as ta
+    from ai.batch import trace_auditor as ta
     attempt, sid = _seed_attempt(db_conn)          # 不种 step_rows → 无行
     calls = []
 

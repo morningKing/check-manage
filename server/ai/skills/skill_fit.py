@@ -476,5 +476,5 @@ def _resolve_oc_global_fallback(kind: str, name: str) -> dict | None:
     p = os.path.join(d, 'SKILL.md')
     if not os.path.isfile(p):
         return None
-    from utils.execution_audit import sha256_file
+    from ai.batch.execution_audit import sha256_file
     return {'path': p, 'contentHash': sha256_file(p), 'source': 'oc_global'}

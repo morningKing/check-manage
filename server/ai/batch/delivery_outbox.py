@@ -145,7 +145,7 @@ def _settle(oid: str, batch_id: str, ok: bool, attempt_count: int,
     # 成功）/ failed（确定性拒绝）/ unknown（超时/连接类不确定结局——恢复
     # 决策表据此禁自动重放，转 needs_review 人工复核，10 号 §3.2）
     try:
-        from utils import execution_effect
+        from ai.batch import execution_effect as execution_effect
         if event_ref:
             effect_status = 'committed' if ok else (
                 'unknown' if uncertain else 'failed')
@@ -165,7 +165,7 @@ def _settle(oid: str, batch_id: str, ok: bool, attempt_count: int,
                              (batch_id,))
                 _batch_alive = _cur.fetchone() is not None
         if _batch_alive:
-            from utils import batch_events
+            from ai.batch import batch_events as batch_events
             batch_events.append_event(
                 batch_id, 'delivery.sent' if ok else 'delivery.failed',
                 aggregate_type='delivery', aggregate_id=oid,
@@ -314,7 +314,7 @@ class OutboxDeliveryLoop:
         if (self._thread and self._thread.is_alive()) or \
                 (self._retry_thread and self._retry_thread.is_alive()):
             return  # 已在投递或正在等待租约：不重复起线程
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         self._owner = execution_lease.owner_id()
         ok, _ = execution_lease.acquire('delivery', self._owner,
                                         lease_kind='delivery')
@@ -334,7 +334,7 @@ class OutboxDeliveryLoop:
         self._thread.start()
 
     def _acquire_retry(self):
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         while not self._stop.is_set():
             if self._stop.wait(self.RETRY_SEC):
                 return
@@ -351,7 +351,7 @@ class OutboxDeliveryLoop:
             return
 
     def _loop(self):
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         logger.info('outbox delivery loop started')
 
         def _hb():
@@ -376,7 +376,7 @@ class OutboxDeliveryLoop:
             if t and t.is_alive():
                 t.join(timeout=3)
         if self._holds_lease:
-            from utils import execution_lease
+            from ai.batch import execution_lease as execution_lease
             execution_lease.release('delivery', self._owner)
             self._holds_lease = False
 

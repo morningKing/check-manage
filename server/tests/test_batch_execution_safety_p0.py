@@ -821,7 +821,7 @@ def test_f12_retention_registered_once():
 # ---------------------------------------------------------------------------
 
 def test_lease_single_owner(db_conn):
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     key = 'batch-test-' + uuid.uuid4().hex[:8]
     owner_a = execution_lease.owner_id()
     owner_b = execution_lease.owner_id()
@@ -843,7 +843,7 @@ def test_worker_start_without_lease_disables_dispatcher(db_conn):
     """抢占不到租约 → dispatcher 不启动（多进程只有一个实例跑 worker）。
     用独立租约 key 隔离（dev 后端长期持有 'batch' 租约）。"""
     from utils.batch_engine import BatchWorker
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     key = 'batch-test-' + uuid.uuid4().hex[:8]
     owner = execution_lease.owner_id()
     ok, _ = execution_lease.acquire(key, owner, ttl_sec=300)
@@ -868,7 +868,7 @@ def test_worker_start_lease_loop_survives(db_conn):
     退出、续租从未真正运行——start() 全流程此前无测试覆盖。"""
     import time as _time
     from utils.batch_engine import BatchWorker
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     key = 'batch-test-' + uuid.uuid4().hex[:8]
     w = BatchWorker()
     w._lease_key = key

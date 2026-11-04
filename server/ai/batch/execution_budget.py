@@ -153,7 +153,7 @@ def evaluate_batch_budget(batch_id: str) -> dict:
     """子任务终态后调用：预算判定。返回
     {'exceeded': bool, 'dimension': str|None, 'action': 'warn'|'drain'|'abort',
      'budget': bool(是否存在)}。超限写 budget.exceeded 事件。"""
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     budget = get_budget('batch', batch_id)
     if not budget:
         return {'exceeded': False, 'dimension': None, 'action': None,

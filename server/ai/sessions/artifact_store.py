@@ -107,7 +107,7 @@ def ingest_session_outputs(session_id: str, workspace_path: str, *,
                         with open(p, 'rb') as _f:
                             for _chunk in iter(lambda: _f.read(1 << 20), b''):
                                 _h2.update(_chunk)
-                        from utils.execution_effect import record_effect
+                        from ai.batch.execution_effect import record_effect
                         record_effect(session_id, 'artifact',
                                       f'{session_id}:outputs/{fn}:'
                                       f"{_h2.hexdigest()[:16]}",

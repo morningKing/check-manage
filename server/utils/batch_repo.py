@@ -56,8 +56,8 @@ def recompute_batch_status_tx(cur, batch_id: str, conn=None,
     out = dict(zip(('status', 'done', 'failed', 'total',
                     'callback_url', 'callback_secret'), cur.fetchone()))
     if out.get('status') in BATCH_TERMINAL_STATUSES and conn is not None:
-        from utils import batch_events as _be
-        from utils import delivery_outbox as _outbox
+        from ai.batch import batch_events as _be
+        from ai.batch import delivery_outbox as _outbox
         eid = _be.append_event(
             batch_id, 'batch.status', aggregate_type='batch',
             aggregate_id=batch_id,
@@ -76,7 +76,7 @@ def recompute_batch_status_tx(cur, batch_id: str, conn=None,
             # conn 传入时 SAVEPOINT 隔离、随外层一起提交/回滚，外层回滚
             # 不再留下孤儿 planned effect
             if session_id:
-                from utils import execution_effect as _eff
+                from ai.batch import execution_effect as _eff
                 _eff.record_effect(session_id, 'callback', f'outbox:{eid}',
                                    batch_id=batch_id, request=eid, conn=conn)
     return out
@@ -162,7 +162,7 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                 if batch_id else {}
             # P1：child.status 事件与状态写入同事务（spec §7.1）
             if batch_id:
-                from utils import batch_events as _be
+                from ai.batch import batch_events as _be
                 _be.append_event(batch_id, 'child.status',
                                  aggregate_type='child', aggregate_id=sid,
                                  execution_generation=generation,
@@ -1647,7 +1647,7 @@ def force_stop_batch(batch_id: str, *, operator: str,
                 stopped['ocAborted'] += 1
             except Exception:
                 pass
-    from utils.execution_audit import finish_latest_running
+    from ai.batch.execution_audit import finish_latest_running
     for r in rows:
         try:
             finish_latest_running(r[0], 'stopped', error_code='FORCE_STOPPED')

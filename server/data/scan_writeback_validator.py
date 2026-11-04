@@ -84,7 +84,7 @@ def record_violations_to_audit(session_id: str, violations: list) -> None:
     if not violations:
         return
     try:
-        from utils import execution_audit
+        from ai.batch import execution_audit as execution_audit
         attempts = execution_audit.get_attempts(session_id, limit=1)
         if not attempts:
             return

@@ -79,7 +79,7 @@ def start_status_badge_timeout_scheduler(app):
         return
     # P2-B2：统一租约框架——抢不到 status_badge scheduler 租约就不在本进程
     # 启动（多实例部署只有一份在跑；本批不做后台重试，简单 return）。
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     ok, _ = execution_lease.acquire('status_badge', execution_lease.owner_id(),
                                     lease_kind='scheduler')
     if not ok:

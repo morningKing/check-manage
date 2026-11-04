@@ -82,7 +82,7 @@ def import_recorded_files(session_id, workspace_path, paths, uploaded_by=None,
             import hashlib as _hashlib
             with open(abs_path, 'rb') as _f:
                 _ch = _hashlib.sha256(_f.read()).hexdigest()[:16]
-            from utils.execution_effect import record_effect, settle_effect
+            from ai.batch.execution_effect import record_effect, settle_effect
             _eff = record_effect(session_id, 'file_import',
                                  f'{session_id}:{p}:{_ch}')
             if _eff:

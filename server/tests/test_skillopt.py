@@ -81,10 +81,10 @@ def test_runtime_event_missing_fields_rejected():
 def test_runtime_event_confirms_invocation_and_manifest():
     fake, cur, _ = _mock_db(fetchone=('sess_real',))
     with patch('ai.skills.skillopt.get_db', fake), \
-         patch('utils.execution_audit.get_attempts',
+         patch('ai.batch.execution_audit.get_attempts',
                lambda sid, limit=3: [{'id': 'att_9'}]), \
-         patch('utils.execution_audit.set_manifest_result') as smr, \
-         patch('utils.execution_audit.record_event') as rev:
+         patch('ai.batch.execution_audit.set_manifest_result') as smr, \
+         patch('ai.batch.execution_audit.record_event') as rev:
         out = so.record_runtime_skill_event({
             'skillName': 'pdf', 'sessionID': 'ses_oc1', 'messageID': 'm1',
             'partID': 'p1', 'status': 'completed', 'title': 't'})

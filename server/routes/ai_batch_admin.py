@@ -22,7 +22,7 @@ from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
                               reset_failed_to_pending)
 from common.operation_log import log_operation
 from ai.sessions.session_file_import import MAX_IMPORT_PATHS, import_recorded_files
-from utils.subtask_repo import get_subtask_messages
+from ai.batch.subtask_repo import get_subtask_messages
 from utils.workspace import WorkspacePathError, safe_resolve
 from utils.workspace_changes import file_diff, git_changes, read_file_preview
 from utils.workspace_outputs import augment_with_data_file_id, list_session_files
@@ -526,7 +526,7 @@ def child_file_diff(batch_id, sid):
 def deliveries(batch_id):
     """outbox 投递状态（P1 §10 管理面）。前缀已含 batches，路由不要再写一层
     （此前 /batches/<id>/deliveries 拼成双前缀，前端调用恒 404）。"""
-    from utils.delivery_outbox import list_outbox
+    from ai.batch.delivery_outbox import list_outbox
     return jsonify({'batchId': batch_id, 'deliveries': list_outbox(batch_id)})
 
 
@@ -534,7 +534,7 @@ def deliveries(batch_id):
 @require_permission('admin.ai_chat_admin')
 def delivery_replay(oid):
     """人工重放：dead_letter/failed → pending。"""
-    from utils.delivery_outbox import replay_dead_letter, list_outbox_by_id
+    from ai.batch.delivery_outbox import replay_dead_letter, list_outbox_by_id
     if not replay_dead_letter(oid):
         return jsonify({'error': 'deliveries 不存在或状态不允许重放'}), 404
     return jsonify({'id': oid, 'status': 'pending',

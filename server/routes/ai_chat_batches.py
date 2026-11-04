@@ -175,7 +175,7 @@ def create():
     # 预算表，晚落会让首批子任务超上限被认领。create_batch 的 RETURNING 行
     # 不含预算子查询——落完重拉 detail，保证创建响应回显真实生效值
     if max_concurrency is not None:
-        from utils.execution_budget import upsert_batch_concurrency
+        from ai.batch.execution_budget import upsert_batch_concurrency
         upsert_batch_concurrency(result['batch']['id'], max_concurrency)
         result = get_batch_detail(g.current_user['userId'], result['batch']['id'])
     # Wake the worker so it picks up the new pending sessions immediately.
@@ -432,7 +432,7 @@ def update_config(batch_id):
     # 快照生成于本次写入之前——重拉一次，否则响应带旧值、前端列表行被
     # 旧值替换，编辑对话框重开就回显旧上限（E2E 实证）
     if max_concurrency_set:
-        from utils.execution_budget import upsert_batch_concurrency
+        from ai.batch.execution_budget import upsert_batch_concurrency
         upsert_batch_concurrency(batch_id, max_concurrency)
         result = get_batch_detail(g.current_user['userId'], batch_id)
     # 未终态子任务同步替换期望,已终态子任务的历史核对结果保持原样。
@@ -698,7 +698,7 @@ def submit_batch_command(batch_id):
     """统一命令入口（P1 §8.1，缺口补齐 4.3）：内部 UI/脚本经命令表落意图，
     幂等键缺省由 (type, batch, requester) 派生；同步应用（既有 HTTP 语义，
     pause 立即生效——实现取舍见 utils/execution_commands.py docstring）。"""
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     from utils.batch_repo import (pause_batch, resume_batch, cancel_batch,
                                   reset_failed_to_pending)
     body = request.get_json(silent=True) or {}
@@ -796,7 +796,7 @@ def list_batch_commands(batch_id):
 @login_required
 def batch_command_status(batch_id, command_id):
     """命令状态查询（幂等提交后的轮询面）。"""
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     cmd = execution_commands.get_command(command_id)
     if not cmd or cmd.get('batchId') != batch_id:
         return jsonify({'error': 'not found'}), 404
@@ -810,7 +810,7 @@ def force_stop(batch_id):
     """P1 §6.4 `force_stop`（缺口补齐 4）：drain 超时后的管理员强制通道。
     立即取消全部非终态子任务（fencing+1 使旧执行体失效），批次落 failed。"""
     from utils.batch_repo import force_stop_batch
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     user = g.current_user
     if user.get('role') != 'admin':
         return jsonify({'error': {'code': 'FORBIDDEN',
@@ -841,7 +841,7 @@ def force_stop(batch_id):
 @login_required
 def batch_events_page(batch_id):
     """事件分页（管理/排障用）：与对外 /v1/ai-batches/<id>/events 同一事实源。"""
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     body = get_batch_detail(g.current_user['userId'], batch_id)
     if not body:
         return jsonify({'error': 'not found'}), 404
@@ -938,7 +938,7 @@ def batch_events_sse():
     last_event_id = request.headers.get('Last-Event-ID') or ''
 
     def generate():
-        from utils import batch_events
+        from ai.batch import batch_events as batch_events
         yield ': connected\n\n'
         # Last-Event-ID 形如 "<batchId>:<seq>"——重连时按批次恢复游标
         if last_event_id and ':' in last_event_id:

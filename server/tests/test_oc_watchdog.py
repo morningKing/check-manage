@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from utils import oc_watchdog
+from ai.batch import oc_watchdog as oc_watchdog
 from ai.opencode import opencode_global as ocg
 
 

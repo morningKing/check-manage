@@ -1,4 +1,4 @@
-"""server/utils/subtask_repo.py 的测试（真实 DB）。"""
+"""server/ai/batch/subtask_repo.py 的测试（真实 DB）。"""
 import os
 import sys
 import uuid
@@ -151,7 +151,7 @@ def test_get_subtask_messages_ordered_by_seq_not_created_at():
     返回，而不是按 created_at。若实现误按 created_at 排序，结果会是
     ['第二条','第一条','第三条']（完全颠倒）而不是插入顺序——两者互不相等、
     不吃任何 tie-break，改错排序列在默认命令下 100% 变红。"""
-    from utils.subtask_repo import get_subtask_messages
+    from ai.batch.subtask_repo import get_subtask_messages
     owner, other = 'u-sub-a-' + uuid.uuid4().hex[:6], 'u-sub-b-' + uuid.uuid4().hex[:6]
     sid, subid, _ = _seed_subtask_with_messages(owner, other, tied_created_at=True)
     try:
@@ -164,7 +164,7 @@ def test_get_subtask_messages_ordered_by_seq_not_created_at():
 
 
 def test_get_subtask_messages_truncates_to_limit():
-    from utils.subtask_repo import get_subtask_messages
+    from ai.batch.subtask_repo import get_subtask_messages
     owner, other = 'u-sub-a-' + uuid.uuid4().hex[:6], 'u-sub-b-' + uuid.uuid4().hex[:6]
     sid, subid, _ = _seed_subtask_with_messages(owner, other)
     try:
@@ -178,7 +178,7 @@ def test_get_subtask_messages_truncates_to_limit():
 
 def test_get_subtask_messages_owner_scoped_rejects_wrong_user():
     """实时聊天路径必须校验归属；传错 owner_user_id 一律 None（404），不泄漏存在性。"""
-    from utils.subtask_repo import get_subtask_messages
+    from ai.batch.subtask_repo import get_subtask_messages
     owner, other = 'u-sub-a-' + uuid.uuid4().hex[:6], 'u-sub-b-' + uuid.uuid4().hex[:6]
     sid, subid, _ = _seed_subtask_with_messages(owner, other)
     try:
@@ -191,7 +191,7 @@ def test_get_subtask_messages_owner_scoped_rejects_wrong_user():
 def test_get_subtask_messages_unscoped_for_admin_path():
     """owner_user_id=None（管理员路径）不做归属校验——鉴权已经在路由层的
     require_permission('admin.ai_chat_admin') 做过了。"""
-    from utils.subtask_repo import get_subtask_messages
+    from ai.batch.subtask_repo import get_subtask_messages
     owner, other = 'u-sub-a-' + uuid.uuid4().hex[:6], 'u-sub-b-' + uuid.uuid4().hex[:6]
     sid, subid, _ = _seed_subtask_with_messages(owner, other)
     try:
@@ -201,12 +201,12 @@ def test_get_subtask_messages_unscoped_for_admin_path():
 
 
 def test_get_subtask_messages_missing_subtask_is_none():
-    from utils.subtask_repo import get_subtask_messages
+    from ai.batch.subtask_repo import get_subtask_messages
     assert get_subtask_messages('ses_does_not_exist') is None
 
 
 def test_get_subtask_messages_returns_subtask_summary():
-    from utils.subtask_repo import get_subtask_messages
+    from ai.batch.subtask_repo import get_subtask_messages
     owner, other = 'u-sub-a-' + uuid.uuid4().hex[:6], 'u-sub-b-' + uuid.uuid4().hex[:6]
     sid, subid, _ = _seed_subtask_with_messages(owner, other)
     try:

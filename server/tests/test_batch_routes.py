@@ -836,7 +836,7 @@ def test_concurrency_budget_blocks_claim_after_ui_set(
         setup_app, db_conn, tmp_path, monkeypatch):
     """入口到引擎闭环冒烟：UI 设并发 1 后，concurrency_blocked_batches 把该批
     判为已满（1 个 running = 上限），pending 子任务本轮不认领。"""
-    from utils.execution_budget import concurrency_blocked_batches
+    from ai.batch.execution_budget import concurrency_blocked_batches
     client, admin_headers = setup_app
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     f = _stage_one(client, admin_headers, name='mce.txt', upload_session_id='u-mce')

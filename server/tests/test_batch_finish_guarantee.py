@@ -107,7 +107,7 @@ def test_t4_premature_finish_leaves_evidence(monkeypatch):
     aborted = []
     w, _ = _mk_worker(monkeypatch, [[m1], [m1], [m1, m2]], aborted)
     events = []
-    import utils.batch_events as be
+    from ai.batch import batch_events as be
     monkeypatch.setattr(
         be, 'append_event',
         lambda *a, **k: events.append((a, k)) or 'eid')

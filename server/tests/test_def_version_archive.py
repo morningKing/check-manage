@@ -94,7 +94,7 @@ def test_register_def_version_empty_hash_allowed(db_conn):
 def test_register_definition_versions_archives_known_and_mismatch(db_conn, tmp_path):
     """spec §4.3：未登记 hash 读文件带正文注册；已知 hash 不重读（返回 0）；
     manifest hash 与重读正文 sha256 不一致 → 只登记 hash 不归档。"""
-    from utils.execution_audit import register_definition_versions
+    from ai.batch.execution_audit import register_definition_versions
     name = f'arch-skill-{uuid.uuid4().hex[:8]}'
     d = tmp_path / name
     d.mkdir()
@@ -136,7 +136,7 @@ def test_register_definition_versions_archives_known_and_mismatch(db_conn, tmp_p
 def test_register_definition_versions_non_utf8_degrades_to_hash_only(db_conn, tmp_path):
     """非 UTF-8 定义文件（如 GBK）→ 只登记 hash 不归档，不中止整个注册批；
     同批正常 utf-8 定义照常归档（比照 mismatch 降级语义）。"""
-    from utils.execution_audit import register_definition_versions
+    from ai.batch.execution_audit import register_definition_versions
     gbk_name = f'arch-skill-{uuid.uuid4().hex[:8]}'
     utf8_name = f'arch-skill-{uuid.uuid4().hex[:8]}'
     d = tmp_path / 'nonutf8-batch'
@@ -175,7 +175,7 @@ def test_register_definition_versions_non_utf8_degrades_to_hash_only(db_conn, tm
 
 def test_collect_and_save_manifests_registers_versions(db_conn, tmp_path, monkeypatch):
     """collect_and_save_workspace_manifests 接线：执行落 manifest 后兜底归档。"""
-    import utils.execution_audit as _ea
+    from ai.batch import execution_audit as _ea
     name = f'arch-skill-{uuid.uuid4().hex[:8]}'
     ws = tmp_path / 'ws'
     skills = ws / '.opencode' / 'skills' / name

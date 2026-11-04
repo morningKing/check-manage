@@ -37,7 +37,7 @@ def test_mark_done_reparks_takeover_turn(monkeypatch):
 
     monkeypatch.setattr('utils.batch_repo.try_repark_transition', fake_repark)
     audit = []
-    monkeypatch.setattr('utils.execution_audit.finish_latest_running',
+    monkeypatch.setattr('ai.batch.execution_audit.finish_latest_running',
                         lambda sid, status, **kw: audit.append(status))
     monkeypatch.setattr('ai.skills.skill_fit.compute_for_session', lambda sid: None)
     transition_calls = []
@@ -64,7 +64,7 @@ def test_mark_done_falls_through_when_not_takeover(monkeypatch):
         return {'batch_status': None}      # 批未整体收口：不触发 callback
 
     monkeypatch.setattr('utils.batch_repo.transition_child', fake_transition)
-    monkeypatch.setattr('utils.execution_audit.finish_latest_running',
+    monkeypatch.setattr('ai.batch.execution_audit.finish_latest_running',
                         lambda *a, **kw: None)
     monkeypatch.setattr('ai.skills.skill_fit.compute_for_session', lambda sid: None)
     worker = _worker()
@@ -82,7 +82,7 @@ def test_mark_failed_reparks_takeover_turn(monkeypatch):
 
     monkeypatch.setattr('utils.batch_repo.try_repark_transition', fake_repark)
     audit = []
-    monkeypatch.setattr('utils.execution_audit.finish_latest_running',
+    monkeypatch.setattr('ai.batch.execution_audit.finish_latest_running',
                         lambda sid, status, **kw: audit.append(status))
     monkeypatch.setattr('ai.skills.skill_fit.compute_for_session', lambda sid: None)
     transition_calls = []
@@ -113,7 +113,7 @@ def test_mark_failed_falls_through_when_not_takeover(monkeypatch):
     def fake_audit(sid, status, **kw):
         events.append(f'audit:{status}')
 
-    monkeypatch.setattr('utils.execution_audit.finish_latest_running', fake_audit)
+    monkeypatch.setattr('ai.batch.execution_audit.finish_latest_running', fake_audit)
 
     def fake_transition(sid, status, **kw):
         events.append(f'transition:{status}')

@@ -118,7 +118,7 @@ def run_events(run_id):
         after_seq = max(0, int(request.args.get('afterSeq', 0)))
     except (TypeError, ValueError):
         return err('afterSeq 必须是整数', 'INVALID_ARGUMENT', 400)
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     rows = batch_events.read_events(run_id, after_seq=after_seq, limit=200)
     out = [{'eventId': r['event_id'], 'eventSeq': r['event_seq'],
             'type': r['event_type'], 'at': r.get('createdAt'),

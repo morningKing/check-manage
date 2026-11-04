@@ -217,7 +217,7 @@ def analyze_session(session_id):
     from utils.workspace import cleanup_session_workspace, create_session_workspace
     from config import AI_WORKSPACE_ROOT
     from ai.opencode.opencode_client import OpenCodeClient as _OC  # noqa: F401 (alias below)
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     from ai.opencode.opencode_client import OpenCodeClient
 
     analysis_model = get_default_chat_model()
@@ -489,8 +489,8 @@ def _manifest_camel(m: dict) -> dict:
 
 
 def _attempt_block(sid: str, attempt_id: str | None = None) -> dict:
-    from utils import execution_audit
-    from utils import trace_auditor
+    from ai.batch import execution_audit as execution_audit
+    from ai.batch import trace_auditor as trace_auditor
     attempts = execution_audit.get_attempts(sid, limit=20)
     if attempt_id:
         target = next((a for a in attempts if a['id'] == attempt_id), None)
@@ -539,7 +539,7 @@ def execution_audit_overview(sid):
 @ai_execution_admin_bp.get('/sessions/<sid>/execution-events')
 @require_permission('admin.ai_chat_admin')
 def execution_audit_events(sid):
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     from ai.sessions.session_admin_repo import admin_get_session_detail
     if not admin_get_session_detail(sid):
         return jsonify({'error': '会话不存在'}), 404
@@ -556,7 +556,7 @@ def execution_audit_events(sid):
 def execution_audit_prompt(sid):
     """Effective-prompt snapshot. Hashes/augmentations always; plaintext only
     when EXECUTION_AUDIT_PROMPT_PLAINTEXT is on (redaction_status='plaintext')."""
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     from ai.sessions.session_admin_repo import admin_get_session_detail
     if not admin_get_session_detail(sid):
         return jsonify({'error': '会话不存在'}), 404
@@ -632,7 +632,7 @@ def analysis_report(analysis_id):
     report = row[3] if isinstance(row[3], dict) else {}
     # live-compile the deterministic audit for the target attempt on demand
     try:
-        from utils import trace_auditor
+        from ai.batch import trace_auditor as trace_auditor
         fresh = trace_auditor.ensure_diagnosis_for_session(row[1])
         if isinstance(fresh, dict) and fresh.get('execution'):
             report = fresh
@@ -1684,7 +1684,7 @@ def perf_slow_tasks():
 @ai_execution_admin_bp.post('/attempts/<attempt_id>/run-diagnosis')
 @require_permission('admin.ai_chat_admin')
 def run_diagnosis_generate(attempt_id):
-    from utils.run_diagnosis import build_run_diagnosis
+    from ai.batch.run_diagnosis import build_run_diagnosis
     d = build_run_diagnosis(attempt_id)
     if d is None:
         return jsonify({'error': 'attempt 不存在'}), 404

@@ -139,7 +139,7 @@ def start(app=None):
         logger.info('oc-watchdog disabled (AI_OC_WATCHDOG_INTERVAL_SEC=0)')
         return None
     from apscheduler.schedulers.background import BackgroundScheduler
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
 
     owner = execution_lease.owner_id()
 

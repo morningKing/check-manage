@@ -161,7 +161,7 @@ def test_reconcile_skips_unexpired_lease(db_conn, user_id, monkeypatch):
 def test_reconcile_unknown_effect_needs_review(db_conn, user_id, monkeypatch):
     """存在 unknown 副作用 → needs_review（禁止自动重放）。"""
     from utils.batch_engine import BatchWorker
-    from utils import execution_effect
+    from ai.batch import execution_effect as execution_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _set_child(db_conn, sids[0], status='running', lease_owner='gone',
                lease_until=datetime.now() - timedelta(seconds=60),
@@ -293,7 +293,7 @@ def test_fi_delivery_crash_leaves_sending_row_reclaimed(db_conn, user_id,
                                                         monkeypatch):
     """投递中 kill 进程 → 行停留 sending；重投递循环按 M12 回收语义收敛
     （最终 delivered），不永久卡死。"""
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid, sids = _seed_batch(db_conn, user_id, 1)
     oid = 'obx-fi-' + uuid.uuid4().hex[:8]
     eid = 'evt-fi-' + uuid.uuid4().hex[:8]
@@ -342,7 +342,7 @@ def test_fi_reconcile_skips_when_opencode_down(db_conn, user_id, monkeypatch):
 def test_events_concurrent_append_no_loss(db_conn, user_id):
     """并发写同一批次：seq 严格单调、无冲突无丢失（P1-5 根因修复）。"""
     from concurrent.futures import ThreadPoolExecutor
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     bid, _sids = _seed_batch(db_conn, user_id, 1)
     with ThreadPoolExecutor(max_workers=8) as ex:
         ids = list(ex.map(lambda i: batch_events.append_event(
@@ -356,7 +356,7 @@ def test_events_concurrent_append_no_loss(db_conn, user_id):
 
 
 def test_events_after_seq_semantics(db_conn, user_id):
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     bid, _sids = _seed_batch(db_conn, user_id, 1)
     for i in range(5):
         batch_events.append_event(bid, 'child.status', payload={'i': i})
@@ -369,7 +369,7 @@ def test_events_after_seq_semantics(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_outbox_enqueue_idempotent(db_conn, user_id):
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid, _sids = _seed_batch(db_conn, user_id, 1)
     evt = f'evt-1-{uuid.uuid4().hex[:8]}'
     o1 = delivery_outbox.enqueue(bid, target_url='http://cb.example/hook',
@@ -384,7 +384,7 @@ def test_outbox_enqueue_idempotent(db_conn, user_id):
 
 
 def test_outbox_delivery_and_replay(db_conn, user_id, monkeypatch):
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid, _sids = _seed_batch(db_conn, user_id, 1)
     delivery_outbox.enqueue(bid, target_url='http://cb.example/hook',
                             payload={'a': 1}, secret='s', event_id=f'evt-d1-{uuid.uuid4().hex[:8]}')
@@ -408,7 +408,7 @@ def test_outbox_delivery_and_replay(db_conn, user_id, monkeypatch):
 
 
 def test_outbox_dead_letter_and_manual_replay(db_conn, user_id, monkeypatch):
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid, _sids = _seed_batch(db_conn, user_id, 1)
     delivery_outbox.enqueue(bid, target_url='http://cb.example/dead',
                             payload={}, secret='', event_id=f'evt-dead-{uuid.uuid4().hex[:8]}')
@@ -429,7 +429,7 @@ def test_outbox_dead_letter_and_manual_replay(db_conn, user_id, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_command_idempotency(db_conn, user_id):
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     bid, _sids = _seed_batch(db_conn, user_id, 1)
     c1 = execution_commands.submit_command('pause', batch_id=bid,
                                            requested_by='u1',
@@ -451,7 +451,7 @@ def test_command_idempotency(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_budget_evaluate_and_claim_block(db_conn, user_id):
-    from utils import execution_budget
+    from ai.batch import execution_budget as execution_budget
     from utils.batch_engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     execution_budget.upsert_budget('batch', bid, max_tokens=100,
@@ -465,7 +465,7 @@ def test_budget_evaluate_and_claim_block(db_conn, user_id):
     assert verdict['exceeded'] and verdict['dimension'] == 'tokens'
     assert verdict['action'] == 'drain'
     # 事件可观测
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     evs = batch_events.read_events(bid, after_seq=0)
     assert any(e['event_type'] == 'budget.exceeded' for e in evs)
     # drain：dispatcher 不再认领该批次的 pending
@@ -482,7 +482,7 @@ def test_budget_evaluate_and_claim_block(db_conn, user_id):
 
 def test_attempt_running_unique_per_session(db_conn, user_id):
     import psycopg2
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     bid, sids = _seed_batch(db_conn, user_id, 1)
     a1 = execution_audit.create_attempt(sids[0], source_type='batch')
     a2 = execution_audit.create_attempt(sids[0], source_type='batch')
@@ -496,7 +496,7 @@ def test_attempt_running_unique_per_session(db_conn, user_id):
 def test_attempt_events_survive_concurrency(db_conn, user_id):
     """并发写同一 attempt 的事件：无丢失（FOR UPDATE 串行化，P1-5）。"""
     from concurrent.futures import ThreadPoolExecutor
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     bid, sids = _seed_batch(db_conn, user_id, 1)
     attempt = execution_audit.create_attempt(sids[0], source_type='batch')
     assert attempt
@@ -513,7 +513,7 @@ def test_attempt_events_survive_concurrency(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_effect_key_dedup_and_unknown(db_conn, user_id):
-    from utils import execution_effect
+    from ai.batch import execution_effect as execution_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     e1 = execution_effect.record_effect(sids[0], 'callback', 'cb-1',
                                         batch_id=bid)
@@ -534,7 +534,7 @@ def test_effect_key_dedup_and_unknown(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_checkpoint_latest_swap(db_conn, user_id):
-    from utils import execution_checkpoint
+    from ai.batch import execution_checkpoint as execution_checkpoint
     bid, sids = _seed_batch(db_conn, user_id, 1)
     c1 = execution_checkpoint.write_checkpoint(sids[0],
                                                checkpoint_type='dispatch',

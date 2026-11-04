@@ -96,7 +96,7 @@ def get_run(run_id):
 @login_required
 def run_events(run_id):
     """run 的事件时间线（事实源与批任务同为 ai_batch_events，batch_id=run id）。"""
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     if not orchestration_engine.get_run(run_id):
         return jsonify({'error': 'not found'}), 404
     try:

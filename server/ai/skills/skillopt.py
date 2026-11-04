@@ -164,7 +164,7 @@ def record_runtime_skill_event(payload: dict) -> dict:
     if not session_id or not skill:
         return {'ok': False, 'reason': 'missing fields'}
 
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     attempts = execution_audit.get_attempts(session_id, limit=3)
     attempt = attempts[0] if attempts else None
     attempt_id = attempt['id'] if attempt else None

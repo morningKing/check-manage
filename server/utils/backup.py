@@ -1301,7 +1301,7 @@ def start_backup_scheduler(app):
     """启动备份调度器后台线程"""
     # P2-B2：统一租约框架——抢不到 backup scheduler 租约就不在本进程启动
     # （多实例部署只有一份定时备份在跑；本批不做后台重试，简单 return）。
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     ok, _ = execution_lease.acquire('backup', execution_lease.owner_id(),
                                     lease_kind='scheduler')
     if not ok:

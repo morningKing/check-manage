@@ -58,12 +58,12 @@ def test_analyze_success(client, admin_headers, mock_conn):
          patch('config.get_default_chat_model', return_value={'provider': 'p', 'model': 'm'}), \
          patch('ai.skills.global_skills.inject_global_skills'), \
          patch('ai.skills.global_skills.inject_single_skill', return_value='/tmp/skill-src'), \
-         patch('utils.execution_audit.create_attempt', return_value=None), \
-         patch('utils.execution_audit.save_manifests'), \
-         patch('utils.execution_audit.record_event'), \
-         patch('utils.execution_audit.finish_latest_running'), \
-         patch('utils.execution_audit.scan_workspace_manifests', return_value=[]), \
-         patch('utils.execution_audit.sha256_file', return_value='h'), \
+         patch('ai.batch.execution_audit.create_attempt', return_value=None), \
+         patch('ai.batch.execution_audit.save_manifests'), \
+         patch('ai.batch.execution_audit.record_event'), \
+         patch('ai.batch.execution_audit.finish_latest_running'), \
+         patch('ai.batch.execution_audit.scan_workspace_manifests', return_value=[]), \
+         patch('ai.batch.execution_audit.sha256_file', return_value='h'), \
          patch('ai.opencode.opencode_client.OpenCodeClient', return_value=oc_client), \
          patch('ai.sessions.chat_persist.ensure_listener') as ensure_listener:
         resp = client.post('/ai/chat/admin/sessions/v2/sess_target/analyze',

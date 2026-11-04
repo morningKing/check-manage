@@ -69,7 +69,7 @@ from ai.sessions.chat_persist import (
     has_listener, live_listener_sids,
 )
 from ai.sessions.session_token import generate_token, revoke_token
-from utils.subtask_repo import get_subtask_messages
+from ai.batch.subtask_repo import get_subtask_messages
 from data.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
@@ -1112,7 +1112,7 @@ def send_message(sid):
     # Execution audit (execution-audit Spec §9.1): record the attempt at the
     # dispatch boundary — requested vs effective agent/model, prompt hashes,
     # and which augmentations were folded into the effective prompt.
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     _mentions = _agent_mention_names
     audit_attempt_id = execution_audit.create_attempt(
         session_id=sid, source_type='interactive', operation='send',

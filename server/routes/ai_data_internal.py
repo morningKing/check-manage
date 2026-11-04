@@ -103,7 +103,7 @@ def internal_execute():
             _body_hash = _hashlib.sha256(
                 _body_json.encode('utf-8')).hexdigest()[:16]
             effect_key = f'{session_id}:{method}:{path}:{_body_hash}'
-            from utils.execution_effect import record_effect
+            from ai.batch.execution_effect import record_effect
             # C4：登记时即存补偿所需的完整请求信息（method/path/body），
             # step 失败时 compensate_effect 据此回退 POST 创建的记录
             record_effect(
@@ -121,7 +121,7 @@ def internal_execute():
     parsed = resp.get_json(silent=True)
     if effect_key:
         try:
-            from utils.execution_effect import settle_effect_by_key
+            from ai.batch.execution_effect import settle_effect_by_key
             ok2 = resp.status_code < 400
             # external_ref 传 None：登记时已存补偿 JSON（method/path/body），
             # settle 的 COALESCE 不得覆盖——否则补偿依据丢失

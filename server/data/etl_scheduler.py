@@ -207,7 +207,7 @@ def start_etl_scheduler(app):
     # P2-B2：统一租约框架——抢不到 etl scheduler 租约就不在本进程启动
     # （多实例部署只有一份在跑；本批不做后台重试，简单 return）。
     # 放在 _restart_audit 之前：只有租约持有进程才做 running→error 复位。
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     ok, _ = execution_lease.acquire('etl', execution_lease.owner_id(),
                                     lease_kind='scheduler')
     if not ok:

@@ -184,7 +184,7 @@ def test_h4_concurrent_advance_dispatches_once(db_conn, user_id, monkeypatch,
 # ---------------------------------------------------------------------------
 
 def test_m12_sending_row_reclaimed(db_conn, user_id, monkeypatch):
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid = str(uuid.uuid4())
     oid = 'obx-m12-' + uuid.uuid4().hex[:8]
     eid = 'evt-m12-' + uuid.uuid4().hex[:8]
@@ -216,7 +216,7 @@ def test_m12_sending_row_reclaimed(db_conn, user_id, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_m14_event_failure_does_not_poison_txn(db_conn, user_id):
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     # 真实失败路径：预置同 event_id（uniq_batch_event_id 全局唯一），
@@ -363,8 +363,8 @@ def test_h4_failed_step_not_redispatched(db_conn, user_id, monkeypatch):
 
 def test_record_effect_same_transaction_rollback(db_conn, user_id):
     """record_effect(conn=…) 随外层事务提交/回滚——外层回滚不留孤儿 planned。"""
-    from utils import execution_effect
-    from utils.execution_effect import record_effect
+    from ai.batch import execution_effect as execution_effect
+    from ai.batch.execution_effect import record_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     with get_db() as conn:
@@ -382,7 +382,7 @@ def test_record_effect_same_transaction_rollback(db_conn, user_id):
 def test_settle_effect_by_key_transitions(db_conn, user_id):
     """settle 语义（10 号 §3.2）：failed/unknown → committed 允许（退避重试
     或人工重放成功的正向收口）；committed 终态不可再改。"""
-    from utils.execution_effect import record_effect, settle_effect_by_key
+    from ai.batch.execution_effect import record_effect, settle_effect_by_key
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     key = f'obx-settle-{uuid.uuid4().hex[:8]}'
@@ -402,8 +402,8 @@ def test_outbox_uncertain_delivery_sets_unknown_effect(db_conn, user_id,
                                                        monkeypatch):
     """unknown 写入方（10 号 §3.2）：超时/连接类不确定结局 → effect 落
     unknown（此前一律 failed，has_unknown_effects→needs_review 永不触发）。"""
-    from utils import delivery_outbox
-    from utils.execution_effect import record_effect
+    from ai.batch import delivery_outbox as delivery_outbox
+    from ai.batch.execution_effect import record_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     oid = 'obx-unc-' + uuid.uuid4().hex[:8]
@@ -477,7 +477,8 @@ def test_m1_reexecute_cas_miss_concurrent(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_outbox_loop_retry_thread_takeover(monkeypatch):
-    from utils import delivery_outbox, execution_lease
+    from ai.batch import delivery_outbox as delivery_outbox
+    from ai.batch import execution_lease as execution_lease
     calls = {'acquire': 0}
 
     def fake_acquire(key, owner, lease_kind=None):
@@ -502,7 +503,8 @@ def test_outbox_loop_retry_thread_takeover(monkeypatch):
 
 
 def test_scheduler_loop_retry_thread_takeover(monkeypatch):
-    from utils import execution_lease, orchestration_engine as eng2
+    from utils import orchestration_engine as eng2
+    from ai.batch import execution_lease as execution_lease
     calls = {'acquire': 0}
 
     def fake_acquire(key, owner, lease_kind=None):
@@ -710,7 +712,7 @@ def _seed_outbox_and_effect(db_conn, bid, sid):
             "VALUES (%s, %s, %s, 't', 'http://cb/x', '{}', '', %s, 'pending', "
             "  NOW(), 0)", (oid, eid, bid, key))
     db_conn.commit()
-    from utils.execution_effect import record_effect
+    from ai.batch.execution_effect import record_effect
     record_effect(sid, 'callback', key, batch_id=bid)
     return oid, key
 
@@ -720,7 +722,7 @@ def test_deliver_one_real_classification(db_conn, user_id, monkeypatch):
     deliver_one（12 号 §6-2：monkeypatch deliver_one 不构成生产证据）。"""
     import requests as _rq
     import utils.webhook_engine as wh
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
 
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
@@ -759,7 +761,7 @@ def test_deliver_one_real_classification(db_conn, user_id, monkeypatch):
 def test_settle_unknown_can_fail_later(db_conn, user_id):
     """12 号 §4.3：unknown 粘滞缓解——后续拿到确定性否定（dead_letter 时
     4xx）允许 unknown → failed；committed 仍粘性。"""
-    from utils.execution_effect import record_effect, settle_effect_by_key
+    from ai.batch.execution_effect import record_effect, settle_effect_by_key
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     key = f'obx-uf-{uuid.uuid4().hex[:8]}'
@@ -772,7 +774,7 @@ def test_settle_unknown_can_fail_later(db_conn, user_id):
 
 def test_drain_heartbeat_per_row(db_conn, user_id, monkeypatch):
     """12 号 §6-4：drain 逐行续租回调真实被调用（TTL 窗口关闭的可测面）。"""
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid, sids = _seed_batch(db_conn, user_id, 1)
     oids = []
     for i in range(2):
@@ -802,7 +804,7 @@ def test_settle_skips_event_for_deleted_batch(db_conn, user_id, monkeypatch):
     """16 号 §2 问题 2：批次已删后 outbox 重投递（dev-server 侧，不在任何
     pytest 会话内）不再产生孤儿 ai_batch_events——_settle 查批次存活才写事件。
     批次存活的对照组照常写。"""
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid_alive, sids = _seed_batch(db_conn, user_id, 1)
     bid_gone = str(uuid.uuid4())                    # 批次行不存在
     rows = []
@@ -889,7 +891,7 @@ def test_m14_outbox_enqueue_failure_does_not_poison_txn(db_conn, user_id,
                                                         monkeypatch):
     """M14 outbox 侧（12 号 §2.2-8：代码对齐但零测试）：入队失败只回滚
     入队本身，外层终态事务写入存活。"""
-    from utils import delivery_outbox
+    from ai.batch import delivery_outbox as delivery_outbox
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     monkeypatch.setattr(delivery_outbox, '_insert',
@@ -1001,7 +1003,7 @@ def test_scan_scheduler_requires_lease(db_conn, monkeypatch):
         def acquire(self, blocking=False): return True
         def release(self): pass
     monkeypatch.setattr(sched, '_task_lock', lambda tid: _FakeLock())
-    import utils.execution_lease as el
+    from ai.batch import execution_lease as el
     monkeypatch.setattr(el, 'acquire', lambda key, owner, lease_kind=None:
                         (False, None))
     sched._tick()
@@ -1339,8 +1341,8 @@ def test_scan_output_import_records_file_import_effect(db_conn, user_id,
         session_row = {'id': sid, 'user_id': user_id, 'batch_id': bid,
                        'workspace_path': str(ws)}
         task = {'collection': coll, 'branchId': 'main'}
-        with patch('utils.execution_effect.record_effect') as m_rec, \
-             patch('utils.execution_effect.settle_effect') as m_set:
+        with patch('ai.batch.execution_effect.record_effect') as m_rec, \
+             patch('ai.batch.execution_effect.settle_effect') as m_set:
             m_rec.return_value = {'id': 'eff-test', 'status': 'planned',
                                   'external_ref': None, 'result_hash': None}
             n = _import_child_outputs_to_record(task, rid, session_row,
@@ -2224,7 +2226,7 @@ def test_settle_by_key_session_scoped(db_conn, user_id):
     """遗留项 1：session 不匹配时 settle 返回 False。
     （ai_execution_effects.session_id 有 FK → sess-a 用真实会话；
     sess-b 只出现在 SELECT 条件里，用不存在的 id。）"""
-    from utils.execution_effect import record_effect, settle_effect_by_key
+    from ai.batch.execution_effect import record_effect, settle_effect_by_key
     _, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]                       # sess-a 等价物（真实会话）
     other = str(uuid.uuid4())           # sess-b 等价物（不存在）
@@ -2506,7 +2508,7 @@ def _cleanup_comp(db_conn, sid, coll, rid):
 def test_compensate_effect_deletes_record(db_conn, user_id):
     """C4：补偿 mcp_write POST 创建的记录 → dynamic_data 行被删除、
     effect 落 compensated（生产代码首个 compensated 写入点）。"""
-    from utils.execution_effect import record_effect, compensate_effect
+    from ai.batch.execution_effect import record_effect, compensate_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     coll = f'gap_comp_{uuid.uuid4().hex[:8]}'
@@ -2544,7 +2546,7 @@ def test_compensate_effect_deletes_record(db_conn, user_id):
 def test_compensate_effect_skips_non_post(db_conn, user_id):
     """C4：非 POST 的 effect 不被补偿——PUT 旧值未知、DELETE 无逆操作，
     记录保留、status 保持 committed。"""
-    from utils.execution_effect import record_effect, compensate_effect
+    from ai.batch.execution_effect import record_effect, compensate_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     coll = f'gap_comp_{uuid.uuid4().hex[:8]}'
@@ -2575,7 +2577,7 @@ def test_compensate_effect_skips_non_post(db_conn, user_id):
 def test_compensate_effect_skips_unknown_and_bad_ref(db_conn, user_id):
     """C4：unknown 禁自动补偿（对齐"禁自动重放"语义）；external_ref 非
     补偿 JSON（旧数据 / 'POST /menus' 旧格式）一律跳过。"""
-    from utils.execution_effect import record_effect, compensate_effect
+    from ai.batch.execution_effect import record_effect, compensate_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     coll = f'gap_comp_{uuid.uuid4().hex[:8]}'

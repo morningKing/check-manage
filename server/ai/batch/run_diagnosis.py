@@ -82,7 +82,7 @@ def _dim_promise_action(cur, attempt_id: str, session_id: str, db_ctx) -> dict:
         # 现算，再读一次。已有行绝不重算；失败/仍无行 → uncertain，不阻塞。
         # 函数体内延迟 import：保住 trace_auditor 模块属性的可打桩性。
         try:
-            from utils.trace_auditor import ensure_diagnosis_for_session
+            from ai.batch.trace_auditor import ensure_diagnosis_for_session
             ensure_diagnosis_for_session(session_id)
         except Exception as e:  # noqa: BLE001
             log.warning('run_diagnosis: lazy-fill audit failed sid=%s: %s',

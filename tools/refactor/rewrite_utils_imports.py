@@ -101,6 +101,22 @@ MAPPING = {
     'ai_scan_repo': 'ai.scan.ai_scan_repo',
     'ai_scan_scheduler': 'ai.scan.ai_scan_scheduler',
     'ai_schema_designer': 'ai.scan.ai_schema_designer',
+    # ---- batch 4a: ai/batch/ ----
+    'batch_events': 'ai.batch.batch_events',
+    'execution_audit': 'ai.batch.execution_audit',
+    'execution_budget': 'ai.batch.execution_budget',
+    'execution_effect': 'ai.batch.execution_effect',
+    'execution_contract': 'ai.batch.execution_contract',
+    'execution_lease': 'ai.batch.execution_lease',
+    'execution_commands': 'ai.batch.execution_commands',
+    'execution_checkpoint': 'ai.batch.execution_checkpoint',
+    'verifier': 'ai.batch.verifier',
+    'oc_watchdog': 'ai.batch.oc_watchdog',
+    'todo_trace': 'ai.batch.todo_trace',
+    'trace_auditor': 'ai.batch.trace_auditor',
+    'run_diagnosis': 'ai.batch.run_diagnosis',
+    'delivery_outbox': 'ai.batch.delivery_outbox',
+    'subtask_repo': 'ai.batch.subtask_repo',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

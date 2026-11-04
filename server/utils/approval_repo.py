@@ -87,7 +87,8 @@ def decide(approval_id: str, decision: str, decided_by: str, *,
             r = cur.fetchone()
             step_kind = r[0] if r else None
         conn.commit()
-    from utils import orchestration_engine, batch_events
+    from utils import orchestration_engine
+    from ai.batch import batch_events as batch_events
     if decision == 'approved' and step_kind == 'agent':
         # 策略拦截放行：step 回 blocked，下轮 advance 正常派发
         with get_db() as conn:
@@ -101,7 +102,7 @@ def decide(approval_id: str, decision: str, decided_by: str, *,
                                   payload={'approval': 'approved',
                                            'by': decided_by,
                                            'policyRelease': True})
-        from utils import batch_events
+        from ai.batch import batch_events as batch_events
         batch_events.append_event(run_id, 'command.applied',
                                   aggregate_type='step', aggregate_id=step_id,
                                   payload={'approval': 'approved',
@@ -135,7 +136,7 @@ def decide(approval_id: str, decision: str, decided_by: str, *,
                 conn.commit()
         except Exception:
             pass
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     batch_events.append_event(run_id, 'command.applied',
                               aggregate_type='step', aggregate_id=step_id,
                               payload={'approval': decision,
@@ -169,7 +170,7 @@ def expire_overdue() -> int:
         # 批次 3（P2 §7.2）：超时「升级」最小集——`approval.expired` 事件落
         # run 时间线（管理面/inbox 可感知）；定向通知渠道后续扩展
         try:
-            from utils import batch_events
+            from ai.batch import batch_events as batch_events
             batch_events.append_event(
                 run_id, 'approval.expired', aggregate_type='approval',
                 aggregate_id=_aid,

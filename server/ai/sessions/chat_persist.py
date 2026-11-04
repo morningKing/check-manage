@@ -664,13 +664,13 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
         try:
             if not _audit_checked:
                 _audit_checked = True
-                from utils import execution_audit as _ea
+                from ai.batch import execution_audit as _ea
                 rows = _ea.get_attempts(sid, limit=1)
                 _audit_attempt = rows[0]['id'] if rows and rows[0].get(
                     'status') in ('running', 'accepted', 'recovering') else None
             if not _audit_attempt:
                 return
-            from utils import execution_audit as _ea
+            from ai.batch import execution_audit as _ea
             props = ((evt.get('data') or {}).get('properties')) \
                 if isinstance(evt, dict) else {}
             info = (props or {}).get('info') or {}
@@ -747,11 +747,11 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                 _maybe_notify_turn_done(sid, turn_start)
             # Execution audit: the turn converged — close its attempt.
             try:
-                from utils import execution_audit as _ea
+                from ai.batch import execution_audit as _ea
                 if _audit_attempt:
                     # SkillOpt P2：启发式 Skill 调用采集（runtime confirmed 行优先）
                     from ai.skills import skillopt as _sk
-                    from utils.execution_audit import get_manifests as _gm
+                    from ai.batch.execution_audit import get_manifests as _gm
                     _sk.collect_skill_invocations(
                         _audit_attempt, sid, _gm(_audit_attempt),
                         state.get('messages') or [])

@@ -107,7 +107,7 @@ class _FakeClient:
         self.created, self.sent, self.aborted = [], [], []
 
     def list_agents(self, directory=''):
-        from utils.verifier import VERIFIER_AGENT_NAME
+        from ai.batch.verifier import VERIFIER_AGENT_NAME
         return [{'name': VERIFIER_AGENT_NAME, 'mode': 'primary'}]
 
     def create_session(self, *, directory, title=''):
@@ -145,7 +145,7 @@ def _running():
 
 
 def test_collect_materials_and_noop(db_conn, user_id):
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m1')
     assert verifier.collect_materials(sid, get_db=get_db) is None  # 未登记期望
@@ -161,7 +161,7 @@ def test_collect_materials_and_noop(db_conn, user_id):
 def test_collect_materials_subagent_grouping(db_conn, user_id):
     """定向分组：subagents 名单 → 材料=该 agent 名下子代理会话消息+其轨迹；
     无名单期望独立成全树组；同一名单合并为一组。"""
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-mg')
     st_dev = _seed_subtask(db_conn, sid, 'oc-mg', agent='dev',
@@ -191,7 +191,7 @@ def test_collect_materials_subagent_grouping(db_conn, user_id):
 
 def test_build_prompt_subagent_group(db_conn, user_id):
     """定向组 prompt：含子代理会话消息与 agent 标注；空子代理时给证据提示。"""
-    from utils import verifier
+    from ai.batch import verifier as verifier
     group = {'agents': ('dev',), 'checks': [{'name': 'n', 'rubric': 'r'}],
              'subagent_segments': [{'agent': 'dev', 'subtask_id': 'ses_x',
                                     'messages': [{'role': 'user', 'text': '任务A'},
@@ -210,7 +210,7 @@ def test_run_verifier_multi_group(db_conn, user_id):
     """分组核对：全树组 + 定向组各一轮判官会话；verdict 行带 agent 标注。
     组内正常判定 failed 不是组错误——整体 status 仍 completed（failed 由
     merge 聚合为 gate failed）。"""
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m9')
     _seed_subtask(db_conn, sid, 'oc-m9', agent='dev')
@@ -236,7 +236,7 @@ def test_run_verifier_multi_group(db_conn, user_id):
 
 
 def test_run_verifier_completed(db_conn, user_id):
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m2')
     _register(sid)
@@ -253,7 +253,7 @@ def test_run_verifier_completed(db_conn, user_id):
 
 
 def test_run_verifier_noop_without_expectations(db_conn, user_id):
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m3', with_reply=False, with_trace=False)
     fake = _FakeClient([])
@@ -263,7 +263,7 @@ def test_run_verifier_noop_without_expectations(db_conn, user_id):
 
 
 def test_run_verifier_timeout_aborts(db_conn, user_id, monkeypatch):
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m4')
     _register(sid)
@@ -279,7 +279,7 @@ def test_run_verifier_timeout_aborts(db_conn, user_id, monkeypatch):
 def test_run_verifier_default_client_construction(db_conn, user_id, monkeypatch):
     """client=None 走生产默认构造点（惰性 OpenCodeClient(OPENCODE_BASE_URL) 惯例）：
     构造恰一次；create_session/send_prompt_async/abort 拿的是同一个构造实例。"""
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m6')
     _register(sid)
@@ -305,7 +305,7 @@ def test_run_verifier_default_client_construction(db_conn, user_id, monkeypatch)
 def test_run_verifier_missing_agent_fails_closed(db_conn, user_id):
     """预检不过（OC 侧未注册 baize-verifier）→ 不建会话、不发 prompt，
     直接故障路径全 inconclusive（防判官轮以默认 primary agent 跑）。"""
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m7')
     _register(sid)
@@ -319,7 +319,7 @@ def test_run_verifier_missing_agent_fails_closed(db_conn, user_id):
 
 
 def test_parse_verdicts_contract():
-    from utils.verifier import parse_verdicts
+    from ai.batch.verifier import parse_verdicts
     ok = parse_verdicts(
         '前置说明\n{"results": [{"name": "a", "verdict": "failed", "reasons": ["缺"], "evidence": "-"}]}',
         ['a', 'b'])
@@ -330,7 +330,7 @@ def test_parse_verdicts_contract():
 
 
 def test_merge_verifier_results_status_and_persistence(db_conn, user_id):
-    from utils import verifier
+    from ai.batch import verifier as verifier
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m5')
     _register(sid)
@@ -348,7 +348,7 @@ def test_merge_verifier_results_status_and_persistence(db_conn, user_id):
 
 
 def test_ensure_verifier_agent_idempotent(tmp_path):
-    from utils.verifier import ensure_verifier_agent, VERIFIER_AGENT_NAME
+    from ai.batch.verifier import ensure_verifier_agent, VERIFIER_AGENT_NAME
     p1 = ensure_verifier_agent(str(tmp_path))
     assert p1 and os.path.isfile(p1) and VERIFIER_AGENT_NAME in p1
     first = open(p1, encoding='utf-8').read()

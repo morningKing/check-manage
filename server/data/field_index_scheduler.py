@@ -132,7 +132,7 @@ def start_field_index_scheduler(app):
     # P2-B2：统一租约框架——抢不到 field_index scheduler 租约就不在本进程
     # 启动（多实例部署只有一份在跑；本批不做后台重试，简单 return）。
     # 放在 building→pending 复位之前：只有租约持有进程才做这次复位。
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     ok, _ = execution_lease.acquire('field_index', execution_lease.owner_id(),
                                     lease_kind='scheduler')
     if not ok:

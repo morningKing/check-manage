@@ -15,7 +15,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import execution_audit, trace_auditor, todo_trace, execution_contract
+from ai.batch import execution_audit as execution_audit
+from ai.batch import trace_auditor as trace_auditor
+from ai.batch import todo_trace as todo_trace
+from ai.batch import execution_contract as execution_contract
 
 
 @pytest.fixture

@@ -235,7 +235,7 @@ try:
     # 判官 agent（动作门禁 verifier 的 OpenCode 子代理定义）：与上述插件同
     # 目录部署；OC serve 启动时加载——部署后需重启 serve 生效。
     try:
-        from utils.verifier import ensure_verifier_agent
+        from ai.batch.verifier import ensure_verifier_agent
         ensure_verifier_agent(_OGD)
     except Exception as e5:
         logging.warning('verifier agent deploy failed: %s', e5)  # 判官 agent 部署失败不阻断启动（与插件同口径）；核对期走 fail-closed
@@ -306,7 +306,7 @@ try:
         # P2-B2：统一租约框架——audit retention（03:17 每日作业，含 SkillOpt
         # retention + 运营日志 retention）抢 audit_retention scheduler 租约，
         # 抢不到不在本进程启动（多实例部署只跑一份；本批不做后台重试）。
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         _ar_ok, _ = execution_lease.acquire(
             'audit_retention', execution_lease.owner_id(),
             lease_kind='scheduler')
@@ -773,7 +773,7 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
 
     # OpenCode serve 崩溃看门狗（连续不可达自动拉起；多进程租约互斥）
     try:
-        from utils.oc_watchdog import start as _start_oc_watchdog
+        from ai.batch.oc_watchdog import start as _start_oc_watchdog
         _start_oc_watchdog(app)
     except Exception as _e5:
         logging.warning('oc-watchdog start failed: %s', _e5)
@@ -784,7 +784,7 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
 
     # P1：outbox 投递器（持 delivery 租约；AI_DELIVERY_OUTBOX_ENABLED=0 时回退
     # 旧直接 POST 回调路径，见 utils/delivery_outbox.py）
-    from utils.delivery_outbox import start_delivery_loop
+    from ai.batch.delivery_outbox import start_delivery_loop
     start_delivery_loop()
 
     # P2：编排调度器（持 scheduler 租约：DAG 推进 + 审批超时）

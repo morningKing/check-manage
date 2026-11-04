@@ -10,7 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import agent_ledger, verifier  # noqa: E402 —— 动作门禁/判官接线用例
+from utils import agent_ledger
+from ai.batch import verifier as verifier  # noqa: E402 —— 动作门禁/判官接线用例
 
 
 # ---------------------------------------------------------------------------
@@ -2019,7 +2020,7 @@ def _seed_gate_child(db_conn, user_id, *, oc_sid, with_reply=False):
 
 def test_check_action_gate_merges_verifier(db_conn, user_id, monkeypatch):
     from utils.batch_engine import BatchWorker
-    import utils.verifier as verifier_mod
+    from ai.batch import verifier as verifier_mod
     from utils.agent_ledger import register_session_expectations, gate_failure_message
     from db import get_db
     w = BatchWorker()
@@ -2049,7 +2050,7 @@ def test_check_action_gate_merges_verifier(db_conn, user_id, monkeypatch):
 def test_check_action_gate_verifier_error_fail_closed(db_conn, user_id, monkeypatch):
     """verifier 基础设施故障 → gate inconclusive → 引擎既有分支落 failed。"""
     from utils.batch_engine import BatchWorker
-    import utils.verifier as verifier_mod
+    from ai.batch import verifier as verifier_mod
     from utils.agent_ledger import register_session_expectations
     from db import get_db
     w = BatchWorker()
@@ -2079,7 +2080,7 @@ def test_delegation_gate_fills_materials_from_db(db_conn, user_id, monkeypatch):
     group['trace'] 非空。"""
     import json as _json
     from utils.batch_engine import BatchWorker
-    import utils.verifier as _v
+    from ai.batch import verifier as _v
     from utils.agent_ledger import register_session_expectations
     from db import get_db
     w = BatchWorker()

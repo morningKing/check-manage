@@ -257,7 +257,7 @@ def send_message(sid):
     agent = inst.get('agent') or ''
     # Execution audit (execution-audit Spec §7): kefu uses the instance's
     # agent/model — snapshot it per send so history isn't lost on config edits.
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
     audit_attempt_id = execution_audit.create_attempt(
         session_id=sid, source_type='kefu', source_id=sess[5],
         operation='send',

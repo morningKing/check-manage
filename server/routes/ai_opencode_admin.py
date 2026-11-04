@@ -55,7 +55,7 @@ def overview():
     agents = ocg.merged_agents()
     from config import OPENCODE_RESTART_POLICY
     from ai.opencode import opencode_launch as opencode_launch
-    from utils import oc_watchdog
+    from ai.batch import oc_watchdog as oc_watchdog
     return jsonify({
         'globalDir': ocg.global_dir(),
         'skillsDir': ocg.skills_dir(),

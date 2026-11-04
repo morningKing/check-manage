@@ -1091,7 +1091,7 @@ def ai_query():
 def pause(batch_id):
     """暂停整批排队/运行中的子任务（与内部语义一致，按密钥隔离）。"""
     from utils.batch_repo import pause_batch
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     key = _current_key()
     cmd = execution_commands.submit_command(
         'pause', batch_id=batch_id, requested_by=key['id'],
@@ -1120,7 +1120,7 @@ def pause(batch_id):
 def resume(batch_id):
     """继续执行已暂停/已中断的批任务（与内部语义一致，按密钥隔离）。"""
     from utils.batch_repo import resume_batch
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     key = _current_key()
     cmd = execution_commands.submit_command(
         'resume', batch_id=batch_id, requested_by=key['id'],
@@ -1150,7 +1150,7 @@ def session_cancel(batch_id, child_id):
     """取消单个子会话：pending 直接取消、running 协作式中断、paused 同步落
     cancelled（P0 F5 语义）。"""
     from utils.batch_repo import cancel_child
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -1186,7 +1186,7 @@ def submit_command(batch_id):
     """通用命令入口（spec §8.2）：要求 Idempotency-Key 头。
     支持 pause / resume / cancel / retry-failed（retry）。
     命令行落 ai_execution_commands（幂等，重复键返回既有命令 200）。"""
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     key = _current_key()
     body = request.get_json(silent=True) or {}
     command_type = (body.get('type') or body.get('commandType') or '').strip()
@@ -1269,7 +1269,7 @@ def submit_command(batch_id):
 @api_key_required
 @require_bound_key
 def get_command(batch_id, command_id):
-    from utils import execution_commands
+    from ai.batch import execution_commands as execution_commands
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -1286,7 +1286,7 @@ def get_command(batch_id, command_id):
 def events(batch_id):
     """事件增量读取（spec §7.3）：afterSeq 语义（返回 event_seq > afterSeq），
     客户端按 eventId 幂等合并。只暴露白名单字段。"""
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:

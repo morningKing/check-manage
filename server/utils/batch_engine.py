@@ -42,7 +42,7 @@ from psycopg2.extras import RealDictCursor
 from db import get_db
 from config import AI_WORKSPACE_ROOT
 from utils import agent_ledger
-from utils import verifier
+from ai.batch import verifier as verifier
 from utils.workspace import (create_session_workspace, _rm_force,
                              batch_workspace_root, legacy_batch_workspace_root,
                              resolve_batch_data_path)
@@ -453,7 +453,8 @@ def _recompute_batch_status(batch_id: str, anchor_sid: str | None = None) -> Non
             # 见 _notify_callback 内的判断）
             if new_status in ('completed', 'partial', 'failed'):
                 if callback_url:
-                    from utils import batch_events, delivery_outbox
+                    from ai.batch import batch_events as batch_events
+                    from ai.batch import delivery_outbox as delivery_outbox
                     eid = batch_events.append_event(
                         batch_id, 'batch.status', aggregate_type='batch',
                         aggregate_id=batch_id,
@@ -481,13 +482,13 @@ def _recompute_batch_status(batch_id: str, anchor_sid: str | None = None) -> Non
                             arow = cur.fetchone()
                             anchor_sid_use = arow[0] if arow else None
                         if anchor_sid_use:
-                            from utils import execution_effect as _eff
+                            from ai.batch import execution_effect as _eff
                             _eff.record_effect(anchor_sid_use, 'callback',
                                                f'outbox:{eid}', batch_id=batch_id,
                                                request=eid, conn=conn)
         conn.commit()
     if new_status in ('completed', 'partial', 'failed') and callback_url:
-        from utils.delivery_outbox import outbox_enabled
+        from ai.batch.delivery_outbox import outbox_enabled
         if not outbox_enabled():
             _notify_callback(batch_id, new_status, callback_url, callback_secret,
                              done, failed, total)
@@ -552,7 +553,7 @@ def _notify_callback(batch_id, status, callback_url, callback_secret,
         return
     # P1 M4：outbox 启用时回调已入队由投递器负责，直发会造成重复投递
     try:
-        from utils.delivery_outbox import outbox_enabled
+        from ai.batch.delivery_outbox import outbox_enabled
         if outbox_enabled():
             return
     except Exception:
@@ -925,7 +926,7 @@ class BatchWorker:
             return
         # P0 单实例保护（spec §5.3）：抢占不到租约就不启动 dispatcher——
         # 多进程部署（gunicorn 多 worker 等）只有一个实例真正执行批任务。
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         self._lease_owner = execution_lease.owner_id()
         acquired, _token = execution_lease.acquire(self._lease_key, self._lease_owner,
                                                    lease_kind='dispatcher')
@@ -944,7 +945,7 @@ class BatchWorker:
         self._start_with_lease()
 
     def _acquire_retry_loop(self):
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         while not self._stop.is_set():
             if self._stop.wait(self.ACQUIRE_RETRY_SEC):
                 return
@@ -981,7 +982,7 @@ class BatchWorker:
     def _lease_loop(self):
         """租约心跳：续租失败连续超过 3 次（租约丢失或 DB 持续不可用）时
         停止本实例的 dispatcher——宁可整实例让位，不可与接管者双跑。"""
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         misses = 0
         while not self._stop.is_set():
             if self._stop.wait(execution_lease.DEFAULT_HEARTBEAT_SEC):
@@ -1021,7 +1022,7 @@ class BatchWorker:
         if self._acquire_retry_thread and self._acquire_retry_thread.is_alive():
             self._acquire_retry_thread.join(timeout=2)
         if self._holds_lease:
-            from utils import execution_lease
+            from ai.batch import execution_lease as execution_lease
             execution_lease.release(self._lease_key, self._lease_owner)
             self._holds_lease = False
 
@@ -1175,7 +1176,7 @@ class BatchWorker:
             logger.info('batch dispatcher exited (stop=%s)', self._stop.is_set())
             self._listen_close()  # P3-C1：dispatcher 退出即释放 LISTEN 连接
             if self._holds_lease:
-                from utils import execution_lease
+                from ai.batch import execution_lease as execution_lease
                 execution_lease.release(self._lease_key, self._lease_owner)
                 self._holds_lease = False
 
@@ -1241,7 +1242,7 @@ class BatchWorker:
         # 缺口补齐 5（P1 §9.2）：batch 级 max_concurrency——达到上限的批次
         # 本轮不认领（留 pending）
         try:
-            from utils.execution_budget import concurrency_blocked_batches
+            from ai.batch.execution_budget import concurrency_blocked_batches
             self._blocked_batches = concurrency_blocked_batches()
         except Exception:
             self._blocked_batches = set()
@@ -1563,7 +1564,7 @@ class BatchWorker:
             # Execution audit (execution-audit Spec §9.3): one attempt per
             # child run, covering retry/continue/reexecute — the batch/session
             # config alone is not an execution fact.
-            from utils import execution_audit
+            from ai.batch import execution_audit as execution_audit
             if session_row.get('scan_task_id'):
                 _src_type = 'scan'
             elif session_row.get('api_key_id'):
@@ -1621,7 +1622,7 @@ class BatchWorker:
                         parent_session_id=oc_session_id,
                         payload={'model': model, 'agent': agent,
                                  'continue': is_continue})
-                from utils import execution_checkpoint
+                from ai.batch import execution_checkpoint as execution_checkpoint
                 execution_checkpoint.write_checkpoint(
                     sid, checkpoint_type='dispatch',
                     attempt_id=audit_attempt_id,
@@ -1661,7 +1662,7 @@ class BatchWorker:
                 # P1 §5.3 checkpoint 写入时机：progress（每进度去抖一次，
                 # 记录最新 oc 会话与代数——崩溃后恢复决策可证明「进行到哪」）
                 try:
-                    from utils import execution_checkpoint
+                    from ai.batch import execution_checkpoint as execution_checkpoint
                     execution_checkpoint.write_checkpoint(
                         sid, checkpoint_type='progress',
                         attempt_id=audit_attempt_id,
@@ -1800,7 +1801,7 @@ class BatchWorker:
             # error_message 只保留最后一次，事件是逐次重试原因的唯一持久证据。
             diag = getattr(e, 'diagnosis', None)
             if isinstance(e, _SessionTimeout) and diag and batch_id:
-                from utils import batch_events as _batch_events
+                from ai.batch import batch_events as _batch_events
                 _batch_events.append_event(
                     batch_id, 'child.stall',
                     aggregate_type='session', aggregate_id=sid,
@@ -1862,7 +1863,8 @@ class BatchWorker:
             # P1：usage 累计 + 预算判定 + turn_complete checkpoint（全 best-effort，
             # 失败只记日志——观测/预算绝不反过来打断执行收口）。
             try:
-                from utils import execution_budget, execution_checkpoint
+                from ai.batch import execution_budget as execution_budget
+                from ai.batch import execution_checkpoint as execution_checkpoint
                 usage = None
                 try:
                     from utils.batch_repo import get_session_usage
@@ -1880,7 +1882,7 @@ class BatchWorker:
                                                              self)
                     # 缺口补齐 5：user/api_key scope 预算（超限恒 drain）
                     try:
-                        from utils.execution_budget import evaluate_scope_budget
+                        from ai.batch.execution_budget import evaluate_scope_budget
                         _sv = evaluate_scope_budget(
                             'user', session_row.get('user_id') or '')
                         if _sv['exceeded'] and _sv['action'] == 'drain':
@@ -1912,7 +1914,7 @@ class BatchWorker:
             _diag_attempt_id = locals().get('audit_attempt_id')
             if _diag_attempt_id:
                 try:
-                    from utils.run_diagnosis import build_run_diagnosis
+                    from ai.batch.run_diagnosis import build_run_diagnosis
                     build_run_diagnosis(_diag_attempt_id)
                 except Exception as _diag_exc:  # noqa: BLE001
                     logger.warning('run diagnosis (best-effort) failed for %s: %s',
@@ -2011,7 +2013,7 @@ class BatchWorker:
         没有真正收敛），并把 id 记入 _parent_attempt 供下一次 create_attempt
         串 parent_attempt_id 链。error_message 落具体异常文本（≤2000 字由
         finish_latest_running 截断）——error_code 只是类别，取证要靠它。"""
-        from utils import execution_audit
+        from ai.batch import execution_audit as execution_audit
         closed = execution_audit.finish_latest_running(
             session_id, 'recovering', error_code=reason,
             error_message=error_message)
@@ -2306,7 +2308,7 @@ class BatchWorker:
                         continue                  # 已核对过
                     group = {'agents': key, 'checks': checks,
                              'subagent_segments': [], 'trace': []}
-                    from utils import verifier as _v
+                    from ai.batch import verifier as _v
                     # 材料组装（spec §4 定向组口径，同 verifier.collect_materials
                     # 的查询/截断上限；渲染走 build_verifier_prompt，形状必须与
                     # 终态路径一致）。此前两键恒为空——判官拿到的材料是空的
@@ -2530,7 +2532,7 @@ class BatchWorker:
                     '(plugin enforcement may be inactive — OC serve restart needed '
                     'after first deploy)', session_id, agent, n)
                 if batch_id:
-                    from utils import batch_events
+                    from ai.batch import batch_events as batch_events
                     batch_events.append_event(
                         batch_id, 'child.reuse.violation',
                         aggregate_type='child', aggregate_id=session_id,
@@ -2929,7 +2931,7 @@ class BatchWorker:
                            sid, grew)
             if batch_id:
                 try:
-                    from utils import batch_events
+                    from ai.batch import batch_events as batch_events
                     batch_events.append_event(
                         batch_id, 'child.premature_finish',
                         aggregate_type='session', aggregate_id=sid,
@@ -3467,7 +3469,7 @@ class BatchWorker:
             fencing_token=fencing_token)
         if reparked is not None:
             # 接管轮收口（spec D3）：回 paused 交还外部系统，不进终态不计数。
-            from utils import execution_audit
+            from ai.batch import execution_audit as execution_audit
             execution_audit.finish_latest_running(session_id, 'stopped',
                                                   error_code='TAKEOVER_REPARK')
             from ai.skills import skill_fit as _sfit
@@ -3483,7 +3485,7 @@ class BatchWorker:
             self._on_transition_miss(session_id, batch_id, generation,
                                      'completed', redirect=True)
             return
-        from utils import execution_audit
+        from ai.batch import execution_audit as execution_audit
         execution_audit.finish_latest_running(session_id, 'completed')
         # SkillOpt 拟合收敛钩子：attempt 收口即算拟合（best-effort，失败仅记日志）
         from ai.skills import skill_fit as _sfit
@@ -3499,7 +3501,8 @@ class BatchWorker:
                      gate_error: str | None = None,
                      fencing_token: int | None = None):
         _require_fencing(fencing_token)
-        from utils import batch_repo, execution_audit
+        from utils import batch_repo
+        from ai.batch import execution_audit as execution_audit
         reparked = batch_repo.try_repark_transition(
             session_id, generation=self._resolve_generation(session_id, generation),
             fencing_token=fencing_token)
@@ -3543,7 +3546,8 @@ class BatchWorker:
         a deliberate cancel apart from a genuine error. CAS 带
         cancel_requested=true 期望（spec §6.1：取消按取消条件收口）。"""
         _require_fencing(fencing_token)
-        from utils import batch_repo, execution_audit
+        from utils import batch_repo
+        from ai.batch import execution_audit as execution_audit
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='CANCELLED')
         # SkillOpt 拟合收敛钩子：finish 已执行即算拟合（同 _mark_failed，钩子
@@ -3571,7 +3575,8 @@ class BatchWorker:
         failed 计数**（暂停不是失败，批次还能整体 resume），error_message 留空。
         CAS 带 pause_requested=true 且 cancel 优先（spec §4.2：cancel > pause）。"""
         _require_fencing(fencing_token)
-        from utils import batch_repo, execution_audit
+        from utils import batch_repo
+        from ai.batch import execution_audit as execution_audit
         execution_audit.finish_latest_running(session_id, 'stopped',
                                               error_code='PAUSED')
         res = batch_repo.transition_child(
@@ -3666,7 +3671,7 @@ class BatchWorker:
         # 触发瞬间快照，这是重试动作记录）——error_message 只剩最后一次，
         # 事件才是逐次重试原因的持久证据。append_event 自身 best-effort。
         if batch_id:
-            from utils import batch_events as _batch_events
+            from ai.batch import batch_events as _batch_events
             _batch_events.append_event(
                 batch_id, 'child.retry', aggregate_type='session',
                 aggregate_id=session_id, execution_generation=generation,
@@ -3774,7 +3779,8 @@ class BatchWorker:
         不得自动重放。计入 failed 聚合（与 cancelled 同桶），子任务行保留
         字面 'needs_review' 状态供管理面展示。"""
         _require_fencing(fencing_token)
-        from utils import batch_repo, execution_audit
+        from utils import batch_repo
+        from ai.batch import execution_audit as execution_audit
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='NEEDS_REVIEW',
             error_message=reason)
@@ -3852,7 +3858,7 @@ class BatchWorker:
                 except TypeError:
                     pass
             try:
-                from utils import execution_effect
+                from ai.batch import execution_effect as execution_effect
                 if execution_effect.has_unknown_effects(sid):
                     self._mark_needs_review(
                         sid, batch_id,
@@ -3885,7 +3891,7 @@ class BatchWorker:
                 # 且无副作用且无消息」→ 无进度证据，failed(retryable) 优于
                 # 静默重放（spec 末行）；其余维持原地续跑（docstring 取舍）
                 try:
-                    from utils import execution_checkpoint as _ckpt
+                    from ai.batch import execution_checkpoint as _ckpt
                     _has_ckpt = _ckpt.latest_checkpoint(sid) is not None
                 except Exception:
                     _has_ckpt = True  # 判定基建异常 → 保守续跑
@@ -3949,7 +3955,7 @@ class BatchWorker:
 
     def _emit_recovered(self, batch_id: str | None, sid: str, decision: str):
         if batch_id:
-            from utils import batch_events
+            from ai.batch import batch_events as batch_events
             batch_events.append_event(
                 batch_id, 'child.recovered', aggregate_type='child',
                 aggregate_id=sid, payload={'decision': decision})
@@ -4068,7 +4074,7 @@ class BatchWorker:
                 # P1 §5.3 checkpoint 写入时机：recovery（重排换代前的最后快照）
                 if requeued:
                     try:
-                        from utils import execution_checkpoint
+                        from ai.batch import execution_checkpoint as execution_checkpoint
                         execution_checkpoint.write_checkpoint(
                             session_id, checkpoint_type='recovery',
                             execution_generation=None,

@@ -83,7 +83,7 @@ def create_run(def_id: str, requested_by: str, *,
                      json.dumps(deps),
                      json.dumps(n, ensure_ascii=False)))
         conn.commit()
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     batch_events.append_event(run_id, 'run.created', aggregate_type='run',
                               aggregate_id=run_id,
                               payload={'definitionId': def_id,
@@ -216,7 +216,7 @@ def _advance_run(run_id: str) -> None:
 
 def _advance_run_locked(run_id: str) -> None:
     from db import get_db
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     run = get_run(run_id)
     if not run or run['status'] not in RUN_ACTIVE:
         return
@@ -574,7 +574,7 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
         conn.commit()
     if not won:
         return
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     batch_events.append_event(run['id'], 'step.launched',
                               aggregate_type='step', aggregate_id=step['id'],
                               payload={'sessionId': sid})
@@ -605,7 +605,7 @@ def _open_policy_approval(run: dict, step: dict, policy: dict):
                     "UPDATE ai_orchestration_steps SET status='waiting_approval', "
                     "  updated_at=NOW() WHERE id=%s", (step['id'],))
             conn.commit()
-        from utils import batch_events
+        from ai.batch import batch_events as batch_events
         batch_events.append_event(run['id'], 'approval.requested',
                                   aggregate_type='step',
                                   aggregate_id=step['id'],
@@ -642,7 +642,7 @@ def _open_approval(run: dict, step: dict):
                     "UPDATE ai_orchestration_steps SET status='waiting_approval', "
                     "  updated_at=NOW() WHERE id=%s", (step['id'],))
             conn.commit()
-        from utils import batch_events
+        from ai.batch import batch_events as batch_events
         batch_events.append_event(run['id'], 'approval.requested',
                                   aggregate_type='step',
                                   aggregate_id=step['id'],
@@ -679,7 +679,7 @@ def _compensate_step_effects(session_id: str, step_id: str):
                     (session_id,))
                 effect_ids = [r[0] for r in cur.fetchall()]
             for eid in effect_ids:
-                from utils.execution_effect import compensate_effect
+                from ai.batch.execution_effect import compensate_effect
                 compensate_effect(eid, conn=conn)
     except Exception:
         logger.exception('effect compensation failed session=%s', session_id)
@@ -797,7 +797,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
                                     'attempt_count': attempts,
                                     'session_id': session_id}
                                    )}, {})
-            from utils import batch_events
+            from ai.batch import batch_events as batch_events
             batch_events.append_event(run_id, 'step.retry',
                                       aggregate_type='step',
                                       aggregate_id=step_id)
@@ -829,7 +829,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
         # P2 §6.4 declared_plan：模型自声明的 Todo 计划只进观测字段
         # （step.output.declaredPlan），永远不参与 DAG 推进
         try:
-            from utils.todo_trace import build_declared_plan
+            from ai.batch.todo_trace import build_declared_plan
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -874,7 +874,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
         except Exception:
             logger.warning('artifact ingest failed step=%s', step_id,
                            exc_info=True)
-    from utils import batch_events
+    from ai.batch import batch_events as batch_events
     batch_events.append_event(run_id, 'step.finished',
                               aggregate_type='step', aggregate_id=step_id,
                               payload={'status': new_status,
@@ -909,7 +909,7 @@ class OrchestrationScheduler:
     def start(self):
         if (self._thread and self._thread.is_alive()) or                 (self._retry_thread and self._retry_thread.is_alive()):
             return  # 已在调度或正在等待租约：不重复起线程
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         self._owner = execution_lease.owner_id()
         ok, _ = execution_lease.acquire('scheduler', self._owner,
                                         lease_kind='scheduler')
@@ -928,7 +928,7 @@ class OrchestrationScheduler:
         self._thread.start()
 
     def _acquire_retry(self):
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         while not self._stop.is_set():
             if self._stop.wait(self.RETRY_SEC):
                 return
@@ -945,7 +945,7 @@ class OrchestrationScheduler:
             return
 
     def _loop(self):
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         logger.info('orchestration scheduler started')
         while not self._stop.is_set():
             try:
@@ -1024,7 +1024,7 @@ class OrchestrationScheduler:
             if t_ and t_.is_alive():
                 t_.join(timeout=3)
         if self._holds_lease:
-            from utils import execution_lease
+            from ai.batch import execution_lease as execution_lease
             execution_lease.release('scheduler', self._owner)
             self._holds_lease = False
 

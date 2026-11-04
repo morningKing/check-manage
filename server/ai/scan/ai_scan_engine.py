@@ -147,7 +147,7 @@ def on_child_finished(session_row, final_msg, ok):
                  for m in task['field_mapping']}
         _vh = _hashlib.sha256(
             str(sorted(_vals.items())).encode('utf-8')).hexdigest()[:16]
-        from utils.execution_effect import record_effect, settle_effect
+        from ai.batch.execution_effect import record_effect, settle_effect
         _eff = record_effect(session_row['id'], 'scan_writeback',
                              f"{task['id']}:{rid}:{_vh}")
         if _eff:
@@ -206,7 +206,7 @@ def _import_child_outputs_to_record(task, record_id, session_row, file_field):
     # effect 账本旁路补漏（P1-A2b）：此路径直接 INSERT data_files，不经过
     # import_recorded_files——逐文件登记 file_import effect 并即时收口，
     # 审计/恢复按 (session_id, effect_type, idempotency_key) 幂等去重。
-    from utils.execution_effect import record_effect, settle_effect
+    from ai.batch.execution_effect import record_effect, settle_effect
     imported = []
     with get_db() as conn:
         with conn.cursor() as cur:

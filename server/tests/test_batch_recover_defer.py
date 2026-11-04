@@ -118,7 +118,7 @@ def _worker():
 def test_reconcile_defers_while_turn_in_flight(db_conn, user_id, claim_guard,
                                                monkeypatch):
     """F5 红：回合飞行中不重排；缓重排超上限后仍重排（兜底防悬挂）。"""
-    from utils import execution_checkpoint
+    from ai.batch import execution_checkpoint as execution_checkpoint
     bid, sid = _seed_lost_running(db_conn, user_id)
     claim_guard(sid)
     # 有进度证据（checkpoint），跳过 failed_no_progress 分支直达 requeue 决策
@@ -140,7 +140,7 @@ def test_reconcile_defers_while_turn_in_flight(db_conn, user_id, claim_guard,
 def test_reconcile_requeues_idle_session_first_pass(db_conn, user_id,
                                                     claim_guard, monkeypatch):
     """护栏：回合已空闲（终态消息）→ 首轮即重排，恢复延迟不回退。"""
-    from utils import execution_checkpoint
+    from ai.batch import execution_checkpoint as execution_checkpoint
     bid, sid = _seed_lost_running(db_conn, user_id)
     claim_guard(sid)
     execution_checkpoint.write_checkpoint(
@@ -156,7 +156,7 @@ def test_reconcile_requeues_session_without_messages(db_conn, user_id,
                                                      claim_guard,
                                                      monkeypatch):
     """护栏：无 assistant 消息（尚未开跑）→ 首轮即重排（既有语义）。"""
-    from utils import execution_checkpoint
+    from ai.batch import execution_checkpoint as execution_checkpoint
     bid, sid = _seed_lost_running(db_conn, user_id)
     claim_guard(sid)
     execution_checkpoint.write_checkpoint(
@@ -250,7 +250,7 @@ def test_reconcile_defers_step_boundary_then_requeues_with_abort(
         db_conn, user_id, claim_guard, monkeypatch):
     """F5 二次确认：步骤边界先缓一轮；签名稳定超窗口后才重排，且重排前
     先 abort 该 OC 回合（abort 时行仍是 running，先停再翻状态）。"""
-    from utils import execution_checkpoint
+    from ai.batch import execution_checkpoint as execution_checkpoint
     oc = f'oc-step-{uuid.uuid4().hex[:8]}'
     bid, sid = _seed_lost_running(db_conn, user_id, oc=oc)
     claim_guard(sid)
@@ -285,7 +285,7 @@ def test_reconcile_defers_step_boundary_then_requeues_with_abort(
 def test_reconcile_defers_empty_snapshot_with_history(
         db_conn, user_id, claim_guard, monkeypatch):
     """REST 空快照 + 库里已有消息 = 轮询失明，不得当空闲立即重排。"""
-    from utils import execution_checkpoint
+    from ai.batch import execution_checkpoint as execution_checkpoint
     oc = f'oc-empty-{uuid.uuid4().hex[:8]}'
     bid, sid = _seed_lost_running(db_conn, user_id, oc=oc)
     claim_guard(sid)
@@ -310,7 +310,7 @@ def test_reconcile_defers_empty_snapshot_with_history(
 def test_requeue_lost_budget_exhausted_aborts_before_failing(
         db_conn, user_id, claim_guard, monkeypatch):
     """重排预算用尽的终态失败同样先 abort——「判线程丢失」不等于回合已停。"""
-    from utils import execution_checkpoint
+    from ai.batch import execution_checkpoint as execution_checkpoint
     oc = f'oc-budget-{uuid.uuid4().hex[:8]}'
     bid, sid = _seed_lost_running(db_conn, user_id, oc=oc)
     claim_guard(sid)

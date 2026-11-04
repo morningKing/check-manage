@@ -1006,7 +1006,7 @@ def _seed_gate_session(db_conn, user_id, *, oc_sid):
 
 def test_gate_check_skips_verifier_expectations(db_conn, user_id):
     """verifier 期望不参与证据匹配——否则 args_text ~ '' 恒真、verifier 行
-    被误判成 tool 核对。它的核对由引擎钩子（utils/verifier）负责。"""
+    被误判成 tool 核对。它的核对由引擎钩子（ai/batch/verifier）负责。"""
     from utils.agent_ledger import register_session_expectations, check_session_gate
     from db import get_db
     sid = _seed_gate_session(db_conn, user_id, oc_sid='oc-vskip')

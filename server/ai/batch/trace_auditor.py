@@ -246,8 +246,8 @@ def _data_completeness(attempt: dict | None, manifests: list[dict],
 def build_diagnosis_report(attempt: dict, manifests: list[dict],
                            messages: list[dict], events_count: int) -> dict:
     """Assemble the structured report for one attempt (Spec §13)."""
-    from utils.execution_contract import contract_for_skill
-    from utils.todo_trace import build_declared_plan
+    from ai.batch.execution_contract import contract_for_skill
+    from ai.batch.todo_trace import build_declared_plan
 
     todo_plan = build_declared_plan(messages)
     calls = tool_calls_from_messages(messages)
@@ -365,7 +365,7 @@ def ensure_diagnosis_for_session(session_id: str) -> dict:
     diagnosis. Returns the diagnoses DB row as dict, or {'status': ...} when
     there is nothing to audit yet."""
     from db import get_db
-    from utils import execution_audit
+    from ai.batch import execution_audit as execution_audit
 
     attempts = execution_audit.get_attempts(session_id, limit=10)
     terminal = [a for a in attempts

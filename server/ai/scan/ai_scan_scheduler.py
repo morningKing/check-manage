@@ -32,7 +32,7 @@ def _tick():
     # P1 §5.8：scan scheduler 纳入 DB 租约体系——多进程部署时只有一个实例
     # 真正执行扫描 tick；抢不到（他实例持有）则静默跳过本轮（下一分钟重试）。
     try:
-        from utils import execution_lease
+        from ai.batch import execution_lease as execution_lease
         owner = execution_lease.owner_id()
         ok, _ = execution_lease.acquire('scan_scheduler', owner,
                                         lease_kind='scan_scheduler')
@@ -64,7 +64,7 @@ def start_scan_scheduler(app):
     # P2-B2：统一租约框架——start 入口抢占 scan 租约，抢不到不启动本进程
     # 的调度器（多实例部署只有一份在跑；本批不做后台重试，简单 return）。
     # tick 级 scan_scheduler 租约保留，作为 tick 间的第二道互斥。
-    from utils import execution_lease
+    from ai.batch import execution_lease as execution_lease
     ok, _ = execution_lease.acquire('scan', execution_lease.owner_id(),
                                     lease_kind='scheduler')
     if not ok:
