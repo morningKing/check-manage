@@ -22,7 +22,7 @@ _ENTRY_FILES = (
     os.path.join('routes', 'ai_chat.py'),
     os.path.join('routes', 'kefu_public.py'),
     os.path.join('routes', 'ai_session_admin.py'),
-    os.path.join('utils', 'batch_engine.py'),
+    os.path.join('ai', 'batch', 'engine', 'runner.py'),
 )
 
 

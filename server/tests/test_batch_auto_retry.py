@@ -104,7 +104,7 @@ def _idle_msg():
 
 
 def _stall_worker(monkeypatch, fake_extra=None):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     worker = eng.BatchWorker()
     worker.SESSION_TIMEOUT_SEC = 0     # 无硬上限，纯靠 STALL 触发
     worker.STALL_TIMEOUT_SEC = 0.15
@@ -114,8 +114,10 @@ def _stall_worker(monkeypatch, fake_extra=None):
 
 
 def _patch_oc(monkeypatch, **methods):
-    import utils.batch_engine as eng
-    monkeypatch.setattr(eng, 'opencode_client', type('F', (), methods)())
+    from ai.batch import engine as eng
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', type('F', (), methods)())
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', eng.runner.opencode_client)
 
 
 def _idle_oc_msg():
@@ -128,7 +130,7 @@ def _idle_oc_msg():
 def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
                                                               claim_guard,
                                                               monkeypatch, tmp_path):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
     claim_guard(sid)
@@ -140,7 +142,7 @@ def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
               create_session=staticmethod(create_session),
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(lambda oc, directory='': [_idle_msg()]))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     # F1 起重排 UPDATE 带 status='running' CAS——_run_one 生产上只会拿到
     # claim 后的 running 行，直接调用也要先摆成真实链路形态。
     with db_conn.cursor() as cur:
@@ -181,7 +183,7 @@ def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
 
 def test_provider_auth_never_retries(db_conn, user_id, claim_guard,
                                      monkeypatch, tmp_path):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
     claim_guard(sid)
@@ -195,7 +197,7 @@ def test_provider_auth_never_retries(db_conn, user_id, claim_guard,
               create_session=staticmethod(lambda directory='', title='': 'oc-auth'),
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(lambda oc, directory='': auth_err))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     # P0 CAS：终态写回要求 status='running'（真实 claim 后的状态）
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s", (sid,))
@@ -216,7 +218,7 @@ def test_provider_auth_never_retries(db_conn, user_id, claim_guard,
 
 def test_network_exception_requeues_fresh(db_conn, user_id, monkeypatch, tmp_path):
     """create_session 网络异常 → 重排队全新执行（无 oc 会话 → 不置续跑词）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
     worker = _stall_worker(monkeypatch)
@@ -225,7 +227,7 @@ def test_network_exception_requeues_fresh(db_conn, user_id, monkeypatch, tmp_pat
         raise requests.exceptions.ConnectionError('connection refused')
 
     _patch_oc(monkeypatch, create_session=staticmethod(_refused))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         # 同上：claim 后的真实形态是 running（F1 的 CAS 语义）。
         cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
@@ -281,7 +283,7 @@ def test_stall_retry_reason_in_prompt_event_attempt(
         db_conn, user_id, claim_guard, monkeypatch, tmp_path):
     """stall 自动重试：原因三渠道齐全——续跑提示词带「没有任何新进展」、
     child.retry 事件带 reason、attempt 落 recovering/AUTO_RETRY+error_message。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
@@ -293,7 +295,7 @@ def test_stall_retry_reason_in_prompt_event_attempt(
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(
                   lambda oc, directory='': [_idle_msg()]))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
                     (sid,))
@@ -317,7 +319,7 @@ def test_turn_failed_retry_carries_provider_error(
     """provider 白名单错误（APIError）自动重试：提示词与留痕渠道都带错误名
     ——不再只有一句「因异常中断」（事故形态：整批 APIError 重试成功后，
     原因在任何渠道都查不到）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
@@ -333,7 +335,7 @@ def test_turn_failed_retry_carries_provider_error(
                   lambda directory='', title='': 'oc-api'),
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(lambda oc, directory='': api_err))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
                     (sid,))
@@ -354,7 +356,7 @@ def test_network_retry_reason_in_event(db_conn, user_id, monkeypatch, tmp_path):
     """create_session 网络异常 → 全新重排（无续跑提示词，且失败发生在
     create_attempt 之前、无 attempt 行）：child.retry 事件是该路径唯一的
     持久原因证据。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
     worker = _stall_worker(monkeypatch)
@@ -363,7 +365,7 @@ def test_network_retry_reason_in_event(db_conn, user_id, monkeypatch, tmp_path):
         raise requests.exceptions.ConnectionError('connection refused')
 
     _patch_oc(monkeypatch, create_session=staticmethod(_refused))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
                     (sid,))
@@ -401,7 +403,7 @@ def _http_error(status):
 
 def test_reconcile_404_marks_failed_with_accurate_reason(db_conn, user_id,
                                                           claim_guard, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_running(db_conn, user_id, claim_guard, oc='oc-gone')
     worker = eng.BatchWorker()
     _patch_oc(monkeypatch, get_messages=staticmethod(
@@ -415,7 +417,7 @@ def test_reconcile_404_marks_failed_with_accurate_reason(db_conn, user_id,
 
 
 def test_reconcile_alive_session_requeues(db_conn, user_id, claim_guard, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_running(db_conn, user_id, claim_guard, oc='oc-alive')
     # 有进度证据（消息）→ 走原地续跑（批次 2 起裸场景改 failed(retryable)）
     with db_conn.cursor() as cur:
@@ -441,7 +443,7 @@ def test_reconcile_alive_session_requeues(db_conn, user_id, claim_guard, monkeyp
 
 def test_reconcile_outage_skips_rows(db_conn, user_id, claim_guard, monkeypatch):
     """OpenCode 整体不可达：不能把所有 running 行批量误杀。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_running(db_conn, user_id, claim_guard, oc='oc-any')
     worker = eng.BatchWorker()
 
@@ -455,7 +457,7 @@ def test_reconcile_outage_skips_rows(db_conn, user_id, claim_guard, monkeypatch)
 
 def test_reconcile_skips_tracked_rows(db_conn, user_id, claim_guard, monkeypatch):
     """本进程正在跑的行（已入账）不归对账器管——轮询循环自己负责。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_running(db_conn, user_id, claim_guard, oc='oc-live')
     worker = eng.BatchWorker()
     worker._running_session_ids.add(sid)          # 模拟正在跑
@@ -466,7 +468,7 @@ def test_reconcile_skips_tracked_rows(db_conn, user_id, claim_guard, monkeypatch
 
 
 def test_reconcile_budget_exhausted_fails(db_conn, user_id, claim_guard, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_running(db_conn, user_id, claim_guard, oc='oc-alive')
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET retry_count=2 WHERE id=%s", (sid,))
@@ -519,7 +521,7 @@ def _seed_attempt(db_conn, sid, *, status, error_code=None,
 
 
 def test_consume_parent_fallback_whitelist(db_conn, user_id, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
@@ -548,7 +550,7 @@ def test_retry_parent_chain_survives_worker_restart(db_conn, user_id,
                                                     tmp_path):
     """stall 重排队后 worker 重启（_parent_attempt 字典随进程丢失）：新一轮
     attempt 仍要串上 recovering 前驱——perf 端到端 run 口径依赖该链。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('EXECUTION_AUDIT_ENABLED', '1')
     bid, sids = _seed_batch(db_conn, user_id)
     sid = sids[0]
@@ -561,7 +563,7 @@ def test_retry_parent_chain_survives_worker_restart(db_conn, user_id,
               create_session=staticmethod(create_session),
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(lambda oc, directory='': [_idle_msg()]))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
                     (sid,))

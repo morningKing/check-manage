@@ -190,11 +190,11 @@ def test_directive_injected_for_pinned_agent(db_conn, user_id, monkeypatch,
                                              tmp_path):
     """复用名单 + 已钉住：派发 prompt 必须包含 task_id 指令（新建分支）。"""
     from pathlib import Path
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     root = Path(tmp_path)
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     staged = root / 'batch-staging' / user_id / 'u1'
     staged.mkdir(parents=True)
     (staged / 'f0.csv').write_text('x', encoding='utf-8')
@@ -224,7 +224,8 @@ def test_directive_injected_for_pinned_agent(db_conn, user_id, monkeypatch,
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': 'done'}]}]
     fake.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
 
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
@@ -254,7 +255,7 @@ def _child_msgs(user_text, uid):
 
 
 def test_turn_segments_merge_and_idempotent(db_conn, user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sid = _seed_batch(db_conn, user_id)
     w = BatchWorker()
     info = {'agent': 'dev', 'status': 'completed'}
@@ -291,7 +292,7 @@ def test_turn_segments_merge_and_idempotent(db_conn, user_id):
 
 def test_write_subtask_pins_latest_session(db_conn, user_id):
     """复用名单内的 agent：最新子会话 id 固化为锚点（双保险路径）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sid = _seed_batch(db_conn, user_id, reuse=['dev'])
     w = BatchWorker()
     info = {'agent': 'dev', 'status': 'completed'}

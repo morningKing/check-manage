@@ -115,7 +115,7 @@ def test_pause_batch_flags_children_and_marks_batch(db_conn, user_id, claim_guar
 
 def test_worker_sweep_lands_paused_without_failed_count(db_conn, user_id, claim_guard):
     from utils.batch_repo import pause_batch
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     pause_batch(user_id, bid)
     worker = get_worker()
@@ -129,7 +129,7 @@ def test_worker_sweep_lands_paused_without_failed_count(db_conn, user_id, claim_
 
 def test_resume_batch_resumes_paused_without_counter_change(db_conn, user_id, claim_guard):
     from utils.batch_repo import pause_batch, resume_batch
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     # 一个暂停前已开跑（有 oc 会话 → resume 应置 continue_prompt）
     with db_conn.cursor() as cur:
@@ -151,7 +151,7 @@ def test_resume_batch_resumes_paused_without_counter_change(db_conn, user_id, cl
 
 def test_cancel_batch_converts_paused_children(db_conn, user_id, claim_guard):
     from utils.batch_repo import pause_batch, cancel_batch
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     pause_batch(user_id, bid)
     get_worker()._cancel_pending_requests()        # → paused
@@ -168,7 +168,7 @@ def test_cancel_batch_converts_paused_children(db_conn, user_id, claim_guard):
 # ---------------------------------------------------------------------------
 
 def test_auto_reject_only_own_session_questions(monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     rejected = []
     fake = type('F', (), {
         'list_questions': staticmethod(lambda directory='': [
@@ -178,19 +178,19 @@ def test_auto_reject_only_own_session_questions(monkeypatch):
         ]),
         'reject_question': staticmethod(lambda qid, directory='': rejected.append(qid)),
     })()
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     eng.BatchWorker()._reject_pending_questions('oc', directory='/ws')
     assert rejected == ['q1']
 
 
 def test_auto_reject_swallows_opencode_errors(monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     def _boom(directory=''):
         raise RuntimeError('opencode down')
 
     fake = type('F', (), {'list_questions': staticmethod(_boom)})()
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     # 不抛异常即可（辅助检查绝不能打断主轮询）
     eng.BatchWorker()._reject_pending_questions('oc')
 
@@ -199,7 +199,7 @@ def test_auto_reject_covers_running_subagent_sessions(monkeypatch):
     """子代理（子会话）的授权询问/提问同样无人能答。旧实现只按父会话 id 过滤，
     子代理的询问漏网 → 父回合被它阻塞，要等 900s 工具卡死看门狗才失败。
     extra_sids = 本回合在跑的子代理会话 id（父消息流里 task 工具给出）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     perms, qs = [], []
     fake = type('F', (), {
         'list_permissions': staticmethod(lambda directory='': [
@@ -218,7 +218,7 @@ def test_auto_reject_covers_running_subagent_sessions(monkeypatch):
         'reject_question': staticmethod(
             lambda qid, directory='': qs.append(qid)),
     })()
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     w = eng.BatchWorker()
     w._reject_pending_permissions('oc', directory='/ws', extra_sids={'oc_child'})
     w._reject_pending_questions('oc', directory='/ws', extra_sids={'oc_child'})
@@ -239,8 +239,8 @@ def _msg(role='assistant', finish=None, running_tool=False, content=None,
 
 def test_tool_stall_watchdog_kills_frozen_plain_tool(monkeypatch):
     """普通工具（非 task）签名冻结超过 TOOL_STALL → abort + 'tool stuck'。"""
-    import utils.batch_engine as eng
-    from utils.batch_engine import _SessionTimeout
+    from ai.batch import engine as eng
+    from ai.batch.engine import _SessionTimeout
     w = eng.BatchWorker()
     w.SESSION_TIMEOUT_SEC = 0
     w.STALL_TIMEOUT_SEC = 0.2
@@ -256,7 +256,7 @@ def test_tool_stall_watchdog_kills_frozen_plain_tool(monkeypatch):
         'get_messages': staticmethod(lambda oc, directory='': []),
         'abort_session': staticmethod(lambda oc, directory='': aborted.append(oc)),
     })()
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     with pytest.raises(_SessionTimeout) as ei:
         w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'tool stuck'
@@ -271,7 +271,7 @@ def test_turn_loop_auto_rejects_subagent_asks(monkeypatch):
     但子代理（子会话）的询问曾漏网——而工具卡死看门狗又会因为「子代理作保」
     顺延不杀，父回合会被它拖到 900s 才失败。这条锁住调用点真的把子代理会话
     传下去了。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     w = eng.BatchWorker()
     w.SESSION_TIMEOUT_SEC = 0
     w.STALL_TIMEOUT_SEC = 30
@@ -306,7 +306,7 @@ def test_turn_loop_auto_rejects_subagent_asks(monkeypatch):
             lambda qid, directory='': qs.append(qid)),
         'get_messages': staticmethod(lambda oc, directory='': []),
     })()
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     _, msg = w._await_finished('oc', 'sid-test')
 
     assert msg['content'][0]['text'] == 'done'
@@ -318,7 +318,7 @@ def test_turn_loop_auto_rejects_subagent_asks(monkeypatch):
 def test_tool_stall_deferred_while_subagent_progressing(monkeypatch):
     """task 工具冻结，但子代理自己的消息还在增长 → 看门狗顺延，不误杀，
     直到子代理返回、回合正常完成。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     w = eng.BatchWorker()
     w.SESSION_TIMEOUT_SEC = 0
     w.STALL_TIMEOUT_SEC = 0.1
@@ -349,15 +349,15 @@ def test_tool_stall_deferred_while_subagent_progressing(monkeypatch):
         'get_messages': staticmethod(fake_get_messages),
         'abort_session': staticmethod(lambda oc, directory='': (_ for _ in ()).throw(AssertionError('should not abort'))),
     })()
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     preview, msg = w._await_finished('oc', 'sid-test')
     assert msg['content'][0]['text'] == 'done'
 
 
 def test_tool_stall_kills_dead_subagent(monkeypatch):
     """task 工具冻结且子代理消息不再变化 → 看门狗最终触发。"""
-    import utils.batch_engine as eng
-    from utils.batch_engine import _SessionTimeout
+    from ai.batch import engine as eng
+    from ai.batch.engine import _SessionTimeout
     w = eng.BatchWorker()
     w.SESSION_TIMEOUT_SEC = 0
     w.STALL_TIMEOUT_SEC = 0.1
@@ -373,7 +373,7 @@ def test_tool_stall_kills_dead_subagent(monkeypatch):
                                      [{'info': {'role': 'assistant', 'id': 'c0', 'parts': []}}]),
         'abort_session': staticmethod(lambda oc, directory='': None),
     })()
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     with pytest.raises(_SessionTimeout) as ei:
         w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'tool stuck'
@@ -387,7 +387,7 @@ def test_batch_directive_prepended_for_fresh_children(user_id, db_conn, claim_gu
                                                        monkeypatch, tmp_path):
     """非 continue 的批任务子任务：进发给模型的 prompt 必须带无人值守指令
     （禁提问/禁放弃），且记忆存档记的是不含指令的原文。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
     sid = sids[0]
     captured = {}
@@ -395,7 +395,7 @@ def test_batch_directive_prepended_for_fresh_children(user_id, db_conn, claim_gu
     def fake_send(oc, prompt, directory='', agent='', model=''):
         captured['prompt'] = prompt
 
-    monkeypatch.setattr(eng, 'opencode_client',
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client',
                         type('F', (), {
                             'create_session': staticmethod(lambda directory, title='': 'oc_x'),
                             'send_message': staticmethod(fake_send),
@@ -405,10 +405,11 @@ def test_batch_directive_prepended_for_fresh_children(user_id, db_conn, claim_gu
                             'get_messages': staticmethod(lambda oc, directory='': []),
                             'list_agents': staticmethod(lambda directory='': []),
                         })())
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     worker = eng.BatchWorker()
     worker.POLL_INTERVAL_SEC = 0
     # 跳过真实工作区准备（staging 文件不存在会走 mark_failed 早退）
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,

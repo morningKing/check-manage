@@ -29,7 +29,7 @@ def client():
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-            mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name == 'auth'
+            mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine') or mod_name == 'auth'
         ):
             try:
                 mod.get_db = _db_module.get_db

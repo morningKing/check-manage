@@ -29,7 +29,7 @@ def _patch_create(monkeypatch):
     import routes.ai_chat_batches as mod
     monkeypatch.setattr(mod, 'create_batch',
                         lambda uid, **kw: {'batchId': 'b1'})
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setattr(eng, 'get_worker', lambda: MagicMock())
 
 
@@ -37,7 +37,7 @@ def _patch_append(monkeypatch):
     import routes.ai_chat_batches as mod
     monkeypatch.setattr(mod, 'append_to_batch',
                         lambda uid, bid, files, **kw: {'batchId': bid})
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setattr(eng, 'get_worker', lambda: MagicMock())
 
 

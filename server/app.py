@@ -756,7 +756,7 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     start_dependency_scheduler(app)
 
     # Start in-process batch worker (drives child sessions via OpenCode HTTP API)
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().start()
 
     # Start scheduled AI row-processor scheduler

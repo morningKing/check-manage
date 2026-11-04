@@ -31,10 +31,17 @@ def setup_app(db_conn):
     # the importer. Rebind explicitly so we hit the real DB.
     import db as db_module
     import utils.batch_repo as batch_repo
-    import utils.batch_engine as batch_engine
+    from ai.batch.engine import (lifecycle as engine_lifecycle,
+                                 worker as engine_worker,
+                                 runner as engine_runner,
+                                 gates as engine_gates,
+                                 subtasks as engine_subtasks,
+                                 transitions as engine_transitions)
     db_module.pool = None  # force the real pool to be (re)created
     batch_repo.get_db = db_module.get_db
-    batch_engine.get_db = db_module.get_db
+    for _mod in (engine_lifecycle, engine_worker, engine_runner,
+                 engine_gates, engine_subtasks, engine_transitions):
+        _mod.get_db = db_module.get_db
 
     with db_conn.cursor() as cur:
         cur.execute(

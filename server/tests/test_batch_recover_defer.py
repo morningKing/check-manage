@@ -98,8 +98,8 @@ def _idle_raw():
 
 
 def _patch_oc(monkeypatch, raw):
-    import utils.batch_engine as eng
-    monkeypatch.setattr(eng, 'opencode_client', type('F', (), {
+    from ai.batch import engine as eng
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', type('F', (), {
         'get_messages': staticmethod(lambda oc, directory='': raw),
     })())
 
@@ -111,7 +111,7 @@ def _status(db_conn, sid):
 
 
 def _worker():
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     return BatchWorker()
 
 
@@ -193,7 +193,7 @@ def _step_boundary_raw(extra_tool: bool = False):
 
 def _patch_oc_abort(monkeypatch, raw, on_abort=None):
     """Fake OC：get_messages 固定返回 raw；abort_session 记录调用。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     calls = []
 
     def abort_session(oc, directory=''):
@@ -201,7 +201,7 @@ def _patch_oc_abort(monkeypatch, raw, on_abort=None):
         if on_abort is not None:
             on_abort()
 
-    monkeypatch.setattr(eng, 'opencode_client', type('F', (), {
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', type('F', (), {
         'get_messages': staticmethod(lambda oc, directory='': raw),
         'abort_session': staticmethod(abort_session),
     })())
@@ -219,7 +219,7 @@ def _decisions(db_conn, bid):
 
 def test_turn_flight_state_three_way():
     """flying / ambiguous / idle 三态判定（含空快照与库内历史组合）。"""
-    from utils.batch_engine import BatchWorker as W
+    from ai.batch.engine import BatchWorker as W
     assert W._turn_flight_state(
         [{'info': {'role': 'assistant', 'finish': None, 'time': {}},
           'parts': [{'type': 'text', 'text': '生成中'}]}]) == 'flying'

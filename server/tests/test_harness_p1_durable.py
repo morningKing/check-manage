@@ -97,7 +97,7 @@ def _set_child(db_conn, sid, **cols):
 # ---------------------------------------------------------------------------
 
 def test_claim_sets_lease_and_increments_fencing(db_conn, user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
@@ -114,7 +114,7 @@ def test_claim_sets_lease_and_increments_fencing(db_conn, user_id):
 
 
 def test_expired_lease_taken_over_by_new_owner(db_conn, user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     with db_conn.cursor() as cur:
@@ -131,7 +131,7 @@ def test_expired_lease_taken_over_by_new_owner(db_conn, user_id):
 
 
 def test_child_heartbeat_renewal(db_conn, user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     w = BatchWorker()
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _set_child(db_conn, sids[0], lease_owner='hb-owner', fencing_token=3)
@@ -147,7 +147,7 @@ def test_child_heartbeat_renewal(db_conn, user_id):
 
 def test_reconcile_skips_unexpired_lease(db_conn, user_id, monkeypatch):
     """lease 未过期 → 等待（不重排、不误杀）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _set_child(db_conn, sids[0], status='running', lease_owner='someone-else',
                lease_until=datetime.now() + timedelta(seconds=60))
@@ -160,7 +160,7 @@ def test_reconcile_skips_unexpired_lease(db_conn, user_id, monkeypatch):
 
 def test_reconcile_unknown_effect_needs_review(db_conn, user_id, monkeypatch):
     """存在 unknown 副作用 → needs_review（禁止自动重放）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from ai.batch import execution_effect as execution_effect
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _set_child(db_conn, sids[0], status='running', lease_owner='gone',
@@ -184,8 +184,8 @@ def test_reconcile_alive_session_requeues_continue(db_conn, user_id, monkeypatch
     （批次 2 起：无 checkpoint/消息/副作用的裸场景改走 failed(retryable)，
     见 test_reconcile_no_progress_evidence_fails。）"""
     from unittest.mock import MagicMock
-    import utils.batch_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch import engine as eng
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _set_child(db_conn, sids[0], status='running', lease_owner='gone',
                lease_until=datetime.now() - timedelta(seconds=60),
@@ -204,7 +204,7 @@ def test_reconcile_alive_session_requeues_continue(db_conn, user_id, monkeypatch
     fake.get_messages.return_value = [
         {'info': {'role': 'assistant', 'finish': 'stop',
                   'time': {'completed': {'seconds': 1}}}}]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', fake)
     w = BatchWorker()
     w._reconcile_stale_running()
     with db_conn.cursor() as cur:
@@ -221,15 +221,15 @@ def test_reconcile_no_progress_evidence_fails(db_conn, user_id, monkeypatch):
     副作用 → failed(retryable)，不再盲目原地续跑（无进度证据的静默重放
     是 spec 明确禁止的）。"""
     from unittest.mock import MagicMock
-    import utils.batch_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch import engine as eng
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _set_child(db_conn, sids[0], status='running', lease_owner='gone',
                lease_until=datetime.now() - timedelta(seconds=60),
                opencode_session_id='oc-noproof', execution_generation=1)
     fake = MagicMock()
     fake.get_messages.return_value = [{'info': {'role': 'assistant'}}]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', fake)
     BatchWorker()._reconcile_stale_running()
     with db_conn.cursor() as cur:
         cur.execute("SELECT status, error_message FROM ai_chat_sessions "
@@ -248,11 +248,11 @@ def test_fi_send_crash_after_delivery_requeues_with_continue(
     """send_message 成功后 executor 崩溃（轮询阶段抛 _TurnFailed/异常）→
     自动重试换代续跑，不是静默丢失（spec §12.2「请求已送达但客户端超时」）。"""
     from unittest.mock import MagicMock
-    import utils.batch_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch import engine as eng
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     root = tmp_path
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     # 真实落暂存文件（p1 的 _seed_batch 不带 root 参数）
     import os as _os
     _rel = f'batch-staging/{user_id}/u1/f0.csv'
@@ -271,7 +271,7 @@ def test_fi_send_crash_after_delivery_requeues_with_continue(
     # spec §12.2）——RequestException 属可重试类 → auto-retry 换代续跑
     fake.send_message.return_value = {'id': 'm1'}
     fake.list_messages.return_value = [{'info': {'role': 'assistant'}}]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     w = BatchWorker()
     monkeypatch.setattr(w, 'MAX_AUTO_RETRY', 3)
     monkeypatch.setattr(
@@ -320,15 +320,15 @@ def test_fi_reconcile_skips_when_opencode_down(db_conn, user_id, monkeypatch):
     """对账期间 OpenCode 整体不可达 → 跳过本轮（不批量误杀），下一轮再收口。"""
     import requests as _rq
     from unittest.mock import MagicMock
-    import utils.batch_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch import engine as eng
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _set_child(db_conn, sids[0], status='running', lease_owner='gone',
                lease_until=datetime.now() - timedelta(seconds=60),
                opencode_session_id='oc-down', execution_generation=1)
     fake = MagicMock()
     fake.get_messages.side_effect = _rq.exceptions.ConnectionError('down')
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', fake)
     BatchWorker()._reconcile_stale_running()
     with db_conn.cursor() as cur:
         cur.execute("SELECT status FROM ai_chat_sessions WHERE id=%s", (sids[0],))
@@ -452,7 +452,7 @@ def test_command_idempotency(db_conn, user_id):
 
 def test_budget_evaluate_and_claim_block(db_conn, user_id):
     from ai.batch import execution_budget as execution_budget
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     execution_budget.upsert_budget('batch', bid, max_tokens=100,
                                    on_exceed='drain')

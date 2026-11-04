@@ -179,7 +179,7 @@ def create():
         upsert_batch_concurrency(result['batch']['id'], max_concurrency)
         result = get_batch_detail(g.current_user['userId'], result['batch']['id'])
     # Wake the worker so it picks up the new pending sessions immediately.
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result), 201
 
@@ -472,7 +472,7 @@ def remove(batch_id):
             cancel_batch(user_id, batch_id)
         except ValueError:
             pass  # became terminal concurrently
-        from utils.batch_engine import get_worker
+        from ai.batch.engine import get_worker
         get_worker().notify()
         # Bounded drain（P0 spec §7.2 / H2 修复）：超时不得继续删除——与对外
         # API 语义一致，返回 409 并保留任务与工作区（消灭幽灵执行）。
@@ -514,7 +514,7 @@ def cancel(batch_id):
         return jsonify({'error': str(e)}), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result)
 
@@ -531,7 +531,7 @@ def pause(batch_id):
         return jsonify({'error': str(e)}), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result)
 
@@ -548,7 +548,7 @@ def resume(batch_id):
         return jsonify({'error': str(e)}), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result)
 
@@ -563,7 +563,7 @@ def retry_failed(batch_id):
     except Exception as e:
         return jsonify({'error': f'工作区重置失败: {e}'}), 500
     if count:
-        from utils.batch_engine import get_worker
+        from ai.batch.engine import get_worker
         get_worker().notify()
     return jsonify({'retried': count})
 
@@ -579,7 +579,7 @@ def cancel_single_child(batch_id, session_id):
     if result is None:
         return jsonify({'error': 'not found'}), 404
     # Notify worker to pick up the cancellation
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result)
 
@@ -603,7 +603,7 @@ def append(batch_id):
         return jsonify({'error': str(e)}), 400
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result)
 
@@ -619,7 +619,7 @@ def resume_single_child(batch_id, session_id):
         return jsonify(_child_state_error(e)), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result)
 
@@ -647,7 +647,7 @@ def continue_single_child(batch_id, session_id):
         return jsonify(_child_state_error(e)), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result), 202
 
@@ -684,7 +684,7 @@ def reexecute(batch_id, session_id):
         return jsonify(_child_state_error(e)), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify(result)
 
@@ -758,7 +758,7 @@ def submit_batch_command(batch_id):
     if applied:
         execution_commands.finish_command(cmd['id'], 'applied',
                                           result_snapshot={'result': snapshot})
-        from utils.batch_engine import get_worker
+        from ai.batch.engine import get_worker
         get_worker().notify()
     else:
         execution_commands.finish_command(cmd['id'], 'rejected',
@@ -831,7 +831,7 @@ def force_stop(batch_id):
     result = force_stop_batch(batch_id, operator=user['userId'])
     execution_commands.finish_command(cmd['id'], 'applied',
                                       result_snapshot=result)
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
                     **result})

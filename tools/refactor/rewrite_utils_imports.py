@@ -122,6 +122,8 @@ MAPPING = {
     'run_diagnosis': 'ai.batch.run_diagnosis',
     'delivery_outbox': 'ai.batch.delivery_outbox',
     'subtask_repo': 'ai.batch.subtask_repo',
+    # ---- batch 4b: ai/batch/engine/ ----
+    'batch_engine': 'ai.batch.engine',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

@@ -10,7 +10,7 @@ pytest.importorskip('psycopg2')
 
 
 def test_start_retries_until_lease_released(db_conn):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from ai.batch import execution_lease as execution_lease
     key = 'batch-test-' + uuid.uuid4().hex[:8]
     owner_old = execution_lease.owner_id()

@@ -179,7 +179,7 @@ def test_mark_cancelled_wins_over_repark_flag(db_conn, seeded_paused_child, monk
     人工接管轮运行期间，worker 取消收口（_mark_cancelled）必须立即生效——
     expect_repark 不得挡取消（否则 CAS 0 行 → miss 被丢弃 → 任务继续跑到
     repark，取消静默失效）。命中后标志随 SET 恒清，cancelled 记 failed 聚合。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     # 播种接管轮中间态：running + 标志 + cancel_requested + 已知 gen/token
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running', continue_repark=true, "

@@ -22,7 +22,7 @@ from routes.open_api_batches import MAX_PROMPT_CHARS, _validate_files
 from utils.batch_repo import get_max_files_per_batch
 from ai.sessions.ai_session_repo import cancel_session, create_session, get_session_for_owner
 from common.api_errors import CONFLICT, INVALID_ARGUMENT, NOT_FOUND, err, register_error_handlers
-from utils.batch_engine import get_worker
+from ai.batch.engine import get_worker
 from common.operation_log import log_api_operation
 
 open_api_ai_sessions_bp = Blueprint(

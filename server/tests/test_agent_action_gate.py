@@ -854,7 +854,7 @@ def test_gate_retry_batch_flag_overrides_env(gate_fixture, monkeypatch):
     """批级 gate_retry 开关优先于全局 env:批开启时即使 env=0 也会修正一次;
     批显式关闭时即使 env 开启也不修正。"""
     import os
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     f = gate_fixture
     monkeypatch.setenv('AI_BATCH_GATE_RETRY', '0')
     # 给 running 子任务补 oc 会话与期望
@@ -892,7 +892,7 @@ def test_gate_retry_batch_flag_overrides_env(gate_fixture, monkeypatch):
 
 def test_gate_retry_batch_flag_off_blocks_env(gate_fixture, monkeypatch):
     import os
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     f = gate_fixture
     monkeypatch.setenv('AI_BATCH_GATE_RETRY', '3')
     with get_db() as conn:
@@ -1224,7 +1224,7 @@ class TestPostCheck:
             if mod is None:
                 continue
             if getattr(mod, 'get_db', None) is not None and (
-                    mod_name.startswith('routes.') or mod_name.startswith('utils.')
+                    mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
                     or mod_name == 'auth'):
                 try:
                     mod.get_db = db_module.get_db

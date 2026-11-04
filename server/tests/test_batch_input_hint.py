@@ -3,7 +3,7 @@ agent reads it instead of asking for a path. Scan children already carry their o
 context preamble (ai_scan_engine.assemble_prompt) and must be left untouched."""
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.batch_engine as eng
+from ai.batch import engine as eng
 
 
 def test_input_hint_added_for_regular_child():

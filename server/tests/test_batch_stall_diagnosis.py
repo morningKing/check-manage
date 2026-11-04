@@ -56,7 +56,7 @@ def _seed_batch(db_conn, user_id):
 
 def _diag_worker(monkeypatch, list_messages, list_questions=None,
                  list_permissions=None):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     worker = eng.BatchWorker()
     worker.SESSION_TIMEOUT_SEC = 0      # 无硬上限，纯靠 STALL / tool-stuck 触发
     worker.POLL_INTERVAL_SEC = 0.02
@@ -73,7 +73,7 @@ def _diag_worker(monkeypatch, list_messages, list_questions=None,
     if list_permissions is not None:
         methods['list_permissions'] = staticmethod(
             lambda directory='': list_permissions())
-    monkeypatch.setattr(eng, 'opencode_client',
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client',
                         type('F', (), methods)())
     return worker, eng
 
@@ -82,7 +82,7 @@ def test_stall_diagnosis_carries_last_message_and_pending_ask(monkeypatch):
     """STALL 触发瞬间：诊断必须回答「当时有没有工具在跑 / 有没有 pending
     ask / 最后一条消息长什么样」。构造形状 = 有 pending question 工具 part
     但 running_tool=False（判定矛盾型现场，正是事后最难还原的那种）。"""
-    from utils.batch_engine import _SessionTimeout
+    from ai.batch.engine import _SessionTimeout
 
     frozen = {'role': 'assistant', 'finished': False, 'finish': None,
               'running_tool': False, 'id': 'm-late', 'error': None,
@@ -112,7 +112,7 @@ def test_stall_diagnosis_carries_last_message_and_pending_ask(monkeypatch):
 def test_tool_stuck_diagnosis_records_running_tool(monkeypatch):
     """工具卡死（900s 看门狗）触发时：runningTool=True + 工具名/状态入诊断，
     事后才能回答「是哪个工具卡住、当时是否有 pending ask」。"""
-    from utils.batch_engine import _SessionTimeout
+    from ai.batch.engine import _SessionTimeout
 
     hung = {'role': 'assistant', 'finished': False, 'finish': 'tool-calls',
             'running_tool': True, 'id': 'm-hang', 'error': None,
@@ -148,7 +148,7 @@ def test_stall_verdict_aborts_opencode_turn(monkeypatch):
         list_questions=lambda: [], list_permissions=lambda: [])
     worker.STALL_TIMEOUT_SEC = 0.15
     aborted = []
-    monkeypatch.setattr(eng.opencode_client, 'abort_session',
+    monkeypatch.setattr(eng.runner.opencode_client, 'abort_session',
                         staticmethod(lambda oc, directory='': aborted.append(oc)),
                         raising=False)
 
@@ -176,7 +176,7 @@ def test_run_one_stall_failed_appends_event_and_error_tail(
         db_conn, user_id, monkeypatch, tmp_path):
     """预算用尽落 failed：error_message 尾部带【诊断】单行 + 落一条
     child.stall 事件（action=failed，payload 含结构化 diagnosis）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_batch(db_conn, user_id)
     frozen = {'role': 'assistant', 'finished': False, 'finish': None,
               'running_tool': False, 'id': 'm1', 'error': None, 'content': []}
@@ -185,7 +185,7 @@ def test_run_one_stall_failed_appends_event_and_error_tail(
         list_questions=lambda: [{'id': 'q1', 'sessionID': 'oc-diag'}],
         list_permissions=lambda: [])
     worker.STALL_TIMEOUT_SEC = 0.15
-    monkeypatch.setattr(eng, '_prepare_workspace',
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace',
                         lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         # 预算用尽：retry_count 已到 MAX_AUTO_RETRY，这次直接落 failed
@@ -219,7 +219,7 @@ def test_run_one_stall_auto_retry_appends_event_without_error_tail(
         db_conn, user_id, monkeypatch, tmp_path):
     """预算内失败走自动重试：事件 action=auto_retry（每次尝试一条持久证据），
     会话行 error_message 保持空（还没终局，不该带诊断尾巴吓人）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_batch(db_conn, user_id)
     frozen = {'role': 'assistant', 'finished': False, 'finish': None,
               'running_tool': False, 'id': 'm1', 'error': None, 'content': []}
@@ -227,7 +227,7 @@ def test_run_one_stall_auto_retry_appends_event_without_error_tail(
         monkeypatch, lambda: [frozen],
         list_questions=lambda: [], list_permissions=lambda: [])
     worker.STALL_TIMEOUT_SEC = 0.15
-    monkeypatch.setattr(eng, '_prepare_workspace',
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace',
                         lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running', "

@@ -18,7 +18,7 @@ from db import get_db
 from common.api_errors import (CONFLICT, INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND,
                               PAYLOAD_TOO_LARGE, UPSTREAM_UNAVAILABLE, err,
                               register_error_handlers)
-from utils.batch_engine import get_worker
+from ai.batch.engine import get_worker
 from utils.batch_repo import (append_to_batch, cancel_batch,
                               create_batch, delete_batch, get_batch_detail,
                               get_batch_results, get_batch_usage,

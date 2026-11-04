@@ -88,7 +88,7 @@ def _row(db_conn, sid):
 
 
 def _worker():
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     return BatchWorker()
 
 
@@ -125,11 +125,11 @@ def test_gate_retry_preserves_cancel_on_running(db_conn, user_id, claim_guard,
 
 def test_requeue_lost_preserves_flags_then_cancels(db_conn, user_id,
                                                    claim_guard, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed(db_conn, user_id, 'running', cancel=True)
     claim_guard(sid)
     # worker 失联期间用户按了中断：对账器重排必须带着标志回 pending
-    monkeypatch.setattr(eng, 'opencode_client', type('F', (), {
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', type('F', (), {
         'get_messages': staticmethod(lambda oc, directory='': []),
     })())
     worker = _worker()

@@ -23,7 +23,7 @@ def _make_repo(path):
 
 
 def test_provision_clones_repo_into_dot_opencode(tmp_path):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     src = str(tmp_path / 'src')
     _make_repo(src)
     ws = str(tmp_path / 'ws')
@@ -38,7 +38,7 @@ def test_provision_clones_repo_into_dot_opencode(tmp_path):
 
 
 def test_provision_empty_repo_is_noop(tmp_path):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     ws = str(tmp_path / 'ws')
     os.makedirs(ws)
     assert BatchWorker._provision_workspace(ws, '', '') is None
@@ -49,8 +49,8 @@ def test_provision_empty_repo_is_noop(tmp_path):
 def test_check_agent_validates_primary_subagent_unknown(monkeypatch):
     """Fail fast on an unusable batch agent: empty→ok, primary→ok, subagent and
     unknown→clear error (the silent-3min-stall bug)."""
-    import utils.batch_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch import engine as eng
+    from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     fake = MagicMock()
     fake.list_agents.return_value = [
@@ -58,7 +58,7 @@ def test_check_agent_validates_primary_subagent_unknown(monkeypatch):
         {'name': 'plan', 'mode': 'primary'},
         {'name': 'explore', 'mode': 'subagent'},
     ]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.gates.opencode_client', fake)
     assert BatchWorker._check_agent('', 'd') is None          # default
     assert BatchWorker._check_agent('build', 'd') is None      # primary
     sub = BatchWorker._check_agent('explore', 'd')
@@ -70,19 +70,19 @@ def test_check_agent_validates_primary_subagent_unknown(monkeypatch):
 def test_check_agent_degrades_when_opencode_unavailable(monkeypatch):
     """If OpenCode can't be queried, don't block the run (create_session will
     surface the real connectivity error)."""
-    import utils.batch_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch import engine as eng
+    from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     fake = MagicMock()
     fake.list_agents.side_effect = RuntimeError('opencode down')
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.gates.opencode_client', fake)
     assert BatchWorker._check_agent('build', 'd') is None
 
 
 def test_provision_bad_repo_returns_warning_not_raises(tmp_path):
     """Degrade gracefully: a clone failure returns a warning string (the run
     continues with global agents/skills) instead of raising."""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     ws = str(tmp_path / 'ws')
     os.makedirs(ws)
     warn = BatchWorker._provision_workspace(ws, str(tmp_path / 'nope-does-not-exist'), '')

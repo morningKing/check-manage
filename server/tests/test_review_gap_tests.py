@@ -133,12 +133,12 @@ def test_h4_concurrent_advance_dispatches_once(db_conn, user_id, monkeypatch,
                                                tmp_path):
     from concurrent.futures import ThreadPoolExecutor
     from unittest.mock import MagicMock
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
     from utils import orchestration_defs as defs, orchestration_engine as eng2
 
     root = tmp_path
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
 
     d = defs.publish_definition(
         f'h4-conc-{uuid.uuid4().hex[:6]}', description=None,
@@ -155,7 +155,7 @@ def test_h4_concurrent_advance_dispatches_once(db_conn, user_id, monkeypatch,
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': 'done'}]}]
     fake.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
 
     # 6 线程并发推进同一 run（复现 06 报告 §3 H4 的探针场景）
     barrier = threading.Barrier(6)
@@ -300,7 +300,7 @@ def test_h3_exception_branch_also_fails_closed(db_conn, user_id, monkeypatch):
     assert gate['status'] == 'inconclusive'
     assert gate.get('expected') == 1      # 引擎据此 fail-closed
     # 判定信号走 gate_participates（单一事实来源，引擎/测试共用）
-    from utils.batch_engine import gate_participates
+    from ai.batch.engine import gate_participates
     assert gate_participates({'results': [], 'expected': 1}, 0) is True
     assert gate_participates({'results': [], 'expected': 0}, 0) is False
     assert gate_participates({'results': [{'x': 1}]}, 0) is True
@@ -1181,7 +1181,7 @@ def gap_open_client(db_conn):
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-                mod_name.startswith('routes.') or mod_name.startswith('utils.')
+                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
                 or mod_name == 'auth'):
             try:
                 mod.get_db = real_get_db
@@ -1644,7 +1644,7 @@ def test_publish_preserves_all_fields(db_conn, user_id):
 
 def test_max_concurrent_from_settings(db_conn):
     """P2-B1：并发度从 ai_settings 动态读取。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     w = BatchWorker()
     # 列可能尚未随 init_db 落库（幂等补齐，保证用例自洽）
     with db_conn.cursor() as cur:
@@ -1754,10 +1754,10 @@ def test_workspace_quota_rejects(tmp_path, monkeypatch):
     import os
     import shutil
     import config as cfg
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     uid = f'quota-{uuid.uuid4().hex[:8]}'
     monkeypatch.setattr(cfg, 'AI_WORKSPACE_QUOTA_MB', 1)  # 1MB
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(tmp_path))
     user_ws = tmp_path / uid / 'prev-session'
     user_ws.mkdir(parents=True)
     (user_ws / 'big.bin').write_bytes(b'x' * (2 * 1024 * 1024))  # 已占 2MB
@@ -1781,8 +1781,8 @@ def test_progress_persist_updates_usage(db_conn, user_id, monkeypatch):
     更新，不等回合收敛。重复持久化走累加（实时可见口径刻意偏大，终态由
     accumulate_usage 整行覆盖自校正）。"""
     from unittest.mock import MagicMock
-    import utils.batch_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch import engine as eng
+    from ai.batch.engine import BatchWorker
 
     sid = str(uuid.uuid4())
     with db_conn.cursor() as cur:
@@ -1802,7 +1802,7 @@ def test_progress_persist_updates_usage(db_conn, user_id, monkeypatch):
 
     fake_oc = MagicMock()
     fake_oc.get_messages.return_value = [_msg(f'{sid}:m1', 500, 100, 0.01)]
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', fake_oc)
 
     worker = BatchWorker()
     worker._persist_conversation(sid, '提示词', 'oc-usage-1', None)
@@ -1901,7 +1901,7 @@ def test_batch_engine_dispatcher_has_listen():
     断线重连退避、stop/退出关闭连接，且保留 _wake.wait 轮询兜底。"""
     import pathlib
     repo_root = pathlib.Path(__file__).resolve().parents[2]
-    src = (repo_root / 'server' / 'utils' / 'batch_engine.py').read_text(
+    src = (repo_root / 'server' / 'ai' / 'batch' / 'engine' / 'worker.py').read_text(
         encoding='utf-8', errors='replace')
     assert 'LISTEN {self.LISTEN_CHANNEL}' in src, '缺少 LISTEN 订阅'
     assert "LISTEN_CHANNEL = 'batch_claim_ready'" in src, '频道名与迁移不一致'
@@ -1937,7 +1937,7 @@ def test_facade_client_prefers_runtime_and_falls_back(monkeypatch):
     """P3-A8：facade._client() 优先 runtime.get_client()；runtime 不可用
     （返回 None / 抛异常 / 无 get_client）时兜底直连，不 crash。"""
     from utils import runtime as rt_mod
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from ai.opencode.opencode_client import OpenCodeClient
 
     sentinel = object()

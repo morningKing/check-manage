@@ -72,7 +72,7 @@ def _seed_batch(db_conn, user_id, n_sessions=3):
 def test_claim_marks_batch_running(user_id, db_conn):
     """The batch flips pending -> running the moment its first child is claimed,
     so the sidebar shows 运行中 while children run (not 待运行 until one finishes)."""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=2)   # batch defaults to 'pending'
     # 认领是全局的(共享开发库):清掉其他用例遗留的 pending 行,保证本用例
     # 种子被确定性地认领,不与残留互相抢。
@@ -93,7 +93,7 @@ def test_claim_marks_batch_running(user_id, db_conn):
 
 
 def test_claim_pending_respects_limit(user_id, db_conn):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=5)
     w = BatchWorker()
     with db_conn.cursor() as cur:
@@ -157,13 +157,13 @@ def _cleanup_api_key(db_conn, key_id):
 def test_prepare_workspace_empty_staged_path_does_not_copy_workspace_root(tmp_path, monkeypatch):
     """回归测试：staged_file_path='' 曾经会把整个 workspace 根目录（含其它
     session 的文件）递归拷进这个 session 自己的 uploads/。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     root = tmp_path / 'ai-workspaces'
     other_session = root / 'someone-else' / 'other-sid'
     other_session.mkdir(parents=True)
     (other_session / 'secret.txt').write_text('should not leak')
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
 
     ws = eng._prepare_workspace('u1', 'sid-standalone', '')
 
@@ -175,7 +175,7 @@ def test_prepare_workspace_accepts_list_of_paths(tmp_path, monkeypatch):
     """staged_file_path as a list copies every entry into uploads/ — used by
     standalone /v1/ai-sessions children with 2+ files (input_files), which
     need not share a common parent staging directory."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     root = tmp_path / 'ai-workspaces'
     staging_a = root / 'batch-staging' / 'u1' / 'upload-a'
@@ -184,7 +184,7 @@ def test_prepare_workspace_accepts_list_of_paths(tmp_path, monkeypatch):
     staging_b = root / 'batch-staging' / 'u1' / 'upload-b'
     staging_b.mkdir(parents=True)
     (staging_b / 'report2.pdf').write_text('report two')
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
 
     ws = eng._prepare_workspace('u1', 'sid-multi', [
         'batch-staging/u1/upload-a/report1.pdf',
@@ -201,13 +201,13 @@ def test_prepare_workspace_single_element_list_matches_string_behavior(tmp_path,
     """A one-item list and the equivalent plain string produce the same
     uploads/ contents — the list form is a pure generalization, not a
     separate code path for existing single-file callers."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     root = tmp_path / 'ai-workspaces'
     staging = root / 'batch-staging' / 'u1' / 'upload-a'
     staging.mkdir(parents=True)
     (staging / 'report1.pdf').write_text('report one')
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
 
     ws = eng._prepare_workspace('u1', 'sid-single', ['batch-staging/u1/upload-a/report1.pdf'])
 
@@ -215,18 +215,18 @@ def test_prepare_workspace_single_element_list_matches_string_behavior(tmp_path,
 
 
 def test_prepare_workspace_list_raises_on_missing_entry(tmp_path, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     root = tmp_path / 'ai-workspaces'
     root.mkdir(parents=True)
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
 
     with pytest.raises(FileNotFoundError):
         eng._prepare_workspace('u1', 'sid-missing', ['batch-staging/u1/gone/x.pdf'])
 
 
 def test_with_input_hint_single_file_names_it(user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     row = {'input_files': [{'name': 'report1.pdf', 'path': 'batch-staging/u1/a/report1.pdf'}]}
     hint = BatchWorker._with_input_hint('总结一下。', row)
     assert 'uploads/report1.pdf' in hint
@@ -234,7 +234,7 @@ def test_with_input_hint_single_file_names_it(user_id):
 
 
 def test_with_input_hint_multi_file_does_not_name_any_single_file(user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     row = {'input_files': [
         {'name': 'report1.pdf', 'path': 'batch-staging/u1/a/report1.pdf'},
         {'name': 'report2.pdf', 'path': 'batch-staging/u1/b/report2.pdf'},
@@ -247,7 +247,7 @@ def test_with_input_hint_multi_file_does_not_name_any_single_file(user_id):
 
 def test_with_input_hint_falls_back_to_batch_input_file_when_no_input_files(user_id):
     """input_files 恒为空的既有路径（批任务子会话）行为不变。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     row = {'input_files': None, 'batch_input_file': 'batch-staging/u1/a/report1.pdf'}
     hint = BatchWorker._with_input_hint('总结一下。', row)
     assert 'uploads/report1.pdf' in hint
@@ -256,15 +256,15 @@ def test_with_input_hint_falls_back_to_batch_input_file_when_no_input_files(user
 def test_run_one_standalone_session_with_multiple_files(user_id, db_conn, monkeypatch, tmp_path):
     """两个文件都真的被拷进这个会话自己的 uploads/，且 prompt 提示语没有点名
     某一个具体文件（措辞见 _with_input_hint 的多文件分支）。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     root = tmp_path / 'ai-workspaces'
     staging = root / 'batch-staging' / user_id / 'upload-x'
     staging.mkdir(parents=True)
     (staging / 'report1.pdf').write_text('report one')
     (staging / 'report2.pdf').write_text('report two')
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
 
     files = [
         {'name': 'report1.pdf', 'path': f'batch-staging/{user_id}/upload-x/report1.pdf'},
@@ -282,7 +282,8 @@ def test_run_one_standalone_session_with_multiple_files(user_id, db_conn, monkey
              'content': [{'type': 'text', 'text': '两份报告都已读取。'}]}
         ]
         fake_oc.get_messages.return_value = []
-        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+        monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+        monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
 
         w = BatchWorker()
         claimed = w._claim_pending_sessions(limit=1)
@@ -306,7 +307,7 @@ def test_run_one_standalone_session_with_multiple_files(user_id, db_conn, monkey
 def test_claim_picks_up_standalone_session(user_id, db_conn):
     """batch_id IS NULL 但 api_key_id 非空的行也要被 dispatcher 捞到——不是只有
     批任务子会话才能进 pending/running 状态机。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     sid, key_id = _seed_standalone_session(db_conn, user_id)
     try:
         w = BatchWorker()
@@ -328,8 +329,8 @@ def test_run_one_standalone_session_happy_path(user_id, db_conn, monkeypatch, tm
     D4 修复后契约：continue_prompt 在认领时**保留**——重试/重执行需要取回
     原始请求（standalone 行没有父批任务行可回读）；终态行不会再被 dispatcher
     认领，残留无副作用。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     sid, key_id = _seed_standalone_session(
         db_conn, user_id, prompt='帮我写一句问候语', agent='build', model='m1')
@@ -343,9 +344,10 @@ def test_run_one_standalone_session_happy_path(user_id, db_conn, monkeypatch, tm
              'content': [{'type': 'text', 'text': '你好！'}]}
         ]
         fake_oc.get_messages.return_value = []
-        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+        monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+        monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
         ws = str(tmp_path)
-        monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+        monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
 
         w = BatchWorker()
         claimed = w._claim_pending_sessions(limit=1)
@@ -376,8 +378,8 @@ def test_run_one_batch_child_prefers_assigned_session_model(
     轮询分配进 ai_chat_sessions.model）优先于批级 model——这是「子会话真的
     用各自模型跑」的最后一环。seq0 无快照 → 回退批级；seq1 有快照 → 快照
     生效；send_message 与执行审计 attempt 的 effective_model 都要拿到。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, 2)
     try:
@@ -398,9 +400,10 @@ def test_run_one_batch_child_prefers_assigned_session_model(
              'content': [{'type': 'text', 'text': '好'}]}
         ]
         fake_oc.get_messages.return_value = []
-        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+        monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+        monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
         ws = str(tmp_path)
-        monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+        monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
 
         w = BatchWorker()
         claimed = w._claim_pending_sessions(limit=2)
@@ -435,15 +438,16 @@ def test_run_one_standalone_session_failure_does_not_touch_batches_table(
         user_id, db_conn, monkeypatch, tmp_path):
     """batch_id=None 时 _mark_failed 不该再去碰 ai_chat_batches（之前是安全的
     空操作，现在直接跳过）——这里断言失败路径本身照常工作。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     sid, key_id = _seed_standalone_session(db_conn, user_id, prompt='p')
     try:
         fake_oc = MagicMock()
         fake_oc.create_session.side_effect = RuntimeError('opencode unreachable')
-        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
-        monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+        monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+        monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
+        monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
 
         w = BatchWorker()
         claimed = w._claim_pending_sessions(limit=1)
@@ -464,8 +468,8 @@ def test_run_one_standalone_session_failure_does_not_touch_batches_table(
 # ---------------------------------------------------------------------------
 
 def test_run_one_happy_path_marks_completed(user_id, db_conn, monkeypatch, tmp_path):
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
 
@@ -478,9 +482,10 @@ def test_run_one_happy_path_marks_completed(user_id, db_conn, monkeypatch, tmp_p
          'content': [{'type': 'text', 'text': 'done!'}]}
     ]
     fake_oc.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     ws = str(tmp_path)
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
 
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
@@ -515,8 +520,8 @@ def test_run_one_injects_and_records_memory(user_id, db_conn, monkeypatch, tmp_p
     记忆抽取：成功完成后应异步调用 add_memory(user_id, [user, assistant])，
     且 user 消息用的是未拼记忆块的原始 prompt（不能把记忆块自己再存回记忆库）。"""
     import threading
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
     from ai.sessions import memory as mem
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
@@ -534,9 +539,10 @@ def test_run_one_injects_and_records_memory(user_id, db_conn, monkeypatch, tmp_p
          'content': [{'type': 'text', 'text': 'done!'}]}
     ]
     fake_oc.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     ws = str(tmp_path)
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
 
     monkeypatch.setattr(
         mem, 'search_memory',
@@ -572,16 +578,17 @@ def test_run_one_injects_and_records_memory(user_id, db_conn, monkeypatch, tmp_p
 # ---------------------------------------------------------------------------
 
 def test_run_one_http_error_marks_failed(user_id, db_conn, monkeypatch, tmp_path):
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
 
     fake_oc = MagicMock()
     fake_oc.create_session.side_effect = RuntimeError("opencode 500")
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     ws = str(tmp_path)
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
 
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
@@ -610,8 +617,8 @@ def test_run_one_http_error_marks_failed(user_id, db_conn, monkeypatch, tmp_path
 # ---------------------------------------------------------------------------
 
 def test_run_one_timeout_marks_failed(user_id, db_conn, monkeypatch, tmp_path):
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
 
@@ -622,9 +629,10 @@ def test_run_one_timeout_marks_failed(user_id, db_conn, monkeypatch, tmp_path):
     fake_oc.list_messages.return_value = [
         {'role': 'assistant', 'finished': False, 'content': []}
     ]
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     ws = str(tmp_path)
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
 
     w = BatchWorker()
     w.SESSION_TIMEOUT_SEC = 1   # speed up the test
@@ -652,8 +660,8 @@ def test_run_one_recovers_stale_session_on_dispatch_failure(user_id, db_conn, mo
     session、把 DB 的 opencode_session_id 更新为新 id、第二次 send_message
     收到「历史摘要 + 原始 prompt」，最终仍正常完成。"""
     import requests
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
 
@@ -672,12 +680,13 @@ def test_run_one_recovers_stale_session_on_dispatch_failure(user_id, db_conn, mo
          'content': [{'type': 'text', 'text': 'recovered reply'}]}
     ]
     fake_oc.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     ws = str(tmp_path)
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
     # No prior history for this brand-new session — render_history_block should
     # return '' (nothing to inject), so the resent content is just the prompt.
-    monkeypatch.setattr(eng, 'render_history_block', lambda *a, **kw: '')
+    monkeypatch.setattr('ai.batch.engine.runner.render_history_block', lambda *a, **kw: '')
 
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
@@ -700,8 +709,8 @@ def test_run_one_continue_mode_recovers_stale_session(user_id, db_conn, monkeypa
     """continue 模式（复用存量 opencode_session_id）遇到派发失败时，同样要
     触发恢复，而不是直接落 failed——这是本次要补的那个不对称。"""
     import requests
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
     ws = str(tmp_path)
@@ -729,8 +738,9 @@ def test_run_one_continue_mode_recovers_stale_session(user_id, db_conn, monkeypa
          'content': [{'type': 'text', 'text': 'recovered reply'}]}
     ]
     fake_oc.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
-    monkeypatch.setattr(eng, 'render_history_block',
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
+    monkeypatch.setattr('ai.batch.engine.runner.render_history_block',
                         lambda *a, **kw: '[此前对话摘要]\n用户: 你好\n\n')
 
     w = BatchWorker()
@@ -758,8 +768,8 @@ def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_c
     重新排队（retry_count+1）；预算用尽后再跑，恢复失败落 failed，错误信息
     反映恢复失败的原因，且只重试一次（不会死循环）。"""
     import requests
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
 
@@ -770,10 +780,11 @@ def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_c
     def _send(oc_sid, content, **kw):
         raise requests.exceptions.ConnectionError(f'still broken for {oc_sid}')
     fake_oc.send_message.side_effect = _send
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     ws = str(tmp_path)
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
-    monkeypatch.setattr(eng, 'render_history_block', lambda *a, **kw: '')
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr('ai.batch.engine.runner.render_history_block', lambda *a, **kw: '')
 
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
@@ -831,7 +842,7 @@ def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_c
 def test_batch_status_partial_when_mix(user_id, db_conn):
     """When _recompute_batch_status sees done>0 and failed>0 and all terminal,
     parent batch.status = 'partial'."""
-    from utils.batch_engine import _recompute_batch_status
+    from ai.batch.engine import _recompute_batch_status
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=3)
     with db_conn.cursor() as cur:
@@ -871,7 +882,7 @@ def test_recompute_batch_status_fires_callback_on_terminal(user_id, db_conn, mon
     旧直发路径（该路径仍需保持可用，作为 outbox 的降级通道）。"""
     import threading
     import utils.webhook_engine as wh
-    from utils.batch_engine import _recompute_batch_status
+    from ai.batch.engine import _recompute_batch_status
 
     monkeypatch.setenv('AI_DELIVERY_OUTBOX_ENABLED', '0')
 
@@ -907,7 +918,7 @@ def test_recompute_batch_status_fires_callback_on_terminal(user_id, db_conn, mon
 def test_recompute_batch_status_no_callback_when_url_unset(user_id, db_conn, monkeypatch):
     """没配置 callback_url 的批任务收敛为终态时，不应触发任何 webhook 调用。"""
     import utils.webhook_engine as wh
-    from utils.batch_engine import _recompute_batch_status
+    from ai.batch.engine import _recompute_batch_status
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
     with db_conn.cursor() as cur:
@@ -929,8 +940,8 @@ def test_recompute_batch_status_no_callback_when_url_unset(user_id, db_conn, mon
 
 def test_concurrency_cap_3(user_id, db_conn, monkeypatch, tmp_path):
     """5 pending sessions → only 3 ever in _running_session_ids simultaneously."""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=5)
     in_flight_peak = [0]
@@ -948,9 +959,10 @@ def test_concurrency_cap_3(user_id, db_conn, monkeypatch, tmp_path):
          'content': [{'type': 'text', 'text': 'ok'}]}
     ]
     fake_oc.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     ws = str(tmp_path)
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: ws)
 
     w = BatchWorker()
     original_run_one = w._run_one
@@ -993,8 +1005,8 @@ def test_restart_audit_resets_orphaned_running(user_id, db_conn, monkeypatch):
     OpenCode 会话丢失（404）→ 带准确原因失败。"""
     from unittest.mock import MagicMock
     import requests as _requests
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
     with db_conn.cursor() as cur:
@@ -1013,7 +1025,7 @@ def test_restart_audit_resets_orphaned_running(user_id, db_conn, monkeypatch):
 
     fake = MagicMock()
     fake.get_messages.side_effect = _raise_404
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', fake)
 
     w = BatchWorker()
     w._reconcile_stale_running()
@@ -1032,7 +1044,7 @@ def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
     """create_batch persists provision_repo/ref and the worker reads them via
     _fetch_batch_context (so the provisioning step gets them per run)."""
     from utils.batch_repo import create_batch
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     data = create_batch(
         user_id, name='prov-test', prompt='do', template_id=None,
         files=[{'name': 'r.txt', 'path': 'batch-staging/x/r.txt'}],
@@ -1050,9 +1062,9 @@ def test_await_finished_no_session_cap_but_stall_still_guards(monkeypatch):
     """With SESSION_TIMEOUT_SEC=0 (no hard cap, the requested 'no timeout'), a
     working turn isn't clock-killed, but a genuinely idle/frozen turn is still
     caught by the stall watchdog."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
-    from utils.batch_engine import _SessionTimeout
+    from ai.batch.engine import _SessionTimeout
     import pytest as _pytest
     w = eng.BatchWorker()
     w.SESSION_TIMEOUT_SEC = 0      # no hard cap
@@ -1061,7 +1073,7 @@ def test_await_finished_no_session_cap_but_stall_still_guards(monkeypatch):
     idle = {'role': 'assistant', 'finished': False, 'finish': None,
             'running_tool': False, 'content': []}
     fake = MagicMock(); fake.list_messages.return_value = [idle]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     with _pytest.raises(_SessionTimeout) as ei:
         w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'stalled (no progress)'
@@ -1071,7 +1083,7 @@ def test_await_finished_no_session_cap_but_stall_still_guards(monkeypatch):
 def test_await_finished_calls_on_progress_for_live_persist(monkeypatch):
     """The worker persists the conversation off its own REST poll (so the live
     view works without SSE): on_progress is invoked while the turn runs."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
     w = eng.BatchWorker()
     w.POLL_INTERVAL_SEC = 0.02
@@ -1086,7 +1098,7 @@ def test_await_finished_calls_on_progress_for_live_persist(monkeypatch):
     def lm(oc, directory=''):
         i = min(calls['i'], len(seq) - 1); calls['i'] += 1; return seq[i]
     fake.list_messages.side_effect = lm
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     progress = {'n': 0}
     w._await_finished('oc', 'sid-test', on_progress=lambda: progress.__setitem__('n', progress['n'] + 1))
     assert progress['n'] >= 2   # persisted live during the run, not just at the end
@@ -1096,7 +1108,7 @@ def test_progress_signature_counts_tool_activity():
     """A delegating subagent shows as a long-running `task` tool with no new
     text — the signature must still change as the tool advances, else the stall
     watchdog falsely fires."""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     sig = BatchWorker._progress_signature
     pending = [{'role': 'assistant', 'content': [
         {'type': 'tool_use', 'name': 'task', 'status': 'pending', 'output_len': 0}]}]
@@ -1113,7 +1125,7 @@ def test_progress_signature_counts_reasoning_growth():
     """Extended-thinking models stream reasoning tokens for a while before any
     text/tool part appears — that must register as progress too, else a
     genuinely active turn is indistinguishable from a dead one."""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     sig = BatchWorker._progress_signature
     short = [{'role': 'assistant', 'content': [{'type': 'reasoning', 'text': 'thinking'}]}]
     longer = [{'role': 'assistant', 'content': [{'type': 'reasoning', 'text': 'thinking about it more'}]}]
@@ -1126,7 +1138,7 @@ def test_await_finished_no_stall_while_reasoning_growing(monkeypatch):
     a long-thinking turn got marked 'failed' by the stall watchdog while OpenCode
     (never aborted) kept running and finished moments later, leaving a session
     that actually completed marked as failed."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.5
@@ -1146,7 +1158,7 @@ def test_await_finished_no_stall_while_reasoning_growing(monkeypatch):
         calls['i'] += 1
         return seq[i]
     fake.list_messages.side_effect = lm
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     preview, msg = w._await_finished('oc', 'sid-test')
     assert msg['finished'] is True          # completed, NOT stalled
 
@@ -1154,7 +1166,7 @@ def test_await_finished_no_stall_while_reasoning_growing(monkeypatch):
 def test_list_messages_maps_reasoning_parts(monkeypatch):
     """The facade must surface `reasoning` parts (not just text/tool) so the
     poll loop's progress signature can see them."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
     client = MagicMock()
     client.get_messages.return_value = [{
@@ -1169,7 +1181,7 @@ def test_list_messages_maps_reasoning_parts(monkeypatch):
 def test_await_finished_no_stall_while_tool_running(monkeypatch):
     """A turn that's mid tool-call (subagent) with frozen TEXT must NOT be killed
     by the stall watchdog — only the 30-min SESSION_TIMEOUT bounds it."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.5
@@ -1188,16 +1200,16 @@ def test_await_finished_no_stall_while_tool_running(monkeypatch):
         calls['i'] += 1
         return seq[i]
     fake.list_messages.side_effect = lm
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     preview, msg = w._await_finished('oc', 'sid-test')
     assert msg['finished'] is True          # completed, NOT stalled
 
 
 def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
     """A genuinely frozen turn (no text, no tool in flight) still trips the stall."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
-    from utils.batch_engine import _SessionTimeout
+    from ai.batch.engine import _SessionTimeout
     import pytest as _pytest
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.3
@@ -1207,7 +1219,7 @@ def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
             'running_tool': False, 'content': []}
     fake = MagicMock()
     fake.list_messages.return_value = [idle]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     with _pytest.raises(_SessionTimeout) as ei:
         w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'stalled (no progress)'
@@ -1221,7 +1233,7 @@ def test_dispatch_tick_survives_claim_error():
     _claim_pending_sessions propagated out of _dispatcher_loop and killed the
     worker thread permanently, so every future batch hung in 'pending' with no
     error and no recovery until Flask restarted."""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     w = BatchWorker()
     calls = {'n': 0}
 
@@ -1238,7 +1250,7 @@ def test_dispatch_tick_survives_claim_error():
 def test_dispatch_tick_submits_claimed_sessions():
     """A healthy tick claims pending sessions and submits each to the executor,
     reserving its slot in _running_session_ids."""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     w = BatchWorker()
     w._claim_pending_sessions = lambda limit: [{'id': 'sid-1'}]
     submitted = []
@@ -1255,7 +1267,7 @@ def test_dispatch_tick_submits_claimed_sessions():
 
 def test_dispatch_tick_noop_when_no_free_slots():
     """When all concurrency slots are busy, the tick claims nothing."""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     w = BatchWorker()
     w._running_session_ids = {'a', 'b', 'c'}  # == MAX_CONCURRENT
     claimed = {'called': False}
@@ -1266,7 +1278,7 @@ def test_dispatch_tick_noop_when_no_free_slots():
 
 def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_path):
     """When batch has agent set, send_message receives that agent."""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from utils.batch_repo import create_batch
     from unittest.mock import MagicMock
 
@@ -1298,7 +1310,8 @@ def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_pat
     fake_oc.send_message.side_effect = capture_send
 
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
 
     worker = eng.BatchWorker()
     with db_conn.cursor() as cur:
@@ -1331,7 +1344,7 @@ def _raw_errored_msg(name='ProviderAuthError', provider='anthropic',
 
 def test_facade_surfaces_opencode_error(monkeypatch):
     """list_messages 必须把 info.error 带出来，否则上层无从判断。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
     client = MagicMock()
     client.get_messages.return_value = [_raw_errored_msg()]
@@ -1351,7 +1364,7 @@ def test_await_finished_fails_fast_on_opencode_error(monkeypatch):
     _SessionTimeout('stalled')，断言的类型、内容、耗时三项会同时红。
     """
     import time as _time
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
     import pytest as _pytest
     w = eng.BatchWorker()
@@ -1365,7 +1378,7 @@ def test_await_finished_fails_fast_on_opencode_error(monkeypatch):
                                   'message': 'API key not found'}}}
     fake = MagicMock()
     fake.list_messages.return_value = [errored]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
 
     t0 = _time.time()
     with _pytest.raises(eng._TurnFailed) as ei:
@@ -1381,7 +1394,7 @@ def test_await_finished_fails_fast_on_opencode_error(monkeypatch):
 
 def test_await_finished_ignores_error_none(monkeypatch):
     """error 为 None 的正常消息不受影响 —— 不能把没出错的轮次误判成失败。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from unittest.mock import MagicMock
     w = eng.BatchWorker()
     w.POLL_INTERVAL_SEC = 0.02
@@ -1390,7 +1403,7 @@ def test_await_finished_ignores_error_none(monkeypatch):
             'content': [{'type': 'text', 'text': '正常输出'}]}
     fake = MagicMock()
     fake.list_messages.return_value = [done]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
 
     preview, msg = w._await_finished('oc', 'sid-test')
 
@@ -1405,7 +1418,7 @@ def test_discover_subtasks_from_messages_finds_new_child():
     """扫描一批消息，发现其中的 subtask part，返回新发现的 sessionID 集合。
     子代理的真实 sessionID 在配套的 tool:'task' part 的 state.metadata.sessionId
     里，不在 subtask part 的 sessionID（那是父会话）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     msgs = [
         {'info': {'role': 'assistant', 'id': 'm1'},
          'parts': [{'type': 'text', 'text': 'hi'},
@@ -1427,7 +1440,7 @@ def test_discover_subtasks_from_messages_finds_new_child():
 def test_discover_subtasks_unpaired_task_tool_discovers_child():
     """自然语言委托只有 tool:'task' part、没有配套 subtask part——也要能发现
     子会话，agent/description 从工具输入取，_part_id 用 tool part 的 id。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     msgs = [
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'ses_parent'},
          'parts': [{'type': 'text', 'text': 'delegating'},
@@ -1448,7 +1461,7 @@ def test_discover_subtasks_unpaired_task_tool_discovers_child():
 def test_discover_subtasks_sets_parent_sid_for_nested_scan():
     """递归扫描某个子代理自己的消息时，parent_sid 传该子代理自己的 id，
     发现的孙代的 parent_id 要是它，不是 None。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     msgs = [{'info': {'role': 'assistant', 'id': 'cm1'},
             'parts': [{'type': 'tool', 'tool': 'task',
                        'state': {'status': 'completed',
@@ -1462,7 +1475,7 @@ def test_discover_subtasks_sets_parent_sid_for_nested_scan():
 
 
 def test_discover_subtasks_skips_already_known():
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     msgs = [{'info': {'role': 'assistant', 'id': 'm1'},
             'parts': [{'type': 'tool', 'tool': 'task',
                        'state': {'status': 'completed',
@@ -1476,7 +1489,7 @@ def test_discover_subtasks_skips_already_known():
 
 
 def test_discover_subtasks_respects_depth_cap():
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     msgs = [{'info': {'role': 'assistant', 'id': 'm1'},
             'parts': [{'type': 'tool', 'tool': 'task',
                        'state': {'status': 'completed',
@@ -1493,7 +1506,7 @@ def test_subtask_status_from_messages_detects_error():
     """子代理自己的消息列表里出现 error -> failed；出现 finished 的 assistant
     消息且无 error -> completed；否则 running。跟批任务顶层复用同一套
     finish/error 判定，不是重新发明。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     errored = [{'info': {'role': 'assistant', 'id': 'm1',
                         'error': {'name': 'ProviderAuthError',
                                  'data': {'providerID': 'a', 'message': 'no key'}}}}]
@@ -1520,7 +1533,7 @@ def test_persist_conversation_no_short_circuit_while_delegation_running(monkeypa
     存在非终态 task part 时必须照常全量拉取子代理树；委派结束后（快照不
     变且无未终态 task part）短路优化恢复——稳定期零成本不回退。"""
     import uuid
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from db import get_db
     from unittest.mock import MagicMock
 
@@ -1564,7 +1577,7 @@ def test_persist_conversation_no_short_circuit_while_delegation_running(monkeypa
             return holder['raw'] if oc_id == 'oc-top' else list(holder['child'])
 
         fake.get_messages.side_effect = _fake_get
-        monkeypatch.setattr(eng, 'opencode_client', fake)
+        monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', fake)
 
         w = eng.BatchWorker()
         # ① 委派执行期：根快照不变（task running），子代理新增一条消息
@@ -1607,7 +1620,7 @@ def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_s
         自己的数据就算完事。"""
     import uuid
     import json
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from db import get_db
     from unittest.mock import MagicMock
 
@@ -1641,7 +1654,7 @@ def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_s
         fake = MagicMock()
         fake.get_messages.side_effect = lambda oc_id, directory='': (
             top_msgs if oc_id == 'oc-top' else child_msgs)
-        monkeypatch.setattr(eng, 'opencode_client', fake)
+        monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', fake)
 
         w = eng.BatchWorker()
         w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
@@ -1677,7 +1690,7 @@ def test_content_from_parts_merges_adjacent_reasoning_parts():
     成一条，否则前端会渲成一长串「思考完成」气泡（同一处理见
     chat_persist.py::_flatten_scope，两条持久化路径共用 map_part 但各自
     flatten，这条覆盖批任务路径）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     parts = [
         {'type': 'reasoning', 'id': 'r1', 'text': '我'},
         {'type': 'reasoning', 'id': 'r2', 'text': '在'},
@@ -1693,7 +1706,7 @@ def test_content_from_parts_merges_adjacent_reasoning_parts():
 
 def test_content_from_parts_reasoning_separated_by_tool_stays_separate():
     """中间隔了别的 part 类型才算另一段独立的思考，不跨类型合并。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     parts = [
         {'type': 'reasoning', 'id': 'r1', 'text': '第一段'},
         {'type': 'tool', 'id': 'pt1', 'tool': 'bash',
@@ -1711,7 +1724,7 @@ def test_persist_conversation_child_trace_includes_user_reasoning_and_tools(monk
     """批任务路径落子代理消息时，要保留完整执行轨迹：user（委托输入）、
     reasoning（思考过程）、tool_use（工具调用）、text（输出），不能只剩 text。"""
     import uuid
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from db import get_db
     from unittest.mock import MagicMock
 
@@ -1749,7 +1762,7 @@ def test_persist_conversation_child_trace_includes_user_reasoning_and_tools(monk
         fake = MagicMock()
         fake.get_messages.side_effect = lambda oc_id, directory='': (
             top_msgs if oc_id == 'oc-top' else child_msgs)
-        monkeypatch.setattr(eng, 'opencode_client', fake)
+        monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', fake)
 
         w = eng.BatchWorker()
         w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
@@ -1785,9 +1798,9 @@ def _child_row(**over):
 
 def test_notify_child_done_success(monkeypatch):
     """成功完成：写一条 aiBatchChildDone 通知，指向该会话，含耗时。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     calls = []
-    monkeypatch.setattr(eng, 'create_notification',
+    monkeypatch.setattr('ai.batch.engine.transitions.create_notification',
                         lambda *a, **k: calls.append((a, k)))
     eng.BatchWorker()._notify_child_done(_child_row(), True, elapsed=125)
 
@@ -1803,9 +1816,9 @@ def test_notify_child_done_success(monkeypatch):
 
 def test_notify_child_done_failure_includes_reason(monkeypatch):
     """失败：写 aiBatchChildFailed，正文带错误原因。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     calls = []
-    monkeypatch.setattr(eng, 'create_notification',
+    monkeypatch.setattr('ai.batch.engine.transitions.create_notification',
                         lambda *a, **k: calls.append((a, k)))
     eng.BatchWorker()._notify_child_done(
         _child_row(), False, elapsed=30, error='模型超时')
@@ -1819,9 +1832,9 @@ def test_notify_child_done_failure_includes_reason(monkeypatch):
 
 def test_notify_child_skipped_for_openapi_standalone(monkeypatch):
     """open-api 独立子会话（batch_id 为空）不发界面通知。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     calls = []
-    monkeypatch.setattr(eng, 'create_notification',
+    monkeypatch.setattr('ai.batch.engine.transitions.create_notification',
                         lambda *a, **k: calls.append(a))
     eng.BatchWorker()._notify_child_done(
         _child_row(batch_id=None), True, elapsed=10)
@@ -1830,9 +1843,9 @@ def test_notify_child_skipped_for_openapi_standalone(monkeypatch):
 
 def test_notify_child_skipped_without_owner(monkeypatch):
     """无主会话不发（也不报错）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     calls = []
-    monkeypatch.setattr(eng, 'create_notification',
+    monkeypatch.setattr('ai.batch.engine.transitions.create_notification',
                         lambda *a, **k: calls.append(a))
     eng.BatchWorker()._notify_child_done(_child_row(user_id=None), True)
     assert calls == []
@@ -1841,9 +1854,9 @@ def test_notify_child_skipped_without_owner(monkeypatch):
 def test_notify_child_skipped_for_scan_task(monkeypatch):
     """定时扫描（轨迹分析）子会话不发逐个铃铛通知——一次调度几十上百个、且按计划
     反复运行，会刷爆通知中心；结果另有数据表状态回写界面。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     calls = []
-    monkeypatch.setattr(eng, 'create_notification',
+    monkeypatch.setattr('ai.batch.engine.transitions.create_notification',
                         lambda *a, **k: calls.append(a))
     eng.BatchWorker()._notify_child_done(
         _child_row(scan_task_id='scan_1'), True, elapsed=10)
@@ -1852,12 +1865,12 @@ def test_notify_child_skipped_for_scan_task(monkeypatch):
 
 def test_notify_child_swallows_notifier_error(monkeypatch):
     """通知发送失败不影响主流程（不抛异常）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     def _boom(*a, **k):
         raise RuntimeError('db down')
 
-    monkeypatch.setattr(eng, 'create_notification', _boom)
+    monkeypatch.setattr('ai.batch.engine.transitions.create_notification', _boom)
     eng.BatchWorker()._notify_child_done(_child_row(), True, elapsed=10)
 
 # ---------------------------------------------------------------------------
@@ -1891,7 +1904,7 @@ class _BaselineFakeOC:
         return self._messages()
 
     def list_messages(self, oc_session_id, directory=''):
-        from utils.batch_engine import opencode_client as _facade
+        from ai.batch.engine import opencode_client as _facade
         # 复用真实 façade 的映射逻辑（含 id 字段）——不走 MagicMock 简化
         raw = self._messages()
         out = []
@@ -1913,7 +1926,7 @@ def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
                                                          monkeypatch, tmp_path):
     """resume/continue 后旧回合的 terminal+error 消息必须被基线跳过：
     旧的写法在第一轮轮询就 _TurnFailed（旧消息带 MessageAbortedError）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
     sid = sids[0]
@@ -1934,12 +1947,13 @@ def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
     def _send(oc, prompt, directory='', agent='', model=''):
         fake.dispatched = True
 
-    monkeypatch.setattr(eng, 'opencode_client',
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client',
                         type('F', (), {
                             'get_messages': staticmethod(fake.get_messages),
                             'list_messages': staticmethod(fake.list_messages),
                             'send_message': staticmethod(_send),
                         })())
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     worker = eng.BatchWorker()
     worker.POLL_INTERVAL_SEC = 0
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
@@ -1961,7 +1975,7 @@ def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
 def test_recompute_batch_status_enqueues_outbox_when_enabled(user_id, db_conn):
     """M4：outbox 启用（默认）时终态回调入队 ai_delivery_outbox 且不直发。"""
     import utils.webhook_engine as wh
-    from utils.batch_engine import _recompute_batch_status
+    from ai.batch.engine import _recompute_batch_status
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
     with db_conn.cursor() as cur:
@@ -2019,7 +2033,7 @@ def _seed_gate_child(db_conn, user_id, *, oc_sid, with_reply=False):
 
 
 def test_check_action_gate_merges_verifier(db_conn, user_id, monkeypatch):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from ai.batch import verifier as verifier_mod
     from utils.agent_ledger import register_session_expectations, gate_failure_message
     from db import get_db
@@ -2049,7 +2063,7 @@ def test_check_action_gate_merges_verifier(db_conn, user_id, monkeypatch):
 
 def test_check_action_gate_verifier_error_fail_closed(db_conn, user_id, monkeypatch):
     """verifier 基础设施故障 → gate inconclusive → 引擎既有分支落 failed。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from ai.batch import verifier as verifier_mod
     from utils.agent_ledger import register_session_expectations
     from db import get_db
@@ -2079,7 +2093,7 @@ def test_delegation_gate_fills_materials_from_db(db_conn, user_id, monkeypatch):
     fit 落库分支）。断言 group['subagent_segments'] 含种子消息文本、
     group['trace'] 非空。"""
     import json as _json
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from ai.batch import verifier as _v
     from utils.agent_ledger import register_session_expectations
     from db import get_db
@@ -2158,9 +2172,9 @@ def test_prepare_workspace_writes_batch_permissions(tmp_path, monkeypatch):
     无人值守会话读工作区外文件不再触发 external_directory=ask 授权询问挂死；
     幂等合并——已有配置（如 mcp）保留、permission 补充、已 allow 不重写。"""
     import json as _json
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from utils.workspace import ensure_batch_permissions
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(tmp_path))
     staged = tmp_path / 'batch-staging' / 'u-t1' / 'u1'
     staged.mkdir(parents=True)
     (staged / 'a.txt').write_text('x', encoding='utf-8')
@@ -2183,7 +2197,7 @@ def test_batch_terminal_cleans_oc_sessions(db_conn, monkeypatch):
     import os as _os
     import uuid as _uuid
     from db import get_db
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     from ai.opencode import opencode_client as oc_mod
 
     uid = str(_uuid.uuid4())
@@ -2246,7 +2260,7 @@ def test_prepare_workspace_writes_mcp_config(db_conn, user_id, tmp_path,
     import json as _json
     from pathlib import Path as _Path
     from db import get_db
-    from utils.batch_engine import _prepare_workspace
+    from ai.batch.engine import _prepare_workspace
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     bid, sid = str(uuid.uuid4()), str(uuid.uuid4())
     with get_db() as conn:

@@ -1,6 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.batch_engine as eng
+from ai.batch import engine as eng
 
 
 def test_content_from_parts_maps_text_and_tool():
@@ -107,7 +107,7 @@ def test_persist_conversation_stores_user_and_each_assistant():
     ]
     oc = MagicMock(); oc.get_messages.return_value = raw
     w = eng.BatchWorker()
-    with patch.object(eng, 'opencode_client', oc), patch.object(eng, 'get_db', fake_db):
+    with patch('ai.batch.engine.subtasks.opencode_client', oc), patch('ai.batch.engine.subtasks.get_db', fake_db):
         w._persist_conversation('sess-1', '我的问题', 'oc-1', {'content': [{'type': 'text', 'text': '最终答案'}]})
     # user row uses a deterministic id ('<sid>:user'); assistants are separate inserts
     user_inserts = [p for p in inserts if str(p[0]).endswith(':user')]

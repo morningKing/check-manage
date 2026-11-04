@@ -9,7 +9,7 @@ message has a terminal `finish` reason (anything other than 'tool-calls').
 """
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.batch_engine as eng
+from ai.batch import engine as eng
 
 
 class _FakeClient:
@@ -100,7 +100,7 @@ def test_await_finished_stalls_fast_not_session_timeout(monkeypatch):
         {'role': 'assistant', 'finished': False,
          'content': [{'type': 'text', 'text': 'half-written'}]}
     ]
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
 
     w = eng.BatchWorker()
     w.SESSION_TIMEOUT_SEC = 30     # must NOT be what fires

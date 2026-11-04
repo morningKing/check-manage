@@ -164,12 +164,12 @@ def test_publish_and_get_latest(db_conn, user_id):
 
 def test_linear_dag_end_to_end(db_conn, user_id, monkeypatch, tmp_path):
     from utils import orchestration_defs as defs, orchestration_engine as eng
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
-    import utils.batch_engine as batch_engine_mod
+    from ai.batch import engine as batch_engine_mod
 
     root = tmp_path
-    monkeypatch.setattr(batch_engine_mod, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     d = defs.publish_definition(
         f'p2-linear-{uuid.uuid4().hex[:6]}', description=None,
         owner_user_id=user_id,
@@ -199,7 +199,9 @@ def test_linear_dag_end_to_end(db_conn, user_id, monkeypatch, tmp_path):
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': '抽取完成'}]}]
     fake.get_messages.return_value = []
-    monkeypatch.setattr(batch_engine_mod, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client',
+                        batch_engine_mod.runner.opencode_client)
 
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
@@ -386,7 +388,7 @@ def test_policy_interception_blocks_then_releases(db_conn, user_id,
     blocked 重新派发（不直接 succeeded）。"""
     from utils import orchestration_defs as defs, orchestration_engine as eng2
     from utils import approval_repo
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     d = defs.publish_definition(
         f'policy-{uuid.uuid4().hex[:6]}', description=None,
@@ -427,8 +429,9 @@ def test_policy_interception_blocks_then_releases(db_conn, user_id,
          'content': [{'type': 'text', 'text': 'done'}]}]
     fake.send_message.return_value = {'id': 'm'}
     fake.get_messages.return_value = []
-    from utils import batch_engine as eng
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    from ai.batch import engine as eng
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     eng2._advance_run(run['id'])
     w = BatchWorker()
     w._claim_pending_sessions(limit=1)
@@ -555,7 +558,7 @@ def test_output_contract_db_record(db_conn, user_id, monkeypatch):
     """contract type=db_record：dynamic_data 命中 ≥ min_count → 通过（确定性，
     不依赖模型行为）；经 batch_engine 的编排子会话全链路核对。"""
     from utils import orchestration_defs as defs, orchestration_engine as eng2
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     collection = f'contract-db-{uuid.uuid4().hex[:6]}'
     d = _mk_contract_def(user_id, {'type': 'db_record',
@@ -570,8 +573,9 @@ def test_output_contract_db_record(db_conn, user_id, monkeypatch):
          'content': [{'type': 'text', 'text': 'done'}]}]
     fake.send_message.return_value = {'id': 'm'}
     fake.get_messages.return_value = []
-    from utils import batch_engine as eng
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    from ai.batch import engine as eng
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     # 命中数据：contract 要求 ≥1 条
     with db_conn.cursor() as cur:
         cur.execute(
@@ -604,7 +608,7 @@ def test_output_contract_db_record(db_conn, user_id, monkeypatch):
 def test_output_contract_db_record_insufficient_fails(db_conn, user_id, monkeypatch):
     """db_record 命中 0/1 → contract 不过 → step failed（而非静默 succeeded）。"""
     from utils import orchestration_defs as defs, orchestration_engine as eng2
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     collection = f'contract-db0-{uuid.uuid4().hex[:6]}'
     d = _mk_contract_def(user_id, {'type': 'db_record',
@@ -619,8 +623,9 @@ def test_output_contract_db_record_insufficient_fails(db_conn, user_id, monkeypa
          'content': [{'type': 'text', 'text': 'done'}]}]
     fake.send_message.return_value = {'id': 'm'}
     fake.get_messages.return_value = []
-    from utils import batch_engine as eng
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    from ai.batch import engine as eng
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     eng2._advance_run(run['id'])
     with db_conn.cursor() as cur:
         cur.execute("SELECT id FROM ai_chat_sessions WHERE orchestration_run_id=%s",
@@ -645,7 +650,7 @@ def test_output_contract_db_record_insufficient_fails(db_conn, user_id, monkeypa
 def test_output_contract_json_schema_rejects_invalid(db_conn, user_id, monkeypatch):
     """contract type=json_schema：最终输出非合法 JSON / 不过 schema → failed。"""
     from utils import orchestration_defs as defs, orchestration_engine as eng2
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     schema = {'type': 'object', 'required': ['total']}
     d = _mk_contract_def(user_id, {'type': 'json_schema', 'schema': schema}, 'js')
@@ -657,8 +662,9 @@ def test_output_contract_json_schema_rejects_invalid(db_conn, user_id, monkeypat
          'content': [{'type': 'text', 'text': '纯文本回复'}]}]
     fake.send_message.return_value = {'id': 'm'}
     fake.get_messages.return_value = []
-    from utils import batch_engine as eng
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    from ai.batch import engine as eng
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     eng2._advance_run(run['id'])
     with db_conn.cursor() as cur:
         cur.execute("SELECT id FROM ai_chat_sessions WHERE orchestration_run_id=%s",

@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_prepare_workspace_copies_directory(tmp_path, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     # stage a directory with two files
     staged = tmp_path / 'scan-staging' / 't1' / 'r1'
@@ -18,7 +18,7 @@ def test_prepare_workspace_copies_directory(tmp_path, monkeypatch):
 
 
 def test_prepare_workspace_single_file_still_works(tmp_path, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     (tmp_path / 'batch-staging').mkdir(parents=True)
     (tmp_path / 'batch-staging' / 'f.txt').write_text('x', encoding='utf-8')
@@ -34,7 +34,7 @@ def test_prepare_workspace_raises_when_staged_input_missing(tmp_path, monkeypatc
     输出是「我读不到文件」这类垃圾。抛错则由 _run_one 的 except 落成 failed。
     """
     import pytest
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     with pytest.raises(FileNotFoundError):
         eng._prepare_workspace('u', 's', 'batch-staging/u/gone/x.pdf')
@@ -44,11 +44,11 @@ def test_run_one_marks_child_failed_when_staged_input_missing(monkeypatch):
     """_prepare_workspace 抛出的 FileNotFoundError 必须被 _run_one 接住并落成
     failed —— 不能冒泡出去炸掉 worker 线程，也不能把子任务留在 running。
     同时要通知扫描任务侧（内部 UI 批任务 / AI 扫描任务共用这条路径）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     w = eng.BatchWorker()
     monkeypatch.setattr(w, '_fetch_batch_context',
                         lambda bid: ('p', None, None, None, None))
-    monkeypatch.setattr(eng, '_prepare_workspace',
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace',
                         lambda *a, **kw: (_ for _ in ()).throw(
                             FileNotFoundError('输入文件不存在或已被清理: x')))
     marked = {}
@@ -67,14 +67,14 @@ def test_run_one_marks_child_failed_when_staged_input_missing(monkeypatch):
 
 
 def test_prepare_workspace_retries_on_permission_error(tmp_path, monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     staged = tmp_path / 'scan-staging' / 't1' / 'r1'
     (staged / 'attachments').mkdir(parents=True)
     (staged / 'record.md').write_text('hi', encoding='utf-8')
 
     calls = {'n': 0}
-    real_copytree = eng.shutil.copytree
+    real_copytree = eng.lifecycle.shutil.copytree
 
     def flaky(src, dst, *args, **kwargs):
         # shutil.copytree recurses into subdirs via the same name; only count
@@ -85,8 +85,8 @@ def test_prepare_workspace_retries_on_permission_error(tmp_path, monkeypatch):
                 raise PermissionError(13, 'Permission denied')
         return real_copytree(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(eng.shutil, 'copytree', flaky)
-    monkeypatch.setattr(eng.time, 'sleep', lambda *a, **k: None)
+    monkeypatch.setattr(eng.lifecycle.shutil, 'copytree', flaky)
+    monkeypatch.setattr(eng.lifecycle.time, 'sleep', lambda *a, **k: None)
 
     ws = eng._prepare_workspace('user-1', 'sess-1', 'scan-staging/t1/r1')
     assert calls['n'] == 2
@@ -142,12 +142,13 @@ def test_create_batch_stamps_scan_task_id_on_batch_row():
 
 
 def test_run_one_invokes_scan_hook_on_success(monkeypatch):
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     calls = {}
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **k: '/tmp/ws')
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **k: '/tmp/ws')
     fake_oc = MagicMock()
     fake_oc.create_session.return_value = 'oc-1'
-    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     w = eng.BatchWorker()
     monkeypatch.setattr(w, '_fetch_batch_context', lambda b: ('prompt', '', '', '', ''))
     monkeypatch.setattr(w, '_set_opencode_id', lambda *a: None)

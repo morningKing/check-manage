@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
 def test_batch_worker_executor_honors_concurrency_env(monkeypatch):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     monkeypatch.setenv('AI_BATCH_CONCURRENCY', '7')
     w = BatchWorker()
     try:
@@ -24,7 +24,7 @@ def test_batch_worker_executor_honors_concurrency_env(monkeypatch):
 
 def test_batch_worker_executor_default_three(monkeypatch):
     """env 缺省保持原默认 3（不改变未配置环境的行为）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     monkeypatch.delenv('AI_BATCH_CONCURRENCY', raising=False)
     w = BatchWorker()
     try:

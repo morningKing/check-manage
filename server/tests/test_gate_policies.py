@@ -27,7 +27,7 @@ def client():
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-                mod_name.startswith('routes.') or mod_name.startswith('utils.')
+                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
                 or mod_name == 'auth'):
             try:
                 mod.get_db = db_module.get_db
@@ -118,7 +118,7 @@ def test_fetch_action_checks_merge(db_conn):
     （后登记者胜，ON CONFLICT 全列替换）——fetch 层不去重。brief 原稿断言
     count==1 与其第 3 条断言（策略 prompt 存活）自相矛盾，按 spec §8.2
     与其自带实现（纯拼接）修正为本形态。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     pid = repo.create_policy('user-admin', f'pol-{uuid.uuid4().hex[:6]}',
                              None, CHECKS)['id']
     bid = str(uuid.uuid4())

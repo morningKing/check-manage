@@ -75,7 +75,7 @@ def _row(db_conn, sid):
 
 def _worker(monkeypatch):
     """隔离长期记忆层（mem0 未配置/外部依赖与本测试无关）后构造 worker。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     worker = eng.BatchWorker()
     worker.SESSION_TIMEOUT_SEC = 0
     worker.STALL_TIMEOUT_SEC = 60
@@ -93,8 +93,9 @@ def _no_memory(monkeypatch):
 
 
 def _patch_oc(monkeypatch, **methods):
-    import utils.batch_engine as eng
-    monkeypatch.setattr(eng, 'opencode_client', type('F', (), methods)())
+    from ai.batch import engine as eng
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', type('F', (), methods)())
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
 
 
 _DONE_MSG = {'role': 'assistant', 'finished': True, 'finish': 'stop',
@@ -107,7 +108,7 @@ def test_early_failure_keeps_original_prompt_for_retry(db_conn, user_id,
                                                        claim_guard, monkeypatch,
                                                        tmp_path):
     """create_session 网络异常 → 重排队后 continue_prompt 仍保留原始请求。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     sid = _seed_standalone(db_conn, user_id)
     claim_guard(sid)
     worker = _worker(monkeypatch)
@@ -116,7 +117,7 @@ def test_early_failure_keeps_original_prompt_for_retry(db_conn, user_id,
         raise requests.exceptions.ConnectionError('connection refused')
 
     _patch_oc(monkeypatch, create_session=staticmethod(_refused))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
         # claim 后的真实形态是 running（F1 起重排 UPDATE 带 status='running'
         # CAS，直呼 _run_one 也要先摆对状态）。
@@ -141,7 +142,7 @@ def test_requeued_standalone_reruns_with_original_prompt(db_conn, user_id,
                                                          claim_guard, monkeypatch,
                                                          tmp_path):
     """重排后的重新认领：原始 prompt 被再次发给模型（而非空 prompt 空跑）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     sid = _seed_standalone(db_conn, user_id)
     claim_guard(sid)
     worker = _worker(monkeypatch)
@@ -157,7 +158,7 @@ def test_requeued_standalone_reruns_with_original_prompt(db_conn, user_id,
               create_session=staticmethod(create_session),
               send_message=staticmethod(send_message),
               list_messages=staticmethod(lambda oc, directory='': [_DONE_MSG]))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
 
     # P0 CAS：终态写回要求 status='running'（真实 claim 后的状态）
     with db_conn.cursor() as cur:
@@ -181,7 +182,7 @@ def test_fresh_standalone_claim_does_not_use_continue_mode(db_conn, user_id,
                                                            claim_guard,
                                                            monkeypatch, tmp_path):
     """oc 为 NULL 时不允许把 continue_prompt 误判成续跑指令。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     sid = _seed_standalone(db_conn, user_id)
     claim_guard(sid)
     worker = _worker(monkeypatch)
@@ -198,7 +199,7 @@ def test_fresh_standalone_claim_does_not_use_continue_mode(db_conn, user_id,
               create_session=staticmethod(create_session),
               send_message=staticmethod(send_message),
               list_messages=staticmethod(lambda oc, directory='': [_DONE_MSG]))
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
 
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': None,
                      'batch_input_file': None, 'input_files': None,

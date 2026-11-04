@@ -39,7 +39,7 @@ def _mk_worker(monkeypatch, seq, aborted, poll_sec=0.02, confirm=None):
     """facade 层假 OC：list_messages 按 seq 逐次弹（耗尽后重复末元素），
     abort_session 记录目标会话 id。"""
     from unittest.mock import MagicMock
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     w = eng.BatchWorker()
     w.POLL_INTERVAL_SEC = poll_sec
     w.PROGRESS_PERSIST_SEC = 999
@@ -55,7 +55,7 @@ def _mk_worker(monkeypatch, seq, aborted, poll_sec=0.02, confirm=None):
         return list(seq[i])
     fake.list_messages.side_effect = lm
     fake.abort_session.side_effect = lambda oc, directory='': aborted.append(oc)
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
     return w, calls
 
 
@@ -152,7 +152,7 @@ def test_t7_lease_lost_never_aborts(monkeypatch):
     """既有语义守护（test_lease_lost_drops_without_abort 同款）：租约失守时
     不得 abort——接管者可能正在复用该 OpenCode 会话。稳定窗通过但 lease_lost
     置位 → _LeaseLost 且零 abort。"""
-    from utils.batch_engine import _LeaseLost
+    from ai.batch.engine import _LeaseLost
     m1 = _msg('m1', finished=True, content=_text('ok'))
     aborted = []
     w, _ = _mk_worker(monkeypatch, [[m1], [m1]], aborted)
@@ -160,8 +160,8 @@ def test_t7_lease_lost_never_aborts(monkeypatch):
 
     # 第 2 次轮询返回数据前置位：循环顶检查已过，逼出「确认后、abort 前」
     # 的租约检查路径。
-    import utils.batch_engine as eng
-    real_lm = eng.opencode_client.list_messages.side_effect
+    from ai.batch import engine as eng
+    real_lm = eng.runner.opencode_client.list_messages.side_effect
     state = {'n': 0}
 
     def lm(oc, directory=''):
@@ -169,7 +169,7 @@ def test_t7_lease_lost_never_aborts(monkeypatch):
         if state['n'] == 2:
             lost.set()
         return real_lm(oc, directory)
-    eng.opencode_client.list_messages.side_effect = lm
+    eng.runner.opencode_client.list_messages.side_effect = lm
 
     with pytest.raises(_LeaseLost):
         w._await_finished('oc', 'sid-test', lease_lost=lost)

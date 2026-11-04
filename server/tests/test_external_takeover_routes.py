@@ -256,7 +256,7 @@ def _send_patches(mock_conn, tok, status, owner=None):
               return_value=tok),
         patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),
         patch('routes.external_takeover.batch_repo.continue_child'),
-        patch('utils.batch_engine.get_worker', return_value=MagicMock()),
+        patch('ai.batch.engine.get_worker', return_value=MagicMock()),
         patch('common.operation_log._write_log_row'),
     )
 
@@ -475,7 +475,7 @@ def _cancel_patches(mock_conn, tok, post_status='running', owner=None):
               return_value=tok),
         patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),
         patch('routes.external_takeover.batch_repo.cancel_child'),
-        patch('utils.batch_engine.get_worker', return_value=MagicMock()),
+        patch('ai.batch.engine.get_worker', return_value=MagicMock()),
         patch('common.operation_log._write_log_row'),
     )
 

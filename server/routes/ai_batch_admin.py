@@ -14,7 +14,7 @@ import os
 from flask import Blueprint, jsonify, request, send_file
 
 from auth import require_permission, require_permission_sse
-from utils.batch_engine import get_worker
+from ai.batch.engine import get_worker
 from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
                               admin_get_batch_owner, admin_get_child_messages,
                               admin_get_child_session, admin_list_batches,

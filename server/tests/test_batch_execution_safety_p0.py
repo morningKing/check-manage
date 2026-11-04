@@ -127,7 +127,7 @@ def _batch(db_conn, bid):
 def _fake_opencode(monkeypatch, finished_text='done'):
     """MagicMock 版 OpenCode facade：一轮即完成。"""
     from unittest.mock import MagicMock
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     fake = MagicMock()
     fake.create_session.return_value = 'oc-' + uuid.uuid4().hex[:8]
     fake.list_agents.return_value = [{'name': 'build', 'mode': 'primary'}]
@@ -136,7 +136,8 @@ def _fake_opencode(monkeypatch, finished_text='done'):
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': finished_text}]}]
     fake.get_messages.return_value = []
-    monkeypatch.setattr(eng, 'opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
     return fake
 
 
@@ -148,7 +149,7 @@ def _rebind_real_db():
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-            mod_name.startswith('routes.') or mod_name.startswith('utils.')
+            mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
                 or mod_name == 'auth'):
             try:
                 mod.get_db = _db_module.get_db
@@ -246,7 +247,7 @@ def test_internal_continue_endpoint(db_conn, chat_client):
 # ---------------------------------------------------------------------------
 
 def test_claim_creates_turn_and_closes_stale(user_id, db_conn):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     with db_conn.cursor() as cur:
@@ -292,7 +293,7 @@ def test_active_turn_unique_index_blocks_second(user_id, db_conn):
 
 
 def test_mark_done_closes_turn(db_conn, user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
@@ -314,7 +315,7 @@ def test_mark_done_closes_turn(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_mark_done_counted_exactly_once(db_conn, user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
@@ -330,7 +331,7 @@ def test_mark_done_counted_exactly_once(db_conn, user_id):
 
 
 def test_stale_generation_write_rejected(db_conn, user_id):
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
@@ -353,7 +354,7 @@ def test_stale_generation_write_rejected(db_conn, user_id):
 
 def test_pause_write_blocked_when_cancel_flag_set(db_conn, user_id):
     """cancel 优先于 pause（spec §4.2）：pause 的 CAS 要求 cancel 未置位。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
@@ -373,7 +374,7 @@ def test_pause_write_blocked_when_cancel_flag_set(db_conn, user_id):
 
 def test_mark_done_redirects_to_pause_flag(db_conn, user_id):
     """done 写回时若 pause 标志已在竞态窗口置位 → 按控制标志重定向落 paused。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
@@ -409,7 +410,7 @@ def test_reexecute_and_continue_bump_generation(db_conn, user_id):
 
 def test_persist_skipped_for_stale_generation(db_conn, user_id, monkeypatch):
     """旧 turn 的消息不落入换代后的会话（spec §6.3 消息防线）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     _fake_opencode(monkeypatch)
@@ -533,7 +534,7 @@ def test_openapi_patch_action_checks_validated(api_client, db_conn):
 
 def test_gate_registration_failure_returns_error(db_conn, user_id):
     """登记异常可见（不再静默吞）：error 非空 → 调用方 fail-closed。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bad = [{'name': 'c1', 'tool': 'w', 'args_pattern': '('}]  # 非法正则
     bid, sids = _seed_batch(db_conn, user_id, 1, batch_checks=bad)
     w = BatchWorker()
@@ -546,10 +547,10 @@ def test_run_one_fail_closed_on_broken_checks(db_conn, user_id, monkeypatch,
                                               tmp_path):
     """端到端：批上存了非法 checks（绕过入口校验直接落库）→ 子任务不
     completed，落 failed（gate_status=inconclusive），错误含『门禁无法证实』。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
     root = tmp_path
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     bad = [{'name': 'c1', 'tool': 'w', 'args_pattern': '('}]
     bid, sids = _seed_batch(db_conn, user_id, 1, batch_checks=bad, root=tmp_path)
     _fake_opencode(monkeypatch)
@@ -568,10 +569,10 @@ def test_gate_evaluated_audit_event_written(db_conn, user_id, monkeypatch,
     """缺口补齐计划 1.1（P0 §8.3）：门禁核对完成必须落 `gate.evaluated`
     审计事件（结论 + 缺失明细）——此前 gate_status 只落在子任务行上，
     审计时间线对「为什么被判失败」不可解释。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
     root = tmp_path
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     bad = [{'name': 'c1', 'tool': 'w', 'args_pattern': '('}]
     bid, sids = _seed_batch(db_conn, user_id, 1, batch_checks=bad, root=tmp_path)
     _fake_opencode(monkeypatch)
@@ -602,10 +603,10 @@ def test_gate_failed_completes_with_gate_error(db_conn, user_id, monkeypatch,
     （gate_status='failed' + gate_error），由既有管理面徽标/弹窗呈现。
     fail-closed 路径（登记失败/不完整/账本不健康 → inconclusive）不在本
     用例覆盖范围，另行保持 _mark_failed 语义。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
     root = tmp_path
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     checks = [{'name': 'c1', 'tool': 'w', 'args_pattern': 'x'}]
     bid, sids = _seed_batch(db_conn, user_id, 1, batch_checks=checks, root=tmp_path)
     _fake_opencode(monkeypatch)
@@ -650,10 +651,10 @@ def test_gate_failed_completes_with_gate_error(db_conn, user_id, monkeypatch,
 
 def test_run_one_completes_without_checks(db_conn, user_id, monkeypatch, tmp_path):
     """无生效 checks → 门禁 skipped，正常 completed。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
     root = tmp_path
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     bid, sids = _seed_batch(db_conn, user_id, 1, batch_checks=None, root=tmp_path)
     _fake_opencode(monkeypatch)
     _clear_other_pending(db_conn, bid)
@@ -692,7 +693,7 @@ def test_apply_to_preserved_through_validation():
 
 def test_apply_to_end_to_end_registration(db_conn, user_id):
     """定向期望：apply_to.batch_seq 不匹配的子任务不登记该期望（误报清零）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     checks = [{'name': 'only0', 'tool': 'w', 'args_pattern': 'x',
                'apply_to': {'batch_seq': [0]}}]
     bid, sids = _seed_batch(db_conn, user_id, 2, batch_checks=checks)
@@ -772,10 +773,10 @@ def test_f9_retry_closes_attempt_with_parent(db_conn, user_id, monkeypatch,
                                              tmp_path):
     """可重试失败重排后：旧 attempt 落 recovering、新 attempt 带
     parent_attempt_id、终态后无悬挂 running。"""
-    from utils.batch_engine import BatchWorker
-    import utils.batch_engine as eng
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
     root = tmp_path
-    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
     fake = _fake_opencode(monkeypatch)
     fake.list_messages.return_value = [
         {'role': 'assistant', 'finished': False, 'content': []}]
@@ -842,7 +843,7 @@ def test_lease_single_owner(db_conn):
 def test_worker_start_without_lease_disables_dispatcher(db_conn):
     """抢占不到租约 → dispatcher 不启动（多进程只有一个实例跑 worker）。
     用独立租约 key 隔离（dev 后端长期持有 'batch' 租约）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from ai.batch import execution_lease as execution_lease
     key = 'batch-test-' + uuid.uuid4().hex[:8]
     owner = execution_lease.owner_id()
@@ -867,7 +868,7 @@ def test_worker_start_lease_loop_survives(db_conn):
     import 前引用 execution_lease（UnboundLocalError），心跳线程一启动就
     退出、续租从未真正运行——start() 全流程此前无测试覆盖。"""
     import time as _time
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     from ai.batch import execution_lease as execution_lease
     key = 'batch-test-' + uuid.uuid4().hex[:8]
     w = BatchWorker()
@@ -893,7 +894,7 @@ def test_stale_fencing_token_write_rejected(db_conn, user_id):
     """M6 回修（10 号 §3.3）：fencing_token 必填 + 旧 token 写回 0 行。
     持旧 fencing token 的执行体写回必须被拒——状态、计数都不变；
     未传 token 直接 TypeError（不再有"现读自比"恒真兜底）。"""
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
@@ -953,7 +954,7 @@ def test_attach_expectations_fail_closed_on_unhealthy_ledger(db_conn, user_id):
     """复核报告 H3 残留回归：入口 D 补挂的期望（批级 applicable=0）在账本
     不健康时不得被静默放行——inconclusive 携带 expected 条数 → fail-closed。"""
     from utils import agent_ledger
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)   # 批级无 action_checks
     sid = sids[0]
     _set_child(db_conn, sid, status='running', opencode_session_id='oc-attach-x')
@@ -976,7 +977,7 @@ def test_attach_expectations_fail_closed_on_unhealthy_ledger(db_conn, user_id):
     # （10 号 §7-2：不再内联复写引擎布尔式——直接调用引擎的
     # gate_participates 单一事实来源；删掉引擎里的 expected>0 分支
     # 本断言即失败，有判别力）
-    from utils.batch_engine import gate_participates
+    from ai.batch.engine import gate_participates
     gate_reg = {'applicable': 0, 'registered': 0, 'error': None}
     assert gate_participates(gate, gate_reg['applicable']) is True
 
@@ -993,7 +994,7 @@ def test_f1_subtask_row_written_before_ledger(monkeypatch):
     被误判 inconclusive。"""
     from unittest.mock import MagicMock
     from contextlib import contextmanager
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
 
     order = []
     conn = MagicMock(); cur = MagicMock()
@@ -1024,10 +1025,10 @@ def test_f1_subtask_row_written_before_ledger(monkeypatch):
         order.append('ledger')
         return True
 
-    monkeypatch.setattr(eng, 'opencode_client', oc)
-    monkeypatch.setattr(eng, 'get_db', fake_db)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.get_db', fake_db)
     monkeypatch.setattr(w, '_write_subtask', _fake_write_subtask)
-    monkeypatch.setattr(eng.agent_ledger, 'record_messages',
+    monkeypatch.setattr(eng.subtasks.agent_ledger, 'record_messages',
                         _fake_record_messages)
     w._persist_conversation('sess-f1', '问题', 'oc-f1',
                             {'content': [{'type': 'text', 'text': '完成'}]})
@@ -1047,7 +1048,7 @@ def test_cancel_resume_no_zombie_pending_with_cancel_flag(db_conn, user_id):
     row = _child(db_conn, sid)
     assert row['status'] == 'pending' and row['cancel_requested'] is True
     # worker pre-claim：pending+cancel_requested → cancelled（消除僵死窗口）
-    from utils.batch_engine import BatchWorker
+    from ai.batch.engine import BatchWorker
     BatchWorker()._cancel_pending_requests()
     row = _child(db_conn, sid)
     assert row['status'] == 'cancelled'

@@ -84,7 +84,7 @@ def create_run():
             requested_by_kind='api_key')
     except ValueError as e:
         return err(str(e), 'INVALID_ARGUMENT', 400)
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     try:
         get_worker().notify()
     except Exception:

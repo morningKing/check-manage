@@ -89,12 +89,12 @@ def _status(db_conn, sid):
 def test_lease_lost_drops_without_abort(db_conn, user_id, claim_guard,
                                         monkeypatch, tmp_path):
     """F4：续租失败（执行权易主）→ 不 abort、不写终态、行保持 running。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     bid, sid = _seed_running(db_conn, user_id, lease_owner='other-owner')
     claim_guard(sid)
     monkeypatch.setenv('AI_BATCH_LEASE_TTL_SEC', '3')
     abort_calls = []
-    monkeypatch.setattr(eng, 'opencode_client', type('F', (), {
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', type('F', (), {
         'create_session': staticmethod(lambda directory='', title='': 'oc-hb'),
         'send_message': staticmethod(lambda *a, **k: None),
         'list_messages': staticmethod(lambda oc, directory='': [
@@ -103,7 +103,8 @@ def test_lease_lost_drops_without_abort(db_conn, user_id, claim_guard,
         'abort_session': staticmethod(
             lambda *a, **k: abort_calls.append(time.time())),
     })())
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     worker = eng.BatchWorker()
     worker._lease_owner = 'hb-owner'
     worker.SESSION_TIMEOUT_SEC = 0
@@ -129,7 +130,7 @@ def test_heartbeat_keeps_lease_through_slow_dispatch(db_conn, user_id,
                                                      tmp_path):
     """F3：send_message 阻塞超过租约 TTL 期间心跳仍续租——另一实例的对账器
     不得把仍在工作的会话重排回 pending（生产「运行中→待运行」直接成因）。"""
-    import utils.batch_engine as eng
+    from ai.batch import engine as eng
     ttl, slow_sec = 4, 6
     bid, sid = _seed_running(db_conn, user_id, lease_owner='hb-owner',
                              ttl_sec=ttl)
@@ -143,13 +144,14 @@ def test_heartbeat_keeps_lease_through_slow_dispatch(db_conn, user_id,
     def slow_send(*a, **k):
         time.sleep(slow_sec)               # dispatch 阶段阻塞 > 租约 TTL
 
-    monkeypatch.setattr(eng, 'opencode_client', type('F', (), {
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', type('F', (), {
         'create_session': staticmethod(lambda directory='', title='': 'oc-hb'),
         'send_message': staticmethod(slow_send),
         'list_messages': staticmethod(lambda oc, directory='': finished_msg),
         'get_messages': staticmethod(lambda oc, directory='': []),
     })())
-    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace', lambda *a, **kw: str(tmp_path))
     worker = eng.BatchWorker()
     worker._lease_owner = 'hb-owner'
     worker.SESSION_TIMEOUT_SEC = 0

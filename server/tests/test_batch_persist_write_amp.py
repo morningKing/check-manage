@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.batch_engine as eng  # noqa: E402
+from ai.batch import engine as eng  # noqa: E402
 
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def _persist(sid, raw):
     oc = MagicMock()
     oc.get_messages.return_value = raw
     w = eng.BatchWorker()
-    with patch.object(eng, 'opencode_client', oc):
+    with patch('ai.batch.engine.subtasks.opencode_client', oc):
         w._persist_conversation(sid, '问题', 'oc-wa', {'content': []})
 
 

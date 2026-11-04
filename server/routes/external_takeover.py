@@ -145,7 +145,7 @@ def takeover_send():
                           'message': '任务执行中，请外部系统先暂停后再接管'}}, 409
     if status not in ('completed', 'failed', 'cancelled', 'needs_review', 'paused'):
         return _INVALID
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     try:
         batch_repo.continue_child(g.takeover['owner_user_id'], g.takeover['batch_id'],
                                   g.takeover['session_id'], prompt,
@@ -179,7 +179,7 @@ def takeover_cancel():
     if landed is None:
         # resolve 与 cancel 之间批次/会话被删——与无效令牌同一 404 体
         return _INVALID
-    from utils.batch_engine import get_worker
+    from ai.batch.engine import get_worker
     get_worker().notify()
     prev = _child_status_fresh()
     _log_takeover('ai.batch_takeover_cancel', r['session_id'],
