@@ -782,6 +782,9 @@ def test_f9_retry_closes_attempt_with_parent(db_conn, user_id, monkeypatch,
     w = BatchWorker()
     w.MAX_AUTO_RETRY = 1
     w.STALL_TIMEOUT_SEC = 0  # 第二轮轮询立刻判停滞
+    # content=[] 是思考盲区形态（默认走 600s THINKING 阈值）；本用例要的是
+    # 「立刻判停滞」的链路语义，禁用分层恢复旧行为。
+    w.THINKING_STALL_TIMEOUT_SEC = 0
     monkeypatch.setattr(BatchWorker, 'POLL_INTERVAL_SEC', 0)
     bid, sids = _seed_batch(db_conn, user_id, 1, root=tmp_path)
     _clear_other_pending(db_conn, bid)

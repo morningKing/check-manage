@@ -65,8 +65,9 @@ def test_streaming_message_not_finished(monkeypatch):
 
 
 def test_request_error_returns_not_finished(monkeypatch):
-    # A transient REST blip must not fail the child; report "not finished" so the
-    # poll loop retries (persistent failure still hits the timeout -> failed).
+    # A transient REST blip must not fail the child; report "not finished" with a
+    # poll_error marker so the poll loop retries WITHOUT mistaking it for "no
+    # progress" (persistent failure -> `poll unreachable` by _await_finished).
     import requests
 
     class _BoomClient:
@@ -76,7 +77,8 @@ def test_request_error_returns_not_finished(monkeypatch):
     f = eng._OpenCodeFacade()
     monkeypatch.setattr(f, '_client', lambda: _BoomClient())
     out = f.list_messages('s')
-    assert out == [{'role': 'assistant', 'finished': False, 'content': []}]
+    assert out == [{'role': 'assistant', 'finished': False, 'content': [],
+                    'poll_error': 'rest'}]
 
 
 def test_progress_signature_changes_on_text_growth():
