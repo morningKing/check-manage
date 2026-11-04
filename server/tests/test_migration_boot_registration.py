@@ -32,4 +32,6 @@ def test_dated_migrations_are_registered_in_app_boot():
     assert not missing, (
         f'以下迁移未在 app.py 启动注册表注册——生产「拉代码+重启」路径不会跑 '
         f'init_db 自动扫描，生产库将缺表：{missing}。'
-        f'请在 app.py 迁移块区（仿 2026_10_05 块）补注册。')
+        f'请在 server/app.py 的 _BOOT_MIGRATIONS_MAIN 列表按原块序追加 '
+        f"('迁移文件名', '<原 warning 消息>') 条目"
+        f'（执行顺序=列表顺序，非文件名日期序）。')
