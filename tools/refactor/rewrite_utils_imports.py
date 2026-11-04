@@ -132,6 +132,15 @@ MAPPING = {
     'orchestration_defs': 'ai.orchestration.orchestration_defs',
     'approval_repo': 'ai.orchestration.approval_repo',
     'orchestration_engine': 'ai.orchestration.engine',
+    # ---- batch 5b: projects/ ----
+    'version': 'projects.version',
+    'branch_lock': 'projects.branch_lock',
+    'workspace': 'projects.workspace',
+    'workspace_changes': 'projects.workspace_changes',
+    'workspace_outputs': 'projects.workspace_outputs',
+    'project_version': 'projects.versioning',
+    'backup': 'projects.backup',
+    'cross_project_dependency': 'projects.dependencies',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

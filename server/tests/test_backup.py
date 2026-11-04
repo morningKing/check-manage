@@ -41,12 +41,12 @@ def workspace_temp_dir():
 class TestCreateBackup:
     """测试 create_backup 函数"""
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_create_backup_exports_all_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """备份应导出所有配置的表"""
-        from utils.backup import create_backup, BACKUP_TABLES
+        from projects.backup import create_backup, BACKUP_TABLES
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -61,7 +61,7 @@ class TestCreateBackup:
         mock_getsize.return_value = 1024
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 result = create_backup(backup_type='manual', created_by='admin')
 
                 assert result['type'] == 'manual'
@@ -70,12 +70,12 @@ class TestCreateBackup:
                 # 每个整表一次流式导出（命名游标按表创建，§1.3 不再 fetchall 全量）
                 assert mock_cursor.connection.cursor.call_count >= len(BACKUP_TABLES)
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_backup_zip_structure(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """备份 ZIP 应包含 manifest.json 和各表 JSON"""
-        from utils.backup import create_backup
+        from projects.backup import create_backup
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -87,7 +87,7 @@ class TestCreateBackup:
         mock_getsize.return_value = 1024
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 result = create_backup()
                 zip_path = result['filePath']
 
@@ -104,12 +104,12 @@ class TestCreateBackup:
                     assert 'id' in manifest
                     assert 'tables' in manifest
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_backup_contains_table_data(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """备份应正确包含表数据"""
-        from utils.backup import create_backup
+        from projects.backup import create_backup
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -122,7 +122,7 @@ class TestCreateBackup:
         # 流式导出（§1.3）：整表走命名游标 fetchmany，按 BACKUP_TABLES 顺序；
         # 每张表 fetchmany 被调到返回空批为止 → 每表两个批次（数据批+空批）。
         # 注意批次本身是"行列表"——menus 的数据批就是 menus_row（不要再包一层）。
-        from utils.backup import BACKUP_TABLES
+        from projects.backup import BACKUP_TABLES
         # 11 列：id,name,icon,page_id,parent_id,order,path,roles,export_script_id,menu_type,project_id
         menus_row = [('menu-1', '菜单1', 'icon-menu', None, None, 1, None, None, None, 'data', None)]
         named_cursor = mock_cursor.connection.cursor.return_value
@@ -134,7 +134,7 @@ class TestCreateBackup:
         mock_getsize.return_value = 2048
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 result = create_backup()
 
                 zip_path = result['filePath']
@@ -148,7 +148,7 @@ class TestRestoreBackup:
 
     def test_restore_nonexistent_file_raises_error(self):
         """还原不存在的文件应抛出错误"""
-        from utils.backup import restore_backup
+        from projects.backup import restore_backup
 
         with pytest.raises(FileNotFoundError):
             restore_backup('/nonexistent/path.zip')
@@ -156,7 +156,7 @@ class TestRestoreBackup:
     @patch('db.pool')
     def test_restore_valid_backup(self, mock_pool):
         """还原有效备份应成功"""
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
 
         # 创建临时备份文件
         with workspace_temp_dir() as tmpdir:
@@ -208,7 +208,7 @@ class TestRestoreBackup:
     @patch('db.pool')
     def test_restore_menus_preserves_menu_type(self, mock_pool):
         """新版菜单备份还原应在 INSERT 中包含 menu_type 列及其值"""
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'bk.zip')
@@ -240,7 +240,7 @@ class TestRestoreBackup:
     @patch('db.pool')
     def test_restore_old_menus_backup_omits_missing_columns(self, mock_pool):
         """旧版菜单备份缺少 menu_type，应从 INSERT 中省略该列（交由数据库默认值填充）"""
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'bk.zip')
@@ -272,7 +272,7 @@ class TestRestoreBackup:
     @patch('db.pool')
     def test_restore_rollback_on_error(self, mock_pool):
         """还原失败应回滚事务"""
-        from utils.backup import restore_backup
+        from projects.backup import restore_backup
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
@@ -315,21 +315,21 @@ class TestIsBackupDue:
 
     def test_no_last_backup_returns_true(self):
         """无上次备份时间时应立即执行"""
-        from utils.backup import is_backup_due
+        from projects.backup import is_backup_due
 
         settings = {'lastBackupAt': None, 'interval': 'daily'}
         assert is_backup_due(settings) is True
 
     def test_invalid_last_backup_returns_true(self):
         """无效的上次备份时间应返回 True"""
-        from utils.backup import is_backup_due
+        from projects.backup import is_backup_due
 
         settings = {'lastBackupAt': 'invalid-date', 'interval': 'daily'}
         assert is_backup_due(settings) is True
 
     def test_daily_interval(self):
         """每日备份间隔测试"""
-        from utils.backup import is_backup_due
+        from projects.backup import is_backup_due
 
         now = datetime.now(timezone.utc)
 
@@ -345,7 +345,7 @@ class TestIsBackupDue:
 
     def test_weekly_interval(self):
         """每周备份间隔测试"""
-        from utils.backup import is_backup_due
+        from projects.backup import is_backup_due
 
         now = datetime.now(timezone.utc)
 
@@ -361,7 +361,7 @@ class TestIsBackupDue:
 
     def test_monthly_interval(self):
         """每月备份间隔测试"""
-        from utils.backup import is_backup_due
+        from projects.backup import is_backup_due
 
         now = datetime.now(timezone.utc)
 
@@ -377,7 +377,7 @@ class TestIsBackupDue:
 
     def test_naive_datetime_treated_as_utc(self):
         """无时区的日期时间应视为 UTC"""
-        from utils.backup import is_backup_due
+        from projects.backup import is_backup_due
 
         now = datetime.now(timezone.utc)
 
@@ -390,11 +390,11 @@ class TestIsBackupDue:
 class TestCleanupOldBackups:
     """测试 cleanup_old_backups 函数"""
 
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.delete_backup_file')
+    @patch('projects.backup.scheduler.get_db')
+    @patch('projects.backup.scheduler.delete_backup_file')
     def test_cleanup_removes_excess_backups(self, mock_delete_file, mock_get_db):
         """清理应删除超出保留数量的备份"""
-        from utils.backup import cleanup_old_backups
+        from projects.backup import cleanup_old_backups
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -418,11 +418,11 @@ class TestCleanupOldBackups:
         assert mock_delete_file.call_count == 2
         assert mock_cursor.execute.call_count >= 2  # 至少删除两条记录
 
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.delete_backup_file')
+    @patch('projects.backup.scheduler.get_db')
+    @patch('projects.backup.scheduler.delete_backup_file')
     def test_cleanup_keeps_all_if_under_limit(self, mock_delete_file, mock_get_db):
         """备份数量未超限不应删除"""
-        from utils.backup import cleanup_old_backups
+        from projects.backup import cleanup_old_backups
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -448,7 +448,7 @@ class TestDeleteBackupFile:
 
     def test_delete_existing_file(self):
         """删除存在的文件"""
-        from utils.backup import delete_backup_file
+        from projects.backup import delete_backup_file
 
         with workspace_temp_dir() as tmpdir:
             temp_path = os.path.join(tmpdir, 'delete-me.zip')
@@ -461,14 +461,14 @@ class TestDeleteBackupFile:
 
     def test_delete_nonexistent_file_no_error(self):
         """删除不存在的文件不应报错"""
-        from utils.backup import delete_backup_file
+        from projects.backup import delete_backup_file
 
         # 不应抛出异常
         delete_backup_file('/nonexistent/path/file.zip')
 
     def test_delete_none_path_no_error(self):
         """传入 None 不应报错"""
-        from utils.backup import delete_backup_file
+        from projects.backup import delete_backup_file
 
         delete_backup_file(None)
 
@@ -476,12 +476,12 @@ class TestDeleteBackupFile:
 class TestTableLevelBackup:
     """测试表级备份功能"""
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_create_partial_backup_with_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """创建表级备份应只备份指定的表"""
-        from utils.backup import create_backup
+        from projects.backup import create_backup
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -493,7 +493,7 @@ class TestTableLevelBackup:
         mock_getsize.return_value = 1024
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 # 只备份 menus 和 users 两张表
                 result = create_backup(
                     backup_type='manual',
@@ -522,12 +522,12 @@ class TestTableLevelBackup:
                     assert manifest['scope'] == 'partial'
                     assert manifest['tables'] == ['menus', 'users']
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_create_full_backup_without_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """不传 tables 参数应创建全量备份"""
-        from utils.backup import create_backup, BACKUP_TABLES
+        from projects.backup import create_backup, BACKUP_TABLES
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -539,19 +539,19 @@ class TestTableLevelBackup:
         mock_getsize.return_value = 1024
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 result = create_backup(backup_type='manual')
 
                 # 验证返回结果
                 assert result['backupScope'] == 'full'
                 assert result['tablesCount'] == len(BACKUP_TABLES)
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_create_backup_filters_invalid_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """创建表级备份应过滤无效的表名"""
-        from utils.backup import create_backup
+        from projects.backup import create_backup
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -563,7 +563,7 @@ class TestTableLevelBackup:
         mock_getsize.return_value = 1024
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 # 传入无效表名和有效表名
                 result = create_backup(
                     tables=['menus', 'invalid_table', 'users', 'another_invalid']
@@ -572,12 +572,12 @@ class TestTableLevelBackup:
                 # 只有有效的表被备份
                 assert result['backupTables'] == ['menus', 'users']
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_create_backup_raises_error_for_no_valid_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """所有表名都无效时应抛出错误"""
-        from utils.backup import create_backup
+        from projects.backup import create_backup
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -587,7 +587,7 @@ class TestTableLevelBackup:
         mock_get_db.return_value = mock_conn
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 with pytest.raises(ValueError, match='没有有效的表需要备份'):
                     create_backup(tables=['invalid_table', 'another_invalid'])
 
@@ -598,7 +598,7 @@ class TestTableLevelRestore:
     @patch('db.pool')
     def test_restore_partial_tables(self, mock_pool):
         """只还原指定的表"""
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
@@ -640,7 +640,7 @@ class TestTableLevelRestore:
     @patch('db.pool')
     def test_restore_filters_tables_not_in_backup(self, mock_pool):
         """还原时指定的表不在备份中应被过滤"""
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
@@ -677,7 +677,7 @@ class TestTableLevelRestore:
     @patch('db.pool')
     def test_restore_raises_error_when_no_tables_match(self, mock_pool):
         """还原时指定的表都不在备份中应抛出错误"""
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
@@ -704,7 +704,7 @@ class TestTableLevelRestore:
     @patch('db.pool')
     def test_restore_legacy_backup_without_tables_field(self, mock_pool):
         """还原旧版备份（无 tables 字段）应从文件名推断"""
-        from utils.backup import restore_backup
+        from projects.backup import restore_backup
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'legacy-backup.zip')
@@ -740,7 +740,7 @@ class TestGetBackupTableNames:
 
     def test_returns_list_of_tables(self):
         """应返回可备份的表列表"""
-        from utils.backup import get_backup_table_names, BACKUP_TABLES
+        from projects.backup import get_backup_table_names, BACKUP_TABLES
 
         result = get_backup_table_names()
 
@@ -754,7 +754,7 @@ class TestGetBackupTableNames:
 
     def test_includes_common_tables(self):
         """应包含常见的关键表"""
-        from utils.backup import get_backup_table_names
+        from projects.backup import get_backup_table_names
 
         result = get_backup_table_names()
         table_names = [t['name'] for t in result]
@@ -766,7 +766,7 @@ class TestGetBackupTableNames:
 
     def test_table_has_chinese_label(self):
         """每个表应有中文标签"""
-        from utils.backup import get_backup_table_names
+        from projects.backup import get_backup_table_names
 
         result = get_backup_table_names()
 
@@ -781,7 +781,7 @@ class TestRestoreOrder:
 
     def test_restore_order_respects_foreign_keys(self):
         """还原顺序应遵循外键依赖关系"""
-        from utils.backup import RESTORE_ORDER
+        from projects.backup import RESTORE_ORDER
 
         # collection_versions 应在 version_snapshots 和 version_relations 之前
         cv_idx = RESTORE_ORDER.index('collection_versions')
@@ -793,7 +793,7 @@ class TestRestoreOrder:
 
     def test_restore_order_includes_all_tables(self):
         """还原顺序应包含所有需要备份的表"""
-        from utils.backup import RESTORE_ORDER, BACKUP_TABLES
+        from projects.backup import RESTORE_ORDER, BACKUP_TABLES
 
         for table_name, _, _, _ in BACKUP_TABLES:
             assert table_name in RESTORE_ORDER, f"{table_name} 应在 RESTORE_ORDER 中"
@@ -801,7 +801,7 @@ class TestRestoreOrder:
     @patch('db.pool')
     def test_restore_uses_correct_order(self, mock_pool):
         """还原时应按 RESTORE_ORDER 顺序执行 INSERT"""
-        from utils.backup import restore_backup, BACKUP_VERSION, RESTORE_ORDER
+        from projects.backup import restore_backup, BACKUP_VERSION, RESTORE_ORDER
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-order.zip')
@@ -861,7 +861,7 @@ class TestCollectionLevelRestoreCleansReverseRelations:
 
     @patch('db.pool')
     def test_restore_dynamic_data_collection_deletes_both_directions(self, mock_pool):
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
 
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'reverse-rel.zip')
@@ -913,7 +913,7 @@ class TestUpsertModeRestore:
 
     @patch('db.pool')
     def test_upsert_mode_does_not_delete(self, mock_pool):
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'upsert.zip')
             manifest = {
@@ -951,7 +951,7 @@ class TestUpsertModeRestore:
 
     @patch('db.pool')
     def test_replace_mode_still_deletes(self, mock_pool):
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
         with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'replace.zip')
             manifest = {
@@ -988,19 +988,19 @@ class TestPageConfigsRowActionsBackup:
     数据、不可恢复。"""
 
     def test_page_configs_columns_include_row_actions_as_jsonb(self):
-        from utils.backup import BACKUP_TABLE_MAP
+        from projects.backup import BACKUP_TABLE_MAP
         _, columns, jsonb_indices, _ = BACKUP_TABLE_MAP['page_configs']
         assert 'row_actions' in columns
         idx = columns.index('row_actions')
         assert idx in jsonb_indices, 'row_actions 必须标记为 JSONB 列，否则还原时不会被 Json() 包装'
 
-    @patch('utils.backup._ensure_backup_dir')
-    @patch('utils.backup.get_db')
-    @patch('utils.backup.os.path.getsize')
+    @patch('projects.backup.service._ensure_backup_dir')
+    @patch('projects.backup.service.get_db')
+    @patch('projects.backup.service.os.path.getsize')
     def test_create_backup_exports_row_actions_column(self, mock_getsize, mock_get_db, mock_ensure_dir):
         """备份导出 page_configs 时，SELECT 的列清单里必须带 row_actions，
         否则备份文件里从一开始就没有这份数据，后面怎么改还原逻辑都补不回来。"""
-        from utils.backup import create_backup
+        from projects.backup import create_backup
 
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -1012,7 +1012,7 @@ class TestPageConfigsRowActionsBackup:
         mock_getsize.return_value = 1024
 
         with workspace_temp_dir() as tmpdir:
-            with patch('utils.backup.BACKUP_DIR', tmpdir):
+            with patch('projects.backup.service.BACKUP_DIR', tmpdir):
                 create_backup(backup_type='manual', created_by='admin', tables=['page_configs'])
 
         select_sqls = [str(call[0][0]) for call in mock_cursor.connection.cursor.return_value.execute.call_args_list
@@ -1024,7 +1024,7 @@ class TestPageConfigsRowActionsBackup:
     def test_restore_page_configs_writes_row_actions_column(self, mock_pool):
         """还原时 row_actions 必须真的出现在 INSERT 的列清单和参数里——这是
         整个回归的关键断言：修复前这里的 INSERT 完全不带 row_actions 列。"""
-        from utils.backup import restore_backup, BACKUP_VERSION
+        from projects.backup import restore_backup, BACKUP_VERSION
         import psycopg2.extras as pg_extras
 
         row_actions_payload = [{
@@ -1078,11 +1078,11 @@ class TestComputeRestoreWarnings:
     left with orphan FKs after a selective replace-mode restore."""
 
     def test_upsert_mode_never_warns(self):
-        from utils.backup import compute_restore_warnings
+        from projects.backup import compute_restore_warnings
         assert compute_restore_warnings(['users'], mode='upsert') == []
 
     def test_no_tables_never_warns(self):
-        from utils.backup import compute_restore_warnings
+        from projects.backup import compute_restore_warnings
         assert compute_restore_warnings([], mode='replace') == []
         assert compute_restore_warnings(None, mode='replace') == []
 
@@ -1092,7 +1092,7 @@ class TestComputeRestoreWarnings:
         column_views). Older tables that store user_id as a plain column
         without a real FK won't be flagged — that's an honest limitation
         of FK-based detection, called out separately if needed."""
-        from utils.backup import compute_restore_warnings
+        from projects.backup import compute_restore_warnings
         warnings = compute_restore_warnings(['users'], mode='replace')
         assert warnings, 'restoring users alone must produce warnings'
         users_warning = next(w for w in warnings if w['table'] == 'users')
@@ -1105,7 +1105,7 @@ class TestComputeRestoreWarnings:
         """If user includes ALL dependents alongside, no warning for that
         table. Trivial check: dynamic_data + data_relations + all version
         tables → no orphan path from dynamic_data."""
-        from utils.backup import compute_restore_warnings
+        from projects.backup import compute_restore_warnings
         # not exhaustive — just ensures dependents inside the set don't show up
         warnings = compute_restore_warnings(
             ['dynamic_data', 'data_relations', 'version_snapshots',

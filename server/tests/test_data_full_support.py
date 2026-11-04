@@ -207,13 +207,13 @@ def test_td_h04_backup_list_download_and_create_defect(admin):
         assert d.status_code < 300, f'删除自建备份失败 {d.status_code} {d.text[:200]}'
         after = live.api('GET', '/backups', admin).json()
         assert all(x['id'] != bid for x in after), '删除后行仍在'
-        from utils.backup import BACKUP_DIR
+        from projects.backup import BACKUP_DIR
         assert not os.path.exists(os.path.join(BACKUP_DIR, f'{bid}.zip')), \
             '删除后 zip 文件仍在'
     # 防御性清理：建档过程若遗留 .tmp-backup-*.json 碎片，按 mtime 守卫清走
     # （只删 mtime >= t0 的自建碎片，不碰他人/历史文件；产品侧
     # _cleanup_stale_backup_tmp 也会在下一次建档开头自愈兜底）
-    from utils.backup import BACKUP_DIR
+    from projects.backup import BACKUP_DIR
     if os.path.isdir(BACKUP_DIR):
         for n in os.listdir(BACKUP_DIR):
             p = os.path.join(BACKUP_DIR, n)

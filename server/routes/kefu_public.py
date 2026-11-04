@@ -16,7 +16,7 @@ from ai.sessions.chat_persist import (
     ensure_listener, new_state, apply_event, persist_turn,
     event_session_id, has_listener,
 )
-from utils.workspace import safe_resolve, WorkspacePathError
+from projects.workspace import safe_resolve, WorkspacePathError
 from common.filename import safe_filename
 from config import OPENCODE_BASE_URL, get_default_chat_model
 

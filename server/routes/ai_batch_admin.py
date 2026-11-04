@@ -23,9 +23,9 @@ from ai.batch.repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
 from common.operation_log import log_operation
 from ai.sessions.session_file_import import MAX_IMPORT_PATHS, import_recorded_files
 from ai.batch.subtask_repo import get_subtask_messages
-from utils.workspace import WorkspacePathError, safe_resolve
-from utils.workspace_changes import file_diff, git_changes, read_file_preview
-from utils.workspace_outputs import augment_with_data_file_id, list_session_files
+from projects.workspace import WorkspacePathError, safe_resolve
+from projects.workspace_changes import file_diff, git_changes, read_file_preview
+from projects.workspace_outputs import augment_with_data_file_id, list_session_files
 
 ai_batch_admin_bp = Blueprint('ai_batch_admin', __name__,
                               url_prefix='/ai/chat/admin/batches')
@@ -498,7 +498,7 @@ def list_child_changes(batch_id, sid):
     changes, truncated, ok = git_changes(sess['workspace_path'])
     if ok:
         # 延迟导入：与 routes/ai_chat.py:752 同风格，避免顶层循环依赖
-        from utils.workspace_changes import record_session_files
+        from projects.workspace_changes import record_session_files
         record_session_files(sid, changes)
     return jsonify({'changes': changes, 'truncated': truncated, 'ok': ok})
 

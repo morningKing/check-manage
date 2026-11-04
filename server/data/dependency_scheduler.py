@@ -7,7 +7,7 @@
 import time
 import threading
 from db import get_db
-from utils.cross_project_dependency import validate_project_dependency
+from projects.dependencies import validate_project_dependency
 
 
 def start_dependency_scheduler(app):

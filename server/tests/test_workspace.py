@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def test_create_session_workspace_makes_uploads_outputs(tmp_path):
-    from utils.workspace import create_session_workspace
+    from projects.workspace import create_session_workspace
     p = create_session_workspace(str(tmp_path), "user-1", "sess-1")
     assert (Path(p) / "uploads").is_dir()
     assert (Path(p) / "outputs").is_dir()
@@ -17,7 +17,7 @@ def test_create_session_workspace_inits_git_and_writes_gitignore(tmp_path):
     """New sessions get a workspace-level git repo + a .gitignore for the noise
     dirs so the 变更文件 panel sees agent-written files without needing the
     skill to git-clone something first."""
-    from utils.workspace import create_session_workspace
+    from projects.workspace import create_session_workspace
     p = Path(create_session_workspace(str(tmp_path), "u", "s"))
     assert (p / ".gitignore").is_file()
     gitignore = (p / ".gitignore").read_text(encoding="utf-8")
@@ -36,7 +36,7 @@ def test_create_session_workspace_commits_gitignore_so_no_noise(tmp_path):
     import shutil as _sh, subprocess as _sp
     if not _sh.which("git"):
         return
-    from utils.workspace import create_session_workspace
+    from projects.workspace import create_session_workspace
     p = Path(create_session_workspace(str(tmp_path), "u", "s"))
     out = _sp.run(["git", "-C", str(p), "status", "--porcelain"],
                   capture_output=True, text=True)
@@ -53,7 +53,7 @@ def test_create_session_workspace_writes_agents_md_guidance(tmp_path):
     into a subdir and not fight the root .git — and it's gitignored so it never
     shows up as a change."""
     import shutil as _sh, subprocess as _sp
-    from utils.workspace import create_session_workspace
+    from projects.workspace import create_session_workspace
     p = Path(create_session_workspace(str(tmp_path), "u", "s"))
     agents = p / "AGENTS.md"
     assert agents.is_file()
@@ -68,7 +68,7 @@ def test_create_session_workspace_writes_agents_md_guidance(tmp_path):
 
 def test_create_session_workspace_skips_git_init_when_already_initialized(tmp_path):
     """Idempotency: a second call doesn't reinit or overwrite the .gitignore."""
-    from utils.workspace import create_session_workspace
+    from projects.workspace import create_session_workspace
     p = Path(create_session_workspace(str(tmp_path), "u", "s"))
     (p / ".gitignore").write_text("custom\n", encoding="utf-8")
     create_session_workspace(str(tmp_path), "u", "s")
@@ -76,20 +76,20 @@ def test_create_session_workspace_skips_git_init_when_already_initialized(tmp_pa
 
 
 def test_safe_resolve_rejects_traversal(tmp_path):
-    from utils.workspace import safe_resolve, WorkspacePathError
+    from projects.workspace import safe_resolve, WorkspacePathError
     root = str(tmp_path)
     with pytest.raises(WorkspacePathError):
         safe_resolve(root, "../../etc/passwd")
 
 
 def test_safe_resolve_rejects_absolute(tmp_path):
-    from utils.workspace import safe_resolve, WorkspacePathError
+    from projects.workspace import safe_resolve, WorkspacePathError
     with pytest.raises(WorkspacePathError):
         safe_resolve(str(tmp_path), "/etc/passwd")
 
 
 def test_safe_resolve_accepts_inside(tmp_path):
-    from utils.workspace import safe_resolve
+    from projects.workspace import safe_resolve
     (tmp_path / "uploads").mkdir()
     (tmp_path / "uploads" / "x.txt").write_text("hi")
     p = safe_resolve(str(tmp_path), "uploads/x.txt")
@@ -97,7 +97,7 @@ def test_safe_resolve_accepts_inside(tmp_path):
 
 
 def test_cleanup_removes_session_dir(tmp_path):
-    from utils.workspace import create_session_workspace, cleanup_session_workspace
+    from projects.workspace import create_session_workspace, cleanup_session_workspace
     p = create_session_workspace(str(tmp_path), "u", "s")
     assert Path(p).exists()
     cleanup_session_workspace(str(tmp_path), "u", "s")
@@ -106,7 +106,7 @@ def test_cleanup_removes_session_dir(tmp_path):
 
 def test_write_opencode_config_writes_mcp_with_token(tmp_path):
     import json
-    from utils.workspace import write_opencode_config
+    from projects.workspace import write_opencode_config
     ws = create_ws(tmp_path)
     write_opencode_config(ws, mcp_name="check-manage",
                           mcp_url="http://127.0.0.1:3003/mcp?token=tok123")
@@ -119,7 +119,7 @@ def test_write_opencode_config_writes_mcp_with_token(tmp_path):
 
 def test_write_opencode_config_includes_model_when_given(tmp_path):
     import json
-    from utils.workspace import write_opencode_config
+    from projects.workspace import write_opencode_config
     ws = create_ws(tmp_path)
     write_opencode_config(ws, mcp_name="check-manage",
                           mcp_url="http://x/mcp?token=t",
@@ -129,7 +129,7 @@ def test_write_opencode_config_includes_model_when_given(tmp_path):
 
 
 def create_ws(tmp_path):
-    from utils.workspace import create_session_workspace
+    from projects.workspace import create_session_workspace
     return create_session_workspace(str(tmp_path), "u", "s")
 
 
@@ -140,13 +140,13 @@ def create_ws(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_batch_workspace_root_honors_env_override(monkeypatch, tmp_path):
-    from utils.workspace import batch_workspace_root
+    from projects.workspace import batch_workspace_root
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     assert batch_workspace_root() == str(tmp_path)
 
 
 def test_batch_workspace_root_defaults_to_config_root(monkeypatch):
-    from utils import workspace as ws_mod
+    from projects import workspace as ws_mod
     from config import AI_WORKSPACE_ROOT
     monkeypatch.delenv('AI_CHAT_WORKSPACE_ROOT', raising=False)
     assert ws_mod.batch_workspace_root() == AI_WORKSPACE_ROOT
@@ -155,7 +155,7 @@ def test_batch_workspace_root_defaults_to_config_root(monkeypatch):
 def test_batch_roots_dedupes_same_path(monkeypatch):
     """When the unified root IS the legacy dir (old deployment layout), the
     deduped list has exactly one entry — sweeps must not run twice."""
-    from utils import workspace as ws_mod
+    from projects import workspace as ws_mod
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT',
                        ws_mod.legacy_batch_workspace_root())
     roots = ws_mod.batch_roots()
@@ -165,7 +165,7 @@ def test_batch_roots_dedupes_same_path(monkeypatch):
 def test_resolve_batch_data_path_falls_back_to_legacy(tmp_path, monkeypatch):
     """A staged file uploaded before unification (legacy tree) resolves even
     though it's absent from the unified root — old pending batches still run."""
-    from utils import workspace as ws_mod
+    from projects import workspace as ws_mod
     unified, legacy = tmp_path / 'unified', tmp_path / 'legacy'
     staged = legacy / 'batch-staging' / 'u1' / 'upl-1' / 'input.txt'
     staged.parent.mkdir(parents=True)
@@ -177,7 +177,7 @@ def test_resolve_batch_data_path_falls_back_to_legacy(tmp_path, monkeypatch):
 
 
 def test_resolve_batch_data_path_prefers_unified_root(tmp_path, monkeypatch):
-    from utils.workspace import resolve_batch_data_path
+    from projects.workspace import resolve_batch_data_path
     unified, legacy = tmp_path / 'unified', tmp_path / 'legacy'
     for root in (unified, legacy):
         p = root / 'batch-staging' / 'u1' / 'upl-1' / 'input.txt'
@@ -189,7 +189,7 @@ def test_resolve_batch_data_path_prefers_unified_root(tmp_path, monkeypatch):
 
 
 def test_resolve_batch_data_path_missing_raises(tmp_path, monkeypatch):
-    from utils.workspace import resolve_batch_data_path
+    from projects.workspace import resolve_batch_data_path
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path / 'unified'))
     with pytest.raises(FileNotFoundError):
         resolve_batch_data_path('batch-staging/u1/gone.txt')
@@ -198,7 +198,7 @@ def test_resolve_batch_data_path_missing_raises(tmp_path, monkeypatch):
 def test_cleanup_batch_workspaces_sweeps_legacy_root(tmp_path, monkeypatch):
     """Deleting a batch tears down child workspaces in BOTH roots: sessions
     created before unification keep their dirs under the legacy tree."""
-    from utils import workspace as ws_mod
+    from projects import workspace as ws_mod
     unified_root = str(tmp_path / 'unified')
     legacy_root = str(tmp_path / 'legacy')
     monkeypatch.setattr(ws_mod, 'legacy_batch_workspace_root', lambda: legacy_root)

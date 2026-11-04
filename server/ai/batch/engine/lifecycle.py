@@ -7,7 +7,7 @@ import traceback
 from pathlib import Path
 
 from db import get_db
-from utils.workspace import (create_session_workspace, _rm_force,
+from projects.workspace import (create_session_workspace, _rm_force,
                              batch_workspace_root, legacy_batch_workspace_root,
                              resolve_batch_data_path)
 
@@ -83,7 +83,7 @@ def _prepare_workspace(user_id: str, session_id: str,
     from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
         INTERNAL_MCP_NAME as MCP_NAME
     from ai.sessions.session_token import generate_token
-    from utils.workspace import write_opencode_config
+    from projects.workspace import write_opencode_config
     _mcp_name = MCP_NAME
     write_opencode_config(
         ws, mcp_name=_mcp_name,
@@ -96,7 +96,7 @@ def _prepare_workspace(user_id: str, session_id: str,
     # 会触发 OpenCode external_directory=ask 授权询问，无人应答 → 工具挂起
     # （生产实测 read 挂 900s 被看门狗 abort）。派发时写项目级 allow——
     # 项目配置覆盖全局 deny，只对批任务/无人值守子会话生效。
-    from utils.workspace import ensure_batch_permissions
+    from projects.workspace import ensure_batch_permissions
     ensure_batch_permissions(ws)
     if not staged_file_path:
         return ws

@@ -14,7 +14,7 @@
 
 from flask import Blueprint, request, jsonify, g
 from auth import login_required, require_permission
-from utils.cross_project_dependency import (
+from projects.dependencies import (
     create_project_dependency,
     get_project_dependencies,
     get_dependent_projects,

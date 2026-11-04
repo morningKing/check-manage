@@ -43,7 +43,7 @@ def test_tables_exist_with_expected_columns():
 
 def test_record_and_get_session_files(tmp_path):
     """git 扫描 -> record_session_files -> get_session_files 端到端。"""
-    from utils.workspace_changes import git_changes, record_session_files, get_session_files
+    from projects.workspace_changes import git_changes, record_session_files, get_session_files
     uid, sid = _mk_session()
     try:
         ws = str(tmp_path)
@@ -82,7 +82,7 @@ def test_record_and_get_session_files(tmp_path):
 def test_status_updates_but_first_seen_preserved():
     """同一文件先 added 后被跟踪并修改：status 更新为 modified，
     first_seen_at 保留第一次出现的时间。"""
-    from utils.workspace_changes import record_session_files, get_session_files
+    from projects.workspace_changes import record_session_files, get_session_files
     uid, sid = _mk_session()
     try:
         record_session_files(sid, [{'path': 'a.py', 'status': 'added'}])
@@ -101,7 +101,7 @@ def test_status_updates_but_first_seen_preserved():
 
 def test_collapsed_dir_entries_not_recorded():
     """折叠的 `dir/` 条目与 deleted 状态不落库——记录的是具体文件。"""
-    from utils.workspace_changes import record_session_files, get_session_files
+    from projects.workspace_changes import record_session_files, get_session_files
     uid, sid = _mk_session()
     try:
         record_session_files(sid, [
@@ -118,7 +118,7 @@ def test_collapsed_dir_entries_not_recorded():
 
 
 def test_deleting_session_cascades_files():
-    from utils.workspace_changes import record_session_files, get_session_files
+    from projects.workspace_changes import record_session_files, get_session_files
     uid, sid = _mk_session()
     record_session_files(sid, [{'path': 'a.py', 'status': 'added'}])
     with get_db() as conn:
@@ -134,7 +134,7 @@ def test_deleting_session_cascades_files():
 
 def test_session_files_table_in_backup_map():
     """新表必须出现在备份清单与还原顺序里（历史上忘加过三次）。"""
-    from utils.backup import BACKUP_TABLE_MAP, RESTORE_ORDER
+    from projects.backup import BACKUP_TABLE_MAP, RESTORE_ORDER
     assert 'ai_chat_session_files' in BACKUP_TABLE_MAP
     assert 'ai_chat_session_files' in RESTORE_ORDER
     # 外键依赖：必须排在 ai_chat_sessions 之后还原
@@ -143,9 +143,9 @@ def test_session_files_table_in_backup_map():
 
 def test_recorded_path_whitelist_and_data_file_mapping():
     """导入端点依赖的三件事：白名单查询、单条查询、data_file_id 回填。"""
-    from utils.workspace_changes import (record_session_files, get_recorded_paths,
-                                         get_recorded_path, set_data_file_id,
-                                         get_session_files)
+    from projects.workspace_changes import (record_session_files, get_recorded_paths,
+                                             get_recorded_path, set_data_file_id,
+                                             get_session_files)
     uid, sid = _mk_session()
     try:
         record_session_files(sid, [{'path': 'out/report.md', 'status': 'added'}])

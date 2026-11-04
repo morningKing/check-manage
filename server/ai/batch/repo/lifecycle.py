@@ -432,7 +432,7 @@ def reset_failed_to_pending(user_id: str, batch_id: str, *,
                 f"WHERE {target_pred}", tuple(owner_params))
             targets = cur.fetchall()
     # 工作区清空重建（fs 先于库，失败即放弃——与 reexecute 路由同序）
-    from utils.workspace import reset_session_workspace
+    from projects.workspace import reset_session_workspace
     for _sid, ws_path in targets:
         if ws_path:
             reset_session_workspace(ws_path)

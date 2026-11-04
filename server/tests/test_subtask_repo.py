@@ -73,7 +73,7 @@ def test_deleting_root_session_cascades_to_subtasks_and_messages():
 def test_subtask_tables_are_in_backup_table_map():
     """本仓库已经因为"忘了把新表加进备份清单"栽过三次（row_actions、seq、meta）。
     这条测试把它钉死——新表必须出现在 BACKUP_TABLE_MAP 与 RESTORE_ORDER 里。"""
-    from utils.backup import BACKUP_TABLE_MAP, RESTORE_ORDER
+    from projects.backup import BACKUP_TABLE_MAP, RESTORE_ORDER
     assert 'ai_chat_subtasks' in BACKUP_TABLE_MAP
     assert 'ai_chat_subtask_messages' in BACKUP_TABLE_MAP
     assert 'ai_chat_subtasks' in RESTORE_ORDER

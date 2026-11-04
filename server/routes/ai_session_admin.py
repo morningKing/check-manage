@@ -117,7 +117,7 @@ def session_messages(session_id):
 @require_permission_sse('admin.ai_chat_admin')
 def session_files(session_id):
     """Workspace file list for any session."""
-    from utils.workspace_outputs import list_session_files, augment_with_data_file_id
+    from projects.workspace_outputs import list_session_files, augment_with_data_file_id
     detail = admin_get_session_detail(session_id)
     if not detail:
         return jsonify({'error': '会话不存在'}), 404
@@ -166,7 +166,7 @@ def analyze_session(session_id):
                   '管理员触发 AI 会话执行轨迹分析（产生 LLM 调用成本）')
     from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, get_default_chat_model
     from ai.opencode.opencode_client import OpenCodeClient
-    from utils.workspace import create_session_workspace, write_opencode_config
+    from projects.workspace import create_session_workspace, write_opencode_config
     from ai.sessions.session_token import generate_token
     from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
         INTERNAL_MCP_NAME as MCP_NAME
@@ -214,7 +214,7 @@ def analyze_session(session_id):
     # model / skill manifest — the old route had none of these and silently
     # blanket-injected every enabled skill.
     import json as _json
-    from utils.workspace import cleanup_session_workspace, create_session_workspace
+    from projects.workspace import cleanup_session_workspace, create_session_workspace
     from config import AI_WORKSPACE_ROOT
     from ai.opencode.opencode_client import OpenCodeClient as _OC  # noqa: F401 (alias below)
     from ai.batch import execution_audit as execution_audit

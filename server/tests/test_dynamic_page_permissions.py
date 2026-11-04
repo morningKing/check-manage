@@ -22,8 +22,8 @@ def setup(mock_conn, mock_cursor):
         patch('routes.dynamic.get_db', fake_db),
         patch('routes.relations.get_db', fake_db),
         patch('common.permissions.get_db', fake_db),
-        patch('utils.version.get_db', fake_db),
-        patch('utils.branch_lock.get_db', fake_db),
+        patch('projects.version.get_db', fake_db),
+        patch('projects.branch_lock.get_db', fake_db),
         patch('db.pool', MagicMock()),
         patch('common.operation_log.log_operation'),
     ]

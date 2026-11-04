@@ -19,7 +19,7 @@ def _init_repo(path):
 
 def test_git_changes_detects_added_modified_excludes_deleted(tmp_path):
     """The panel lists additions/modifications only — deletions are filtered out."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     repo = os.path.join(ws, 'repo')
     _init_repo(repo)
@@ -48,7 +48,7 @@ def test_git_changes_handles_non_ascii_filenames(tmp_path):
     """git -z emits UTF-8 path bytes; decoding them with text=True under a cp936
     locale (Chinese Windows) crashed (stdout=None -> .split). We decode UTF-8
     ourselves, so Chinese filenames work and don't blow up the refresh."""
-    from utils.workspace_changes import git_changes, file_diff
+    from projects.workspace_changes import git_changes, file_diff
     ws = str(tmp_path)
     _init_repo(ws)
     cn_new = '新增文件.py'
@@ -71,7 +71,7 @@ def test_git_changes_handles_non_ascii_filenames(tmp_path):
 
 
 def test_git_changes_skips_uploads_outputs(tmp_path):
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     repo = os.path.join(ws, 'outputs', 'r')
     _init_repo(repo)
@@ -84,7 +84,7 @@ def test_git_changes_skips_uploads_outputs(tmp_path):
 
 
 def test_git_changes_no_repo_returns_empty(tmp_path):
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     with open(os.path.join(str(tmp_path), 'loose.txt'), 'w') as f:
         f.write('not in a repo')
     # No repo is a legitimate "no changes" state — the scan did not fail.
@@ -94,7 +94,7 @@ def test_git_changes_no_repo_returns_empty(tmp_path):
 def test_git_changes_reports_scan_failure(tmp_path):
     """A repo whose `git status` fails (broken .git) must surface ok=False, NOT
     a silent empty list — otherwise a transient git error wipes the panel."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     broken = os.path.join(ws, 'brokenrepo')
     os.makedirs(broken)
@@ -108,7 +108,7 @@ def test_git_changes_reports_scan_failure(tmp_path):
 def test_workspace_root_as_repo_picks_up_loose_files(tmp_path):
     """When the workspace itself is git-initialized (the new session default),
     files written directly under workspace root should show up as added."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     with open(os.path.join(ws, 'loose.txt'), 'w') as f:
@@ -121,7 +121,7 @@ def test_git_changes_expands_untracked_directory(tmp_path):
     """A brand-new untracked directory tree must list each file, not collapse to
     a single directory entry. `git status --porcelain` folds untracked dirs
     (`?? src/`); we pass -uall so every file inside is reported and clickable."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     deep = os.path.join(ws, 'src', 'components', 'deep')
@@ -140,7 +140,7 @@ def test_git_changes_expands_untracked_directory(tmp_path):
 
 
 def test_list_untracked_files(tmp_path):
-    from utils.workspace_changes import _list_untracked_files
+    from projects.workspace_changes import _list_untracked_files
     ws = str(tmp_path)
     _init_repo(ws)
     os.makedirs(os.path.join(ws, 'd', 'e'))
@@ -153,7 +153,7 @@ def test_list_untracked_files(tmp_path):
 def test_large_untracked_directory_stays_collapsed(tmp_path):
     """Pulled-in code (no .git): a big brand-new dir stays ONE collapsed entry
     (kind='dir' + count), not N individual 'added' files that drown real edits."""
-    from utils.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
+    from projects.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
     ws = str(tmp_path)
     _init_repo(ws)
     pulled = os.path.join(ws, 'pulled')
@@ -173,8 +173,8 @@ def test_large_untracked_directory_stays_collapsed(tmp_path):
 def test_expand_untracked_dir_lists_all_files(tmp_path):
     """A folded `dir/` entry can be expanded on demand into every file under it
     (recursively, workspace-relative, path-sorted)."""
-    from utils.workspace_changes import (
-        git_changes, expand_untracked_dir, UNTRACKED_DIR_EXPAND_LIMIT)
+    from projects.workspace_changes import (
+            git_changes, expand_untracked_dir, UNTRACKED_DIR_EXPAND_LIMIT)
     ws = str(tmp_path)
     _init_repo(ws)
     pulled = os.path.join(ws, 'pulled')
@@ -199,14 +199,14 @@ def test_expand_untracked_dir_lists_all_files(tmp_path):
 
 
 def test_expand_untracked_dir_no_repo_returns_empty(tmp_path):
-    from utils.workspace_changes import expand_untracked_dir
+    from projects.workspace_changes import expand_untracked_dir
     # path not under any git repo -> empty (no crash)
     assert expand_untracked_dir(str(tmp_path), 'nope/') == []
 
 
 def test_small_untracked_directory_expands(tmp_path):
     """A small brand-new dir still expands into its files (no collapse)."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     d = os.path.join(ws, 'newdir', 'sub')
@@ -225,7 +225,7 @@ def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     """A workspace-level repo + a nested clone: the nested clone's own files
     are reported once (by the nested repo), not twice (once via the outer
     seeing the clone dir as untracked, once via the inner status)."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)   # workspace is itself a repo
     nested = os.path.join(ws, 'cloned-repo')
@@ -259,7 +259,7 @@ def test_unborn_pulled_repo_auto_baselined_as_initial_state(tmp_path):
     scan auto-creates a one-time baseline commit so its content becomes the
     initial state. After that, git_changes reports NOTHING for it (just like a
     real `git clone` with history)."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)                       # workspace tracking repo
     nested = os.path.join(ws, 'cloned-repo')
@@ -279,7 +279,7 @@ def test_after_baseline_only_real_changes_show(tmp_path):
     """Once a pulled repo is baselined, only the user's real subsequent changes
     appear — an edit shows as modified, a brand-new file as added — and NOT the
     whole repo as '新增'."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     nested = os.path.join(ws, 'cloned-repo')
@@ -304,7 +304,7 @@ def test_after_baseline_only_real_changes_show(tmp_path):
 def test_committed_clone_not_rebaselined(tmp_path):
     """A real clone (born HEAD) is left untouched — its own commit is the
     baseline, real edits show as before, and the scan does NOT add a commit."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     nested = os.path.join(ws, 'repo')
@@ -328,7 +328,7 @@ def test_workspace_root_outputs_not_baselined(tmp_path):
     """The workspace ROOT repo is never auto-baselined: files the agent writes
     directly under the workspace (its real outputs) must still show as added,
     not be silently committed away."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     with open(os.path.join(ws, 'report.md'), 'w') as f:
@@ -341,7 +341,7 @@ def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
     """A committed (born) nested repo with a few real edits AND a flood of
     brand-new top-level files: the edit stays individually visible, and the new
     files collapse to one expandable dir entry (still real '新增', just folded)."""
-    from utils.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
+    from projects.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
     ws = str(tmp_path)
     _init_repo(ws)
     nested = os.path.join(ws, 'repo')
@@ -367,7 +367,7 @@ def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
 def test_small_top_level_added_files_stay_individual(tmp_path):
     """A committed (born) nested repo with only a FEW new top-level files keeps
     listing them individually (no collapse below the limit)."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     nested = os.path.join(ws, 'repo')
@@ -386,7 +386,7 @@ def test_small_top_level_added_files_stay_individual(tmp_path):
 
 
 def test_resolve_repo_for_path_nested_clone(tmp_path):
-    from utils.workspace_changes import resolve_repo_for_path
+    from projects.workspace_changes import resolve_repo_for_path
     ws = str(tmp_path)
     _init_repo(ws)                       # workspace itself a repo
     nested = os.path.join(ws, 'cloned-repo')
@@ -399,7 +399,7 @@ def test_resolve_repo_for_path_nested_clone(tmp_path):
 
 
 def test_resolve_repo_for_path_workspace_root(tmp_path):
-    from utils.workspace_changes import resolve_repo_for_path
+    from projects.workspace_changes import resolve_repo_for_path
     ws = str(tmp_path)
     _init_repo(ws)
     with open(os.path.join(ws, 'loose.txt'), 'w') as f:
@@ -410,7 +410,7 @@ def test_resolve_repo_for_path_workspace_root(tmp_path):
 
 
 def test_resolve_repo_for_path_no_repo_returns_none(tmp_path):
-    from utils.workspace_changes import resolve_repo_for_path
+    from projects.workspace_changes import resolve_repo_for_path
     ws = str(tmp_path)
     with open(os.path.join(ws, 'loose.txt'), 'w') as f:
         f.write('hi')
@@ -418,7 +418,7 @@ def test_resolve_repo_for_path_no_repo_returns_none(tmp_path):
 
 
 def test_file_diff_modified_returns_hunks(tmp_path):
-    from utils.workspace_changes import file_diff
+    from projects.workspace_changes import file_diff
     ws = str(tmp_path)
     repo = os.path.join(ws, 'repo')
     _init_repo(repo)
@@ -437,7 +437,7 @@ def test_file_diff_modified_returns_hunks(tmp_path):
 
 
 def test_file_diff_added_returns_content(tmp_path):
-    from utils.workspace_changes import file_diff
+    from projects.workspace_changes import file_diff
     ws = str(tmp_path)
     repo = os.path.join(ws, 'repo')
     _init_repo(repo)
@@ -450,7 +450,7 @@ def test_file_diff_added_returns_content(tmp_path):
 
 
 def test_file_diff_added_truncates_large_file(tmp_path):
-    from utils.workspace_changes import file_diff, MAX_DIFF_LINES
+    from projects.workspace_changes import file_diff, MAX_DIFF_LINES
     ws = str(tmp_path)
     repo = os.path.join(ws, 'repo')
     _init_repo(repo)
@@ -464,7 +464,7 @@ def test_file_diff_added_truncates_large_file(tmp_path):
 
 
 def test_read_file_preview_text(tmp_path):
-    from utils.workspace_changes import read_file_preview
+    from projects.workspace_changes import read_file_preview
     p = tmp_path / 'a.txt'
     p.write_bytes(b'hello\nworld\n')  # bytes to avoid platform newline translation
     r = read_file_preview(str(p))
@@ -472,7 +472,7 @@ def test_read_file_preview_text(tmp_path):
 
 
 def test_read_file_preview_binary(tmp_path):
-    from utils.workspace_changes import read_file_preview
+    from projects.workspace_changes import read_file_preview
     p = tmp_path / 'b.bin'
     p.write_bytes(b'\x89PNG\x00\x01\x02')
     r = read_file_preview(str(p))
@@ -481,7 +481,7 @@ def test_read_file_preview_binary(tmp_path):
 
 
 def test_read_file_preview_truncates_large(tmp_path):
-    from utils.workspace_changes import read_file_preview, MAX_DIFF_LINES
+    from projects.workspace_changes import read_file_preview, MAX_DIFF_LINES
     p = tmp_path / 'big.txt'
     p.write_text('\n'.join(f'line{i}' for i in range(MAX_DIFF_LINES + 100)) + '\n', encoding='utf-8')
     r = read_file_preview(str(p))
@@ -490,7 +490,7 @@ def test_read_file_preview_truncates_large(tmp_path):
 
 
 def test_file_diff_no_repo_returns_none_status(tmp_path):
-    from utils.workspace_changes import file_diff
+    from projects.workspace_changes import file_diff
     ws = str(tmp_path)
     with open(os.path.join(ws, 'loose.txt'), 'w') as f:
         f.write('hi')
@@ -505,14 +505,14 @@ def _mk(n, status, prefix):
 
 
 def test_prioritize_sorts_by_path_within_group():
-    from utils.workspace_changes import _prioritize_and_cap
+    from projects.workspace_changes import _prioritize_and_cap
     changes = [{'path': 'b.txt', 'status': 'added'}, {'path': 'a.txt', 'status': 'added'}]
     capped, _ = _prioritize_and_cap(changes)
     assert [c['path'] for c in capped] == ['a.txt', 'b.txt']
 
 
 def test_is_secondary_classifies_dependency_and_build_files():
-    from utils.workspace_changes import _is_secondary
+    from projects.workspace_changes import _is_secondary
     # secondary
     assert _is_secondary('package-lock.json')
     assert _is_secondary('frontend/yarn.lock')
@@ -530,7 +530,7 @@ def test_is_secondary_classifies_dependency_and_build_files():
 
 
 def test_source_files_sort_before_secondary():
-    from utils.workspace_changes import _prioritize_and_cap
+    from projects.workspace_changes import _prioritize_and_cap
     changes = [
         {'path': 'dist/bundle.js', 'status': 'added'},
         {'path': 'src/app.py', 'status': 'modified'},
@@ -548,7 +548,7 @@ def test_truncation_keeps_modified_source_over_flood_of_secondary_added():
     """The reported bug: a flood of generated/added files (e.g. expanded
     node_modules) pushed the user's modified source out of the 500-cap. Source
     modifications must survive."""
-    from utils.workspace_changes import _prioritize_and_cap, MAX_CHANGES
+    from projects.workspace_changes import _prioritize_and_cap, MAX_CHANGES
     flood = [{'path': f'node_modules/pkg/f{i:05d}.js', 'status': 'added'}
              for i in range(MAX_CHANGES + 200)]
     src = [{'path': 'src/zzz_last.py', 'status': 'modified'}]   # path sorts late on purpose
@@ -561,7 +561,7 @@ def test_truncation_keeps_modified_source_over_flood_of_secondary_added():
 
 def test_git_changes_omits_deletions_end_to_end(tmp_path):
     """End-to-end through a real repo: a deleted tracked file is not listed."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     repo = os.path.join(ws, 'repo')
     _init_repo(repo)
@@ -585,7 +585,7 @@ def test_git_changes_excludes_pycache_in_root_repo(tmp_path):
     """Python bytecode caches must never show in the 变更文件 panel — even in
     workspaces whose .gitignore lacks the rule (old sessions). The scan writes
     the patterns into .git/info/exclude, so git itself hides them."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)   # NO .gitignore — simulates an old workspace
     os.makedirs(os.path.join(ws, '__pycache__'))
@@ -611,7 +611,7 @@ def test_git_changes_excludes_pycache_in_root_repo(tmp_path):
 def test_git_changes_excludes_pycache_in_nested_repo(tmp_path):
     """A nested clone's own .gitignore does NOT inherit the workspace root's
     rules — a __pycache__ inside it must still be hidden from the panel."""
-    from utils.workspace_changes import git_changes
+    from projects.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     nested = os.path.join(ws, 'cloned-repo')

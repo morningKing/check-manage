@@ -183,7 +183,7 @@ class TestSessionFiles:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.workspace_outputs.list_session_files',
+             patch('projects.workspace_outputs.list_session_files',
                    return_value=(fake_files, False)):
             resp = client.get(f'{BASE}/b-1/sessions/report.pdf/files', headers=HDR)
         assert resp.status_code == 200
@@ -301,7 +301,7 @@ class TestSessionFilesDownloadAll:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.workspace_changes.get_session_files', return_value=fake_records):
+             patch('projects.workspace_changes.get_session_files', return_value=fake_records):
             resp = client.get(f'{BASE}/b-1/sessions/0/files/download-all', headers=HDR)
         assert resp.status_code == 200
         assert resp.content_type == 'application/zip'
@@ -322,7 +322,7 @@ class TestSessionFilesDownloadAll:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.workspace_changes.get_session_files', return_value=fake_records):
+             patch('projects.workspace_changes.get_session_files', return_value=fake_records):
             resp = client.get(f'{BASE}/b-1/sessions/0/files/download-all', headers=HDR)
         zf = zipfile.ZipFile(io.BytesIO(resp.data))
         names = zf.namelist()
@@ -341,7 +341,7 @@ class TestSessionFilesDownloadAll:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.workspace_changes.get_session_files', return_value=fake_records):
+             patch('projects.workspace_changes.get_session_files', return_value=fake_records):
             resp = client.get(f'{BASE}/b-1/sessions/0/files/download-all', headers=HDR)
         assert resp.status_code == 200
 
@@ -362,7 +362,7 @@ class TestSessionFilesDownloadAll:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.workspace_changes.get_session_files', return_value=fake_records):
+             patch('projects.workspace_changes.get_session_files', return_value=fake_records):
             resp = client.get(
                 f'{BASE}/b-1/sessions/0/files/download-all?include=added',
                 headers=HDR)

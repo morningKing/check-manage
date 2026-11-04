@@ -18,7 +18,7 @@ Two responsibilities:
 import os
 import re
 
-from utils.workspace import safe_resolve
+from projects.workspace import safe_resolve
 
 # ``@`` must follow start-of-string or whitespace (so ``a@b.com`` emails don't
 # match); the token body allows word chars, path separators, dots and CJK.

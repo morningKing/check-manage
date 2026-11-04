@@ -920,8 +920,8 @@ def test_workspace_quota_per_session_semantics(db_conn, user_id, tmp_path,
     """配额口径语义变更（2026-09-28，用户决定）：`AI_WORKSPACE_QUOTA_MB`
     限制**单个会话**工作区大小，而非用户全部会话合计——创建新会话不再被
     其他会话的占用阻断。refresh 判定本会话大小并跨阈值告警一次。"""
-    import utils.workspace as ws_mod
-    from utils.workspace import refresh_workspace_bytes, create_session_workspace
+    from projects import workspace as ws_mod
+    from projects.workspace import refresh_workspace_bytes, create_session_workspace
     import config as cfg
     monkeypatch.setattr(cfg, 'AI_WORKSPACE_QUOTA_MB', 1)  # 1MB
     # ai_execution_usage.session_id 有 FK → 需真实会话行
@@ -1375,7 +1375,7 @@ def test_scan_output_import_records_file_import_effect(db_conn, user_id,
 
 def test_backup_covers_ai_harness_tables():
     """P1-A9：BACKUP_TABLES 覆盖 AI Harness 新表。"""
-    from utils.backup import BACKUP_TABLES
+    from projects.backup import BACKUP_TABLES
     table_names = {t[0] for t in BACKUP_TABLES}
     required = {
         'ai_orchestration_definitions', 'ai_orchestration_runs',
@@ -1681,7 +1681,7 @@ def test_all_schedulers_use_lease():
     repo_root = pathlib.Path(__file__).resolve().parents[2]
     schedulers = [
         'server/ai/scan/ai_scan_scheduler.py',
-        'server/utils/backup.py',
+        'server/projects/backup/scheduler.py',
         'server/ai/sessions/status_badge_timeout_scheduler.py',
         'server/data/field_index_scheduler.py',
         'server/data/etl_scheduler.py',

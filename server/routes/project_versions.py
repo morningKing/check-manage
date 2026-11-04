@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from auth import login_required, write_required, require_permission
-from utils.project_version import (
+from projects.versioning import (
     get_project_collections,
     get_user_project_branch,
     set_user_project_branch,
@@ -141,7 +141,7 @@ def merge_version():
 
     # 联合合并依赖检查
     if not skip_dependency_check:
-        from utils.cross_project_dependency import check_merge_dependencies
+        from projects.dependencies import check_merge_dependencies
         dep_check = check_merge_dependencies(project_menu_id, version_id)
         if not dep_check.get('canMerge'):
             return jsonify({
@@ -157,11 +157,11 @@ def merge_version():
 
         # 合并成功后更新依赖声明并校验相关依赖
         if result.get('success'):
-            from utils.cross_project_dependency import (
-                batch_update_dependencies_after_merge,
-                get_dependent_projects,
-                validate_project_dependency,
-            )
+            from projects.dependencies import (
+                            batch_update_dependencies_after_merge,
+                            get_dependent_projects,
+                            validate_project_dependency,
+                        )
             batch_update_dependencies_after_merge(project_menu_id, version_id)
 
             # 校验依赖此项目的所有依赖声明
@@ -204,7 +204,7 @@ def merge_version_detailed():
 
     # 联合合并依赖检查
     if not skip_dependency_check:
-        from utils.cross_project_dependency import check_merge_dependencies
+        from projects.dependencies import check_merge_dependencies
         dep_check = check_merge_dependencies(project_menu_id, version_id)
         if not dep_check.get('canMerge'):
             return jsonify({
@@ -220,11 +220,11 @@ def merge_version_detailed():
 
         # 合并成功后更新依赖声明并校验相关依赖
         if result.get('success'):
-            from utils.cross_project_dependency import (
-                batch_update_dependencies_after_merge,
-                get_dependent_projects,
-                validate_project_dependency,
-            )
+            from projects.dependencies import (
+                            batch_update_dependencies_after_merge,
+                            get_dependent_projects,
+                            validate_project_dependency,
+                        )
             batch_update_dependencies_after_merge(project_menu_id, version_id)
 
             # 校验依赖此项目的所有依赖声明

@@ -176,7 +176,7 @@ def test_list_files_never_writes_session_files_table(client, admin_headers):
                return_value=_fake_sess(workspace='ws-fake', sid='s-1')), \
          patch('routes.ai_batch_admin.list_session_files',
                return_value=([{'name': 'a', 'path': 'a', 'dir': 'workspace', 'size': 1}], False)), \
-         patch('utils.workspace_changes.record_session_files') as rec:
+         patch('projects.workspace_changes.record_session_files') as rec:
         client.get(f'{BASE}/b-x/sessions/s-1/files', headers=admin_headers)
     rec.assert_not_called()
 
@@ -463,7 +463,7 @@ def test_changes_records_session_files_when_ok(client, admin_headers):
                return_value=_fake_sess(workspace='ws-fake', sid='s-1')), \
          patch('routes.ai_batch_admin.git_changes',
                return_value=(changes, False, True)) as gc, \
-         patch('utils.workspace_changes.record_session_files') as rec:
+         patch('projects.workspace_changes.record_session_files') as rec:
         r = client.get(f'{BASE}/b-x/sessions/s-1/changes', headers=admin_headers)
     assert r.status_code == 200
     body = r.get_json()
@@ -482,7 +482,7 @@ def test_changes_does_not_record_when_not_ok(client, admin_headers):
                return_value=_fake_sess(workspace='ws-fake', sid='s-1')), \
          patch('routes.ai_batch_admin.git_changes',
                return_value=([], False, False)), \
-         patch('utils.workspace_changes.record_session_files') as rec:
+         patch('projects.workspace_changes.record_session_files') as rec:
         r = client.get(f'{BASE}/b-x/sessions/s-1/changes', headers=admin_headers)
     assert r.status_code == 200
     assert r.get_json()['ok'] is False

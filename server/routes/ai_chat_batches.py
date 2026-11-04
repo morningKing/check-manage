@@ -11,7 +11,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from common.filename import safe_filename
 
 from auth import login_required, login_required_sse
-from utils.workspace import (batch_staging_dir, batch_workspace_root,
+from projects.workspace import (batch_staging_dir, batch_workspace_root,
                              cleanup_batch_workspaces, validate_staged_files,
                              WorkspacePathError)
 from ai.batch import ledger as agent_ledger
@@ -659,7 +659,7 @@ def reexecute(batch_id, session_id):
     # 残留文件会污染新一轮；staged 输入由 worker 派发时的
     # _prepare_workspace 重新恢复，.opencode 技能/预置仓库同样重新布置），
     # 再走重排事务（清消息/变更登记/子代理/账本/门禁期望）。
-    from utils.workspace import reset_session_workspace
+    from projects.workspace import reset_session_workspace
     from db import get_db as _get_db
     with _get_db() as conn:
         with conn.cursor() as cur:

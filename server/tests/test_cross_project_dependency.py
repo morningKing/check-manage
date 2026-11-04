@@ -57,8 +57,8 @@ class TestCheckMergeDependencies:
         """无依赖声明时可以合并"""
         mock_cursor.fetchall.return_value = []
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is True
@@ -71,8 +71,8 @@ class TestCheckMergeDependencies:
             ('dep-1', 'project-2', 'branch-2', 'read-only', None, '项目B')
         ]
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is True
@@ -85,8 +85,8 @@ class TestCheckMergeDependencies:
             ('dep-1', 'project-2', 'main', 'track-main', None, '项目B')
         ]
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is True
@@ -99,8 +99,8 @@ class TestCheckMergeDependencies:
             ('dep-1', 'project-2', 'main', 'read-write', None, '项目B')
         ]
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is True
@@ -115,8 +115,8 @@ class TestCheckMergeDependencies:
         # 目标分支状态查询结果
         mock_cursor.fetchone.return_value = ('merged', '2024-01-01')
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is True
@@ -131,8 +131,8 @@ class TestCheckMergeDependencies:
         # 目标分支状态查询结果（未合并）
         mock_cursor.fetchone.return_value = ('active', None)
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is False
@@ -148,8 +148,8 @@ class TestCheckMergeDependencies:
         # 目标分支不存在
         mock_cursor.fetchone.return_value = None
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is False
@@ -166,8 +166,8 @@ class TestCheckMergeDependencies:
         # dep-3 的目标分支已合并
         mock_cursor.fetchone.return_value = ('merged', '2024-01-01')
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_merge_dependencies
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_merge_dependencies
             result = check_merge_dependencies('project-1', 'branch-1')
 
         assert result['canMerge'] is True
@@ -201,8 +201,8 @@ class TestGetCoordinatedMergeOrder:
         # 无依赖声明
         mock_cursor.fetchall.return_value = []
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import get_coordinated_merge_order
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import get_coordinated_merge_order
             order = get_coordinated_merge_order('project-1', 'branch-1')
 
         assert len(order) == 1
@@ -221,8 +221,8 @@ class TestGetCoordinatedMergeOrder:
             ('project-2', 'branch-feat', '项目B', '特性分支'),
         ]
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import get_coordinated_merge_order
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import get_coordinated_merge_order
             order = get_coordinated_merge_order('project-1', 'branch-1')
 
         # 应该先包含目标项目（未合并），再包含源项目
@@ -235,8 +235,8 @@ class TestGetCoordinatedMergeOrder:
         """版本不存在时抛出异常"""
         mock_cursor.fetchone.return_value = None
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import get_coordinated_merge_order
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import get_coordinated_merge_order
             with pytest.raises(ValueError) as exc_info:
                 get_coordinated_merge_order('project-1', 'branch-999')
             assert '不存在' in str(exc_info.value)
@@ -261,8 +261,8 @@ class TestBatchUpdateDependenciesAfterMerge:
         """更新 read-write 依赖的 target_branch 为 main"""
         mock_cursor.rowcount = 2
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import batch_update_dependencies_after_merge
+        with patch('projects.dependencies.repo.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import batch_update_dependencies_after_merge
             count = batch_update_dependencies_after_merge('project-1', 'branch-1')
 
         assert count == 2
@@ -273,8 +273,8 @@ class TestBatchUpdateDependenciesAfterMerge:
         """无 read-write 依赖时返回 0"""
         mock_cursor.rowcount = 0
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import batch_update_dependencies_after_merge
+        with patch('projects.dependencies.repo.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import batch_update_dependencies_after_merge
             count = batch_update_dependencies_after_merge('project-1', 'branch-1')
 
         assert count == 0
@@ -301,8 +301,8 @@ class TestBranchDeleteProtection:
         mock_cursor.fetchone.return_value = (False, 'project-1')  # is_protected=False, project_menu_id
         mock_cursor.fetchall.return_value = []  # 无依赖
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_branch_delete_protection
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_branch_delete_protection
             result = check_branch_delete_protection('project-1', 'branch-1')
 
         assert result['canDelete'] is True
@@ -314,8 +314,8 @@ class TestBranchDeleteProtection:
             ('dep-1', 'project-2', 'branch-2', 'branch-1', '项目B')
         ]
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.cross_project_dependency import check_branch_delete_protection
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.dependencies import check_branch_delete_protection
             result = check_branch_delete_protection('project-1', 'branch-1')
 
         assert result['canDelete'] is False
@@ -354,12 +354,12 @@ class TestDependencyValidationNotification:
             'targetProjectName': '项目B',
         }
 
-        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
-            with patch('utils.cross_project_dependency.check_branch_exists', return_value=False):
-                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
-                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
+        with patch('projects.dependencies.checks.get_dependency_by_id', return_value=dep_data):
+            with patch('projects.dependencies.checks.check_branch_exists', return_value=False):
+                with patch('projects.dependencies.checks.check_circular_dependency', return_value=False):
+                    with patch('projects.dependencies.checks.get_dependency_relations', return_value=[]):
                         with patch('common.notifier.notify_dependency_broken') as mock_notify:
-                            from utils.cross_project_dependency import validate_project_dependency
+                            from projects.dependencies import validate_project_dependency
                             result = validate_project_dependency('dep-1', send_notification=True)
 
                             # 从有效变为无效，应该发送断裂通知
@@ -381,12 +381,12 @@ class TestDependencyValidationNotification:
             'targetProjectName': '项目B',
         }
 
-        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
-            with patch('utils.cross_project_dependency.check_branch_exists', return_value=True):
-                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
-                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
+        with patch('projects.dependencies.checks.get_dependency_by_id', return_value=dep_data):
+            with patch('projects.dependencies.checks.check_branch_exists', return_value=True):
+                with patch('projects.dependencies.checks.check_circular_dependency', return_value=False):
+                    with patch('projects.dependencies.checks.get_dependency_relations', return_value=[]):
                         with patch('common.notifier.notify_dependency_resolved') as mock_notify:
-                            from utils.cross_project_dependency import validate_project_dependency
+                            from projects.dependencies import validate_project_dependency
                             result = validate_project_dependency('dep-1', send_notification=True)
 
                             # 从无效变为有效，应该发送恢复通知
@@ -416,17 +416,17 @@ class TestDependencyValidationNotification:
             'targetCollection': 'products',
         }]
 
-        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
-            with patch('utils.cross_project_dependency.check_branch_exists', return_value=True):
-                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
-                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=relation_data):
-                        with patch('utils.cross_project_dependency.check_data_reachability', return_value={
+        with patch('projects.dependencies.checks.get_dependency_by_id', return_value=dep_data):
+            with patch('projects.dependencies.checks.check_branch_exists', return_value=True):
+                with patch('projects.dependencies.checks.check_circular_dependency', return_value=False):
+                    with patch('projects.dependencies.checks.get_dependency_relations', return_value=relation_data):
+                        with patch('projects.dependencies.checks.check_data_reachability', return_value={
                             'reachableCount': 5,
                             'brokenCount': 2,
                             'brokenRecords': [],
                         }):
                             with patch('common.notifier.notify_dependency_warning') as mock_notify:
-                                from utils.cross_project_dependency import validate_project_dependency
+                                from projects.dependencies import validate_project_dependency
                                 result = validate_project_dependency('dep-1', send_notification=True)
 
                                 # 有效但有警告，应该发送警告通知
@@ -590,9 +590,9 @@ class TestBranchDeleteIntegration:
         ]
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.project_version.get_db', lambda: fake_get_db(mock_conn)):
-            with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-                from utils.project_version import delete_project_version
+        with patch('projects.versioning.repo.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+                from projects.versioning import delete_project_version
                 with pytest.raises(ValueError) as exc_info:
                     delete_project_version('branch-1')
                 assert '依赖' in str(exc_info.value)
@@ -607,9 +607,9 @@ class TestBranchDeleteIntegration:
         mock_cursor.fetchall.return_value = []
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.project_version.get_db', lambda: fake_get_db(mock_conn)):
-            with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
-                from utils.project_version import delete_project_version
+        with patch('projects.versioning.repo.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
+                from projects.versioning import delete_project_version
                 result = delete_project_version('branch-1')
                 assert result is True
 
@@ -619,8 +619,8 @@ class TestBranchDeleteIntegration:
         mock_cursor.fetchone.return_value = (True, 'project-1')  # is_protected=True
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.project_version.get_db', lambda: fake_get_db(mock_conn)):
-            from utils.project_version import delete_project_version
+        with patch('projects.versioning.repo.get_db', lambda: fake_get_db(mock_conn)):
+            from projects.versioning import delete_project_version
             with pytest.raises(ValueError) as exc_info:
                 delete_project_version('branch-1')
             assert '受保护' in str(exc_info.value)
@@ -644,18 +644,18 @@ class TestMergeValidationIntegration:
             {'id': 'dep-2', 'sourceProject': 'project-3'},
         ]
 
-        with patch('utils.cross_project_dependency.get_dependent_projects', return_value=dependents_data):
-            with patch('utils.cross_project_dependency.validate_project_dependency') as mock_validate:
-                with patch('utils.cross_project_dependency.batch_update_dependencies_after_merge', return_value=2):
+        with patch('projects.dependencies.get_dependent_projects', return_value=dependents_data):
+            with patch('projects.dependencies.validate_project_dependency') as mock_validate:
+                with patch('projects.dependencies.batch_update_dependencies_after_merge', return_value=2):
                     # 模拟合并成功
                     merge_result = {'success': True}
 
                     # 直接测试逻辑（不通过路由）
-                    from utils.cross_project_dependency import (
-                        batch_update_dependencies_after_merge,
-                        get_dependent_projects,
-                        validate_project_dependency,
-                    )
+                    from projects.dependencies import (
+                                            batch_update_dependencies_after_merge,
+                                            get_dependent_projects,
+                                            validate_project_dependency,
+                                        )
 
                     # 执行合并后逻辑
                     batch_update_dependencies_after_merge('project-1', 'version-1')
@@ -690,15 +690,15 @@ class TestValidationStateEdgeCases:
         mock_cursor = MagicMock()
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
-            with patch('utils.cross_project_dependency.check_branch_exists', return_value=True):
-                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
-                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
-                        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.checks.get_dependency_by_id', return_value=dep_data):
+            with patch('projects.dependencies.checks.check_branch_exists', return_value=True):
+                with patch('projects.dependencies.checks.check_circular_dependency', return_value=False):
+                    with patch('projects.dependencies.checks.get_dependency_relations', return_value=[]):
+                        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
                             with patch('common.notifier.notify_dependency_broken') as mock_broken:
                                 with patch('common.notifier.notify_dependency_resolved') as mock_resolved:
                                     with patch('common.notifier.notify_dependency_warning') as mock_warning:
-                                        from utils.cross_project_dependency import validate_project_dependency
+                                        from projects.dependencies import validate_project_dependency
                                         result = validate_project_dependency('dep-1', send_notification=True)
 
                                         # 状态未变化，不发送通知
@@ -725,13 +725,13 @@ class TestValidationStateEdgeCases:
         mock_cursor = MagicMock()
         mock_conn = FakeConnection(mock_cursor)
 
-        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
-            with patch('utils.cross_project_dependency.check_branch_exists', return_value=False):
-                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
-                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
-                        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.checks.get_dependency_by_id', return_value=dep_data):
+            with patch('projects.dependencies.checks.check_branch_exists', return_value=False):
+                with patch('projects.dependencies.checks.check_circular_dependency', return_value=False):
+                    with patch('projects.dependencies.checks.get_dependency_relations', return_value=[]):
+                        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
                             with patch('common.notifier.notify_dependency_broken') as mock_notify:
-                                from utils.cross_project_dependency import validate_project_dependency
+                                from projects.dependencies import validate_project_dependency
                                 result = validate_project_dependency('dep-1', send_notification=False)
 
                                 # 不发送通知

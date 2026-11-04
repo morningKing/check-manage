@@ -170,7 +170,7 @@ def test_set_data_file_id_upserts_when_no_pre_row(monkeypatch):
 
     monkeypatch.setattr('db.get_db', _fake_get_db)
 
-    from utils.workspace_changes import set_data_file_id
+    from projects.workspace_changes import set_data_file_id
 
     # Precondition: outputs/ file has no recorded row (git_changes never saw it
     # because .gitignore shields outputs/).

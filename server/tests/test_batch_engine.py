@@ -2173,7 +2173,7 @@ def test_prepare_workspace_writes_batch_permissions(tmp_path, monkeypatch):
     幂等合并——已有配置（如 mcp）保留、permission 补充、已 allow 不重写。"""
     import json as _json
     from ai.batch import engine as eng
-    from utils.workspace import ensure_batch_permissions
+    from projects.workspace import ensure_batch_permissions
     monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(tmp_path))
     staged = tmp_path / 'batch-staging' / 'u-t1' / 'u1'
     staged.mkdir(parents=True)

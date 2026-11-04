@@ -6,8 +6,8 @@ from common.permissions import can_page
 from common.rbac_guard import require_page_action
 from common.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 from data.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
-from utils.version import get_user_current_branch, MAIN_BRANCH_ID
-from utils.branch_lock import check_branch_lock
+from projects.version import get_user_current_branch, MAIN_BRANCH_ID
+from projects.branch_lock import check_branch_lock
 from data.sequences import allocate_sequence
 from common.search_text import compute_search_text
 from data.field_indexes import sql_literal

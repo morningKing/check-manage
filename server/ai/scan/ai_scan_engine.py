@@ -8,7 +8,7 @@ from pathlib import Path
 from db import get_db
 from ai.batch.repo import create_batch
 from ai.scan.ai_scan_repo import mark_run
-from utils.workspace import batch_workspace_root, legacy_batch_workspace_root
+from projects.workspace import batch_workspace_root, legacy_batch_workspace_root
 
 
 def extract_json(text):

@@ -125,7 +125,7 @@ def test_download_all_skips_escape_records(client, mock_conn, mock_cursor,
                {'path': 'leak2.txt', 'status': 'added'}]
     patches = _auth(mock_conn, mock_cursor, _detail(ws))
     with patches[0], patches[1], patches[2], \
-         patch('utils.workspace_changes.get_session_files',
+         patch('projects.workspace_changes.get_session_files',
                lambda cid: records):
         r = client.get(f'{BASE}/b-1/sessions/0/files/download-all', headers=HDR)
     assert r.status_code == 200

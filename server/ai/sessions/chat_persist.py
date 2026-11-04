@@ -568,7 +568,7 @@ def _record_workspace_files(sid, directory):
     if not directory:
         return
     try:
-        from utils.workspace_changes import git_changes, record_session_files
+        from projects.workspace_changes import git_changes, record_session_files
         changes, _truncated, ok = git_changes(directory)
         if ok:
             record_session_files(sid, changes)

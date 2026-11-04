@@ -31,7 +31,7 @@ from common.operation_log import log_api_operation
 # rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
 from common.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
                                  MAX_UPLOAD_TOTAL_BYTES, body_limit_for_path)
-from utils.workspace import (batch_staging_dir, batch_workspace_root,
+from projects.workspace import (batch_staging_dir, batch_workspace_root,
                              legacy_batch_workspace_root,
                              cleanup_batch_workspaces, safe_resolve,
                              WorkspacePathError)
@@ -473,7 +473,7 @@ def _child_name(s) -> str:
 def file_records(batch_id):
     """每个子会话被自动记录的新增/修改文件（ai_chat_session_files）。
     `name` 与 /results 同口径，`seq` 是稳定序号——POST /import 用二者定位子会话。"""
-    from utils.workspace_changes import get_session_files
+    from projects.workspace_changes import get_session_files
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -783,7 +783,7 @@ def revoke_takeover_link(batch_id, child_id):
 @require_bound_key
 def session_files(batch_id, child_id):
     """实时扫描子会话工作区，返回当前文件列表。"""
-    from utils.workspace_outputs import list_session_files
+    from projects.workspace_outputs import list_session_files
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -845,7 +845,7 @@ def session_files_download_all(batch_id, child_id):
     """将子会话工作区中所有新增和修改的文件打包为 ZIP 下载。"""
     import io
     import zipfile
-    from utils.workspace_changes import get_session_files as get_recorded_files
+    from projects.workspace_changes import get_session_files as get_recorded_files
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:

@@ -32,10 +32,10 @@ import requests
 from db import get_db
 from config import AI_WORKSPACE_ROOT
 from ai.batch import ledger as agent_ledger
-from utils.workspace import (create_session_workspace, _rm_force,
+from projects.workspace import (create_session_workspace, _rm_force,
                              batch_workspace_root, legacy_batch_workspace_root,
                              resolve_batch_data_path)
-from utils.workspace_changes import git_changes, record_session_files
+from projects.workspace_changes import git_changes, record_session_files
 from ai.sessions.session_history import render_history_block
 
 from .exceptions import (_LeaseLost, _SessionCancelled, _SessionPaused,
@@ -584,7 +584,7 @@ class WorkerRunnerMixin:
             # 缺口补齐 5：workspace_bytes 用量刷新（后台上下文，供配额快查；
             # 单会话树通常很小，遍历代价可忽略）
             try:
-                from utils.workspace import refresh_workspace_bytes
+                from projects.workspace import refresh_workspace_bytes
                 refresh_workspace_bytes(sid, session_row.get('workspace_path'))
             except Exception:
                 logger.debug('workspace_bytes refresh failed sid=%s', sid,

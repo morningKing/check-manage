@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.backup import create_backup, restore_backup, BACKUP_TABLE_MAP
+from projects.backup import create_backup, restore_backup, BACKUP_TABLE_MAP
 
 
 # ---------------------------------------------------------------------------

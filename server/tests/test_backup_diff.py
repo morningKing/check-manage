@@ -184,7 +184,9 @@ def setup(mock_conn, mock_cursor):
         patch('routes.relations.get_db', fake_db),
         patch('db.pool', MagicMock()),
         patch('common.operation_log.log_operation'),
-        patch('utils.backup.get_db', fake_db),
+        patch('projects.backup.service.get_db', fake_db),
+        patch('projects.backup.scheduler.get_db', fake_db),
+        patch('projects.backup.factory_reset.get_db', fake_db),
     ]
     for p in patches:
         p.start()
@@ -242,7 +244,9 @@ class TestDiffRoute:
             patch('routes.relations.get_db', fake_db),
             patch('db.pool', MagicMock()),
             patch('common.operation_log.log_operation'),
-            patch('utils.backup.get_db', fake_db),
+            patch('projects.backup.service.get_db', fake_db),
+            patch('projects.backup.scheduler.get_db', fake_db),
+            patch('projects.backup.factory_reset.get_db', fake_db),
         ]
         for p in patches:
             p.start()

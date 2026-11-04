@@ -109,7 +109,7 @@ class TestMergeCheckAPI:
         """返回 canMerge 结果"""
         mock_cursor.fetchall.return_value = []
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
             resp = client.get(
                 '/projects/project-1/merge-check?sourceBranch=branch-1',
                 headers=admin_headers
@@ -127,7 +127,7 @@ class TestMergeCheckAPI:
         ]
         mock_cursor.fetchone.return_value = ('active', None)
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
             resp = client.get(
                 '/projects/project-1/merge-check?sourceBranch=branch-1',
                 headers=admin_headers
@@ -183,7 +183,7 @@ class TestMergeOrderAPI:
         mock_cursor.fetchone.return_value = ('测试分支',)
         mock_cursor.fetchall.return_value = []
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
             resp = client.get(
                 '/projects/project-1/merge-order?sourceBranch=branch-1',
                 headers=admin_headers
@@ -241,7 +241,7 @@ class TestUpdateDependenciesAfterMergeAPI:
         """返回成功和更新数量"""
         mock_cursor.rowcount = 2
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.repo.get_db', lambda: fake_get_db(mock_conn)):
             resp = client.post(
                 '/projects/project-1/update-dependencies-after-merge',
                 headers=admin_headers,
@@ -308,7 +308,7 @@ class TestMergeIntegration:
         ]
         mock_cursor.fetchone.return_value = ('active', None)
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
             resp = client.post(
                 '/project-versions/merge',
                 headers=admin_headers,
@@ -358,7 +358,7 @@ class TestMergeIntegration:
         ]
         mock_cursor.fetchone.return_value = ('active', None)
 
-        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+        with patch('projects.dependencies.checks.get_db', lambda: fake_get_db(mock_conn)):
             resp = client.post(
                 '/project-versions/merge-detailed',
                 headers=admin_headers,

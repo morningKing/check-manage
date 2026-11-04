@@ -2,7 +2,7 @@
 backup ZIP and restores it as a full directory overwrite."""
 import sys, os, zipfile, shutil
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.backup as bk
+import projects.backup.io as bk
 
 
 def test_vector_store_pack_and_restore(tmp_path, monkeypatch):

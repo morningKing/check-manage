@@ -11,7 +11,7 @@ import tempfile
 from flask import Blueprint, request, jsonify, send_file
 from db import get_db
 from auth import require_permission
-from utils.backup import (
+from projects.backup import (
     create_backup,
     restore_backup,
     delete_backup_file,

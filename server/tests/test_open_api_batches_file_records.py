@@ -57,7 +57,7 @@ def test_file_records_returns_per_child_files(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches._current_key', return_value=_key()), \
          patch('routes.open_api_batches.get_batch_detail',
                return_value=_detail([_child()])), \
-         patch('utils.workspace_changes.get_session_files', return_value=files) as gsf:
+         patch('projects.workspace_changes.get_session_files', return_value=files) as gsf:
         resp = client.get(f'{BASE}/b-1/file-records', headers=HDR)
     assert resp.status_code == 200
     body = resp.get_json()

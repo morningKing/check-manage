@@ -32,7 +32,9 @@ def setup(mock_conn, mock_cursor):
     patches = [
         patch('db.get_db', fake_db),
         patch('routes.backups.get_db', fake_db),
-        patch('utils.backup.get_db', fake_db),
+        patch('projects.backup.service.get_db', fake_db),
+        patch('projects.backup.scheduler.get_db', fake_db),
+        patch('projects.backup.factory_reset.get_db', fake_db),
         patch('db.pool', MagicMock()),
     ]
     for p in patches:

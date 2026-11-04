@@ -164,7 +164,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     contract = node.get('output_contract') or {}
     ctype = contract.get('type')
     if child_status == 'completed' and ctype == 'file':
-        from utils.workspace_outputs import list_session_files
+        from projects.workspace_outputs import list_session_files
         files = list_session_files(ws) if ws else []
         names = {f['name'] for f in (files[0] if isinstance(files, tuple) else files)}
         pat = (contract.get('path') or '').split('/')[-1]

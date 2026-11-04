@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from db import get_db
 from auth import login_required
 from common.operation_log import log_operation, get_page_info, pick_display_name
-from utils.version import get_user_current_branch, MAIN_BRANCH_ID
+from projects.version import get_user_current_branch, MAIN_BRANCH_ID
 from common.rbac_guard import require_page_action
 from flask import g as flask_g
 

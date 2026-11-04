@@ -50,14 +50,14 @@ from db import get_db
 from auth import login_required, login_required_sse, write_required, require_permission
 from ai.opencode.opencode_client import OpenCodeClient
 from utils.runtime import get_runtime
-from utils.workspace import (
+from projects.workspace import (
     create_session_workspace, write_opencode_config,
     safe_resolve, cleanup_session_workspace,
 )
-from utils.workspace_changes import (git_changes, file_diff, expand_untracked_dir,
+from projects.workspace_changes import (git_changes, file_diff, expand_untracked_dir,
                                      read_file_preview, record_session_files,
                                      get_session_files)
-from utils.workspace_outputs import list_session_files
+from projects.workspace_outputs import list_session_files
 from ai.sessions.mention_files import inline_file_mentions
 from ai.sessions.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from ai.sessions.session_history import render_history_block

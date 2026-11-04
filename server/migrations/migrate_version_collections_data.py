@@ -6,7 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db import get_db
-from utils.version import track_version_collections
+from projects.version import track_version_collections
 
 def migrate_version_collections():
     """为所有现有版本填充 version_collections 数据"""

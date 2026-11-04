@@ -52,8 +52,8 @@ def test_analyze_success(client, admin_headers, mock_conn):
          patch('data.mcp_servers.enabled_mcp_config', return_value={}), \
          patch('routes.ai_session_admin.admin_get_session_detail', return_value=dict(DETAIL)), \
          patch('routes.ai_session_admin.get_db', _fake_db(mock_conn)), \
-         patch('utils.workspace.create_session_workspace', return_value='/tmp/ws2'), \
-         patch('utils.workspace.write_opencode_config') as write_cfg, \
+         patch('projects.workspace.create_session_workspace', return_value='/tmp/ws2'), \
+         patch('projects.workspace.write_opencode_config') as write_cfg, \
          patch('ai.sessions.session_token.generate_token', return_value='tok123'), \
          patch('config.get_default_chat_model', return_value={'provider': 'p', 'model': 'm'}), \
          patch('ai.skills.global_skills.inject_global_skills'), \

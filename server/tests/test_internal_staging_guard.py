@@ -14,7 +14,7 @@ USER = 'user-u1'
 
 
 def _setup(tmp_path, monkeypatch):
-    import utils.workspace as ws_mod
+    from projects import workspace as ws_mod
     staging = tmp_path / 'batch-staging' / USER / 'us-1'
     staging.mkdir(parents=True, exist_ok=True)
     (staging / 'input.csv').write_text('a,b\n1,2', encoding='utf-8')

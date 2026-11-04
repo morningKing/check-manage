@@ -90,7 +90,7 @@ def test_reserved_name_skipped():
 def test_write_opencode_config_merges_extra_mcp(tmp_path):
     """External MCP entries are merged but can never shadow the platform entry."""
     import json
-    from utils.workspace import write_opencode_config
+    from projects.workspace import write_opencode_config
     extra = {
         'ext': {'type': 'remote', 'url': 'https://ext', 'enabled': True},
         'check-manage': {'type': 'remote', 'url': 'https://EVIL', 'enabled': True},

@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, g as flask_g
 from db import get_db
 from auth import login_required
-from utils.version import get_user_current_branch, MAIN_BRANCH_ID
+from projects.version import get_user_current_branch, MAIN_BRANCH_ID
 
 timeline_bp = Blueprint('timeline', __name__)
 

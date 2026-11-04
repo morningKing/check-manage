@@ -274,7 +274,7 @@ try:
         # P1 §9.3/§7.3：workspace 回收 + ai_batch_events 保留（同一每日作业）
         def _workspace_and_events_retention_daily():
             try:
-                from utils.workspace import reclaim_expired_workspaces
+                from projects.workspace import reclaim_expired_workspaces
                 logging.info('workspace retention: reclaimed %s',
                              reclaim_expired_workspaces())
             except Exception as e3:
@@ -748,7 +748,7 @@ app.register_blueprint(dynamic_bp)
 _RUNNING_UNDER_PYTEST = 'pytest' in sys.modules
 if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
         and not _RUNNING_UNDER_PYTEST:
-    from utils.backup import start_backup_scheduler
+    from projects.backup import start_backup_scheduler
     start_backup_scheduler(app)
 
     # Start dependency validation scheduler

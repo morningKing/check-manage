@@ -11,7 +11,7 @@ from werkzeug.security import generate_password_hash
 
 from db import get_db
 from utils.kefu_guardrail import assemble_system_prompt
-from utils.workspace import create_session_workspace, write_opencode_config
+from projects.workspace import create_session_workspace, write_opencode_config
 from data.mcp_servers import internal_mcp_enabled, INTERNAL_MCP_NAME as MCP_NAME
 from ai.sessions.session_token import generate_token
 from ai.opencode.opencode_client import OpenCodeClient

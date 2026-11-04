@@ -2,7 +2,7 @@
 
 from flask import g
 from db import get_db
-from utils.version import MAIN_BRANCH_ID
+from projects.version import MAIN_BRANCH_ID
 
 
 def check_branch_lock(collection: str) -> tuple[str, str] | None:
@@ -23,7 +23,7 @@ def check_branch_lock(collection: str) -> tuple[str, str] | None:
         return None  # 未登录用户不检查锁定
 
     # 获取用户在该 collection 的当前分支
-    from utils.version import get_user_current_branch
+    from projects.version import get_user_current_branch
     branch_id = get_user_current_branch(user_id, collection)
 
     # 获取 collection 对应的项目菜单 ID
@@ -81,7 +81,7 @@ def check_branch_lock_by_project(user_id: str, project_menu_id: str) -> tuple[st
         None: 未锁定
         (branch_id, locked_by): 已锁定
     """
-    from utils.project_version import get_user_project_branch
+    from projects.versioning import get_user_project_branch
 
     branch_id = get_user_project_branch(user_id, project_menu_id)
 

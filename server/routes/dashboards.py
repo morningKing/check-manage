@@ -3,7 +3,7 @@ from db import get_db
 from auth import login_required, require_permission
 import psycopg2.extras
 import uuid
-from utils.version import get_user_current_branch as resolve_user_current_branch
+from projects.version import get_user_current_branch as resolve_user_current_branch
 
 dashboards_bp = Blueprint('dashboards', __name__)
 

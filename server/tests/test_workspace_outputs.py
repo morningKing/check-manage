@@ -3,7 +3,7 @@
 import os
 import tempfile
 from unittest.mock import patch
-from utils.workspace_outputs import (
+from projects.workspace_outputs import (
     list_session_files, LISTFILES_MAX_FILES, LISTFILES_MAX_DEPTH, LISTFILES_SKIP_DIRS,
     augment_with_data_file_id,
 )

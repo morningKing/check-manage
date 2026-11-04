@@ -7,8 +7,8 @@ ai_chat_session_files 的记录——没被 git 扫描记录过的路径一律�
 """
 import os
 
-from utils.workspace import safe_resolve, WorkspacePathError
-from utils.workspace_changes import get_recorded_path, set_data_file_id
+from projects.workspace import safe_resolve, WorkspacePathError
+from projects.workspace_changes import get_recorded_path, set_data_file_id
 
 MAX_IMPORT_PATHS = 100
 
