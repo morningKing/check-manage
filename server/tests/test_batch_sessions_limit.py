@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import pytest
 
-from utils import batch_repo
+from ai.batch import repo as batch_repo
 
 
 def _db(row):
@@ -35,32 +35,32 @@ def _db(row):
 # ---------------------------------------------------------------------------
 
 def test_reader_returns_configured_value():
-    with patch.object(batch_repo, 'get_db', _db((100,))):
+    with patch.object(batch_repo.config, 'get_db', _db((100,))):
         assert batch_repo.get_max_files_per_batch() == 100
 
 
 def test_reader_falls_back_when_row_missing_or_null():
-    with patch.object(batch_repo, 'get_db', _db(None)):
+    with patch.object(batch_repo.config, 'get_db', _db(None)):
         assert batch_repo.get_max_files_per_batch() == 50
-    with patch.object(batch_repo, 'get_db', _db((None,))):
+    with patch.object(batch_repo.config, 'get_db', _db((None,))):
         assert batch_repo.get_max_files_per_batch() == 50
 
 
 def test_reader_falls_back_on_invalid_value():
     # 非整数字符串无法解析 → 回落默认
-    with patch.object(batch_repo, 'get_db', _db(('abc',))):
+    with patch.object(batch_repo.config, 'get_db', _db(('abc',))):
         assert batch_repo.get_max_files_per_batch() == 50
 
 
 def test_reader_clamps_non_positive_to_minimum():
     # 0/负数语义上等于「至少 1 个」，钳到最小值而不是回落默认
     for bad in (0, -5):
-        with patch.object(batch_repo, 'get_db', _db((bad,))):
+        with patch.object(batch_repo.config, 'get_db', _db((bad,))):
             assert batch_repo.get_max_files_per_batch() == 1, bad
 
 
 def test_reader_clamps_to_minimum_one():
-    with patch.object(batch_repo, 'get_db', _db((1,))):
+    with patch.object(batch_repo.config, 'get_db', _db((1,))):
         assert batch_repo.get_max_files_per_batch() == 1
 
 
@@ -70,7 +70,7 @@ def test_reader_falls_back_on_db_error():
         raise RuntimeError('db down')
         yield  # pragma: no cover
 
-    with patch.object(batch_repo, 'get_db', boom):
+    with patch.object(batch_repo.config, 'get_db', boom):
         assert batch_repo.get_max_files_per_batch() == 50
 
 
@@ -80,8 +80,8 @@ def test_reader_falls_back_on_db_error():
 
 def test_create_respects_configured_limit():
     ok_file = {'name': 'a.txt', 'path': 'batch-staging/u/abc/a.txt'}
-    with patch.object(batch_repo, 'get_max_files_per_batch', return_value=3), \
-         patch.object(batch_repo, 'get_db', side_effect=AssertionError('超限应在写库前拒绝')):
+    with patch.object(batch_repo.lifecycle, 'get_max_files_per_batch', return_value=3), \
+         patch.object(batch_repo.lifecycle, 'get_db', side_effect=AssertionError('超限应在写库前拒绝')):
         try:
             batch_repo.create_batch('u1', name='n', prompt='p',
                                     template_id=None, files=[ok_file] * 4)
@@ -126,10 +126,10 @@ def test_append_respects_configured_total():
         return fake
 
     def attempt(limit):
-        with mock.patch.object(batch_repo, 'get_max_files_per_batch', return_value=limit), \
-             mock.patch.object(batch_repo, 'get_db', fake_db()), \
-             mock.patch.object(batch_repo, '_recompute_batch_status_for'), \
-             mock.patch.object(batch_repo, 'get_batch_detail',
+        with mock.patch.object(batch_repo.lifecycle, 'get_max_files_per_batch', return_value=limit), \
+             mock.patch.object(batch_repo.lifecycle, 'get_db', fake_db()), \
+             mock.patch.object(batch_repo.lifecycle, '_recompute_batch_status_for'), \
+             mock.patch.object(batch_repo.lifecycle, 'get_batch_detail',
                                return_value={'batch': {}, 'sessions': []}):
             return batch_repo.append_to_batch('u1', 'b-1', files)
 

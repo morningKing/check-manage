@@ -96,7 +96,7 @@ def _batch(db_conn, bid):
 
 
 def test_resume_batch_continues_started_and_reruns_queued(db_conn, user_id, claim_guard):
-    from utils.batch_repo import resume_batch
+    from ai.batch.repo import resume_batch
     bid, sids = bid_sids = _seed_batch(db_conn, user_id, claim_guard, n=3)
     started, queued, done_child = sids
     with db_conn.cursor() as cur:
@@ -136,7 +136,7 @@ def test_resume_batch_continues_started_and_reruns_queued(db_conn, user_id, clai
 
 
 def test_resume_batch_without_cancelled_raises(db_conn, user_id, claim_guard):
-    from utils.batch_repo import resume_batch
+    from ai.batch.repo import resume_batch
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='failed' WHERE id=%s",
@@ -151,14 +151,14 @@ def test_resume_batch_without_cancelled_raises(db_conn, user_id, claim_guard):
 
 
 def test_resume_batch_wrong_owner_returns_none(db_conn, user_id, claim_guard):
-    from utils.batch_repo import resume_batch
+    from ai.batch.repo import resume_batch
     bid, _ = _seed_batch(db_conn, user_id, claim_guard, n=1)
     assert resume_batch(str(uuid.uuid4()), bid) is None
 
 
 def test_resume_batch_detail_carries_cancelled_count(db_conn, user_id, claim_guard):
     """UI 的「继续运行」按钮显隐依据：detail/list 带 cancelled 计数。"""
-    from utils.batch_repo import resume_batch, get_batch_detail, list_batches
+    from ai.batch.repo import resume_batch, get_batch_detail, list_batches
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='cancelled', "
@@ -181,7 +181,7 @@ def test_resume_batch_detail_carries_cancelled_count(db_conn, user_id, claim_gua
 def test_resume_child_continues_started_paused_child(db_conn, user_id, claim_guard):
     """已开跑过的 paused 子任务 → pending + 续跑提示词，保留原 OpenCode 会话；
     其余 paused 子任务保持不动；批次按 paused 规则保持 'paused'。"""
-    from utils.batch_repo import resume_child
+    from ai.batch.repo import resume_child
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     started, other = sids
     with db_conn.cursor() as cur:
@@ -212,7 +212,7 @@ def test_resume_child_continues_started_paused_child(db_conn, user_id, claim_gua
 
 def test_resume_child_queued_paused_gets_fresh_run(db_conn, user_id, claim_guard):
     """从未开跑（无 oc 会话）的 paused 子任务 → pending、不置 continue_prompt。"""
-    from utils.batch_repo import resume_child
+    from ai.batch.repo import resume_child
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='paused' WHERE id=%s",
@@ -225,7 +225,7 @@ def test_resume_child_queued_paused_gets_fresh_run(db_conn, user_id, claim_guard
 
 
 def test_resume_child_rejects_non_paused(db_conn, user_id, claim_guard):
-    from utils.batch_repo import resume_child
+    from ai.batch.repo import resume_child
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE id=%s",
@@ -239,7 +239,7 @@ def test_resume_child_rejects_non_paused(db_conn, user_id, claim_guard):
 
 
 def test_resume_child_wrong_owner_returns_none(db_conn, user_id, claim_guard):
-    from utils.batch_repo import resume_child
+    from ai.batch.repo import resume_child
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='paused' WHERE id=%s",

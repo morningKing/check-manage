@@ -22,7 +22,7 @@ class PolicyInUseError(RuntimeError):
 
 def create_policy(user_id: str, name: str, description, checks,
                   enabled: bool = True, get_db=None) -> dict:
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     normalized = validate_checks(checks or [])
     name = (name or '').strip()
     if not name or len(name) > 100:
@@ -80,7 +80,7 @@ def update_policy(pid: str, *, name=None, description=None, checks=None,
                   enabled=None, get_db=None) -> dict | None:
     """哨兵语义：None=不更新该字段（checks/name 用 None 判定；enabled 用
     is None 判定——False 是合法值）。checks 显式传入才过校验。"""
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     sets, params = [], []
     if name is not None:
         name = (name or '').strip()

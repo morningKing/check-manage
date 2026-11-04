@@ -2,7 +2,7 @@
 from flask import Blueprint, g, jsonify, request
 
 from auth import login_required
-from utils.agent_ledger import validate_checks
+from ai.batch.ledger import validate_checks
 from common.operation_log import log_operation
 from ai.sessions.prompt_template import (
     DuplicateTemplateName,

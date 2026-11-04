@@ -12,7 +12,7 @@ Endpoints covered:
 
 Uses the same mock-based pattern as test_open_api_batches_crud.py.
 Route handlers import helper modules locally (inside the function body),
-so we patch at the SOURCE module (e.g. utils.batch_repo) rather than
+so we patch at the SOURCE module (e.g. ai.batch.repo) rather than
 routes.open_api_batches.
 """
 import io
@@ -127,7 +127,7 @@ class TestSessionMessages:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.batch_repo.get_child_messages', return_value=fake_msgs):
+             patch('ai.batch.repo.get_child_messages', return_value=fake_msgs):
             resp = client.get(f'{BASE}/b-1/sessions/report.pdf/messages', headers=HDR)
         assert resp.status_code == 200
         body = resp.get_json()
@@ -145,7 +145,7 @@ class TestSessionMessages:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.batch_repo.get_child_messages', return_value=fake_msgs):
+             patch('ai.batch.repo.get_child_messages', return_value=fake_msgs):
             resp = client.get(f'{BASE}/b-1/sessions/0/messages', headers=HDR)
         assert resp.status_code == 200
         assert resp.get_json()['child']['seq'] == 0
@@ -427,7 +427,7 @@ class TestSessionContinue:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.batch_repo.continue_child',
+             patch('ai.batch.repo.continue_child',
                    side_effect=ValueError('only completed/failed children can be continued')):
             resp = client.post(f'{BASE}/b-1/sessions/0/continue',
                                headers=HDR, json={'prompt': 'go'})
@@ -439,7 +439,7 @@ class TestSessionContinue:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.batch_repo.continue_child', return_value=detail), \
+             patch('ai.batch.repo.continue_child', return_value=detail), \
              patch('routes.open_api_batches.get_worker') as mock_worker:
             mock_worker.return_value.notify = MagicMock()
             resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
@@ -500,7 +500,7 @@ class TestResolveChild:
 class TestContinueChild:
     def test_raises_when_not_terminal(self, db_conn):
         import uuid
-        from utils.batch_repo import continue_child
+        from ai.batch.repo import continue_child
         uid = '_t_continue_' + uuid.uuid4().hex[:8]
         bid = '_t_b_' + uuid.uuid4().hex[:8]
         sid = '_t_s_' + uuid.uuid4().hex[:8]
@@ -528,7 +528,7 @@ class TestContinueChild:
 
     def test_completed_child_resets_to_pending(self, db_conn):
         import uuid
-        from utils.batch_repo import continue_child
+        from ai.batch.repo import continue_child
         uid = '_t_cont2_' + uuid.uuid4().hex[:8]
         bid = '_t_b2_' + uuid.uuid4().hex[:8]
         sid = '_t_s2_' + uuid.uuid4().hex[:8]
@@ -566,7 +566,7 @@ class TestContinueChild:
 
     def test_returns_none_for_wrong_user(self, db_conn):
         import uuid
-        from utils.batch_repo import continue_child
+        from ai.batch.repo import continue_child
         uid = '_t_cont3_' + uuid.uuid4().hex[:8]
         bid = '_t_b3_' + uuid.uuid4().hex[:8]
         sid = '_t_s3_' + uuid.uuid4().hex[:8]
@@ -602,7 +602,7 @@ class TestContinueChild:
 class TestGetChildMessages:
     def test_returns_messages(self, db_conn):
         import uuid
-        from utils.batch_repo import get_child_messages
+        from ai.batch.repo import get_child_messages
         uid = '_t_gcm_' + uuid.uuid4().hex[:8]
         bid = '_t_bcm_' + uuid.uuid4().hex[:8]
         sid = '_t_scm_' + uuid.uuid4().hex[:8]
@@ -643,7 +643,7 @@ class TestGetChildMessages:
 
     def test_empty_when_no_messages(self, db_conn):
         import uuid
-        from utils.batch_repo import get_child_messages
+        from ai.batch.repo import get_child_messages
         uid = '_t_gcm2_' + uuid.uuid4().hex[:8]
         bid = '_t_bcm2_' + uuid.uuid4().hex[:8]
         sid = '_t_scm2_' + uuid.uuid4().hex[:8]
@@ -783,7 +783,7 @@ class TestSessionReexecute:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.batch_repo.reexecute_child',
+             patch('ai.batch.repo.reexecute_child',
                    side_effect=ValueError('only completed/failed')):
             resp = client.post(f'{BASE}/b-1/sessions/0/reexecute', headers=HDR)
         assert resp.status_code == 409
@@ -794,7 +794,7 @@ class TestSessionReexecute:
         with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
-             patch('utils.batch_repo.reexecute_child', return_value=detail), \
+             patch('ai.batch.repo.reexecute_child', return_value=detail), \
              patch('routes.open_api_batches.get_worker') as mock_worker:
             mock_worker.return_value.notify = MagicMock()
             resp = client.post(f'{BASE}/b-1/sessions/report.pdf/reexecute', headers=HDR)

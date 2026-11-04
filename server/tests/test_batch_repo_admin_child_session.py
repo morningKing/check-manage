@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from db import get_db                       # noqa: E402
-from utils.batch_repo import admin_get_child_session  # noqa: E402
+from ai.batch.repo import admin_get_child_session  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

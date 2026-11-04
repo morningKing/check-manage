@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from db import get_db                    # noqa: E402
-from utils import batch_repo             # noqa: E402
+from ai.batch import repo as batch_repo             # noqa: E402
 
 
 @pytest.fixture

@@ -135,7 +135,7 @@ def suspend_step(run_id):
         return jsonify({'error': 'step not running'}), 409
     if not step.get('session_id'):
         return jsonify({'error': 'step has no child session'}), 409
-    from utils.batch_repo import pause_batch
+    from ai.batch.repo import pause_batch
     pause_batch(run['requested_by'], step.get('batch_id'))         if step.get('batch_id') else None
     from utils import approval_repo
     aid = approval_repo.create_approval(

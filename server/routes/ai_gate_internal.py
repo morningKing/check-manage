@@ -28,7 +28,7 @@ from flask import Blueprint, jsonify, request
 
 from config import MCP_INTERNAL_TOKEN
 from db import get_db
-from utils.agent_ledger import post_check_tool, pre_check_tool
+from ai.batch.ledger import post_check_tool, pre_check_tool
 
 ai_gate_internal_bp = Blueprint('ai_gate_internal', __name__,
                                 url_prefix='/ai/gate/internal')

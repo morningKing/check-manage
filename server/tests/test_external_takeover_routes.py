@@ -170,7 +170,7 @@ def test_messages_repo_default_limit_stays_500_for_open_api():
     """Open API（open_api_batches 子任务消息端点）走 get_child_messages 默认
     limit——对外契约不随接管页瘦身（性能快改批 ④ 只影响接管路由）。"""
     import inspect
-    from utils import batch_repo
+    from ai.batch import repo as batch_repo
     default = inspect.signature(
         batch_repo.get_child_messages).parameters['limit'].default
     assert default == 500
@@ -222,7 +222,7 @@ def test_messages_real_db_window_capped_at_100(client, mock_conn, mock_cursor):
         with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
                    return_value=_tok(session_id=sid, batch_id=bid,
                                      child_status='running')), \
-             patch('utils.batch_repo.get_db', _real_db), \
+             patch('ai.batch.repo.queries.get_db', _real_db), \
              patch('routes.external_takeover.get_db', _real_db):
             resp = client.get(f'{BASE}/session/messages?t={VALID_T}')
 

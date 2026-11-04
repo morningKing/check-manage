@@ -1,210 +1,11 @@
-"""SkillOpt 任务性能分析（2026-10-09 spec）：纯读聚合层。
-
-覆盖切分（§3.2）：模型轮次与子代理区间在真实执行中重叠——把区间投到 attempt
-时间轴切出互斥的时长（模型活跃 / 子代理等待 / 引擎间隙；二期 detail 路径再
-从模型活跃中切出第四类工具执行 toolMs），和恒等于墙钟。
-全部函数 get_db 参数注入（skill_fit 惯例），时间统一 epoch 毫秒。
-口径注记：工具区间（toolMs 覆盖）按 agent_tool_calls.started_at 夹窗，
-而 byTool/repeats 时长聚合沿用一期的 occurred_at 夹窗——两列在批路径可差
-一个持久化轮询周期，边界调用的覆盖段与聚合表可能轻微对不上，属已知取舍。
-"""
-from __future__ import annotations
-
-import time as _time
 from datetime import datetime as _dt
 
-
-def _to_ms(dt) -> int | None:
-    """psycopg2 timestamptz（tz-aware datetime）→ epoch 毫秒。"""
-    if dt is None:
-        return None
-    return int(dt.timestamp() * 1000)
-
-
-def _union(intervals: list[tuple[int, int]], lo: int, hi: int) -> list[tuple[int, int]]:
-    """夹到 [lo,hi] 后合并重叠区间，返回升序不重叠列表。"""
-    clamped = [(max(s, lo), min(e, hi)) for s, e in intervals if min(e, hi) > max(s, lo)]
-    out: list[tuple[int, int]] = []
-    for s, e in sorted(clamped):
-        if out and s <= out[-1][1]:
-            out[-1] = (out[-1][0], max(out[-1][1], e))
-        else:
-            out.append((s, e))
-    return out
-
-
-def _covered_ms(intervals: list[tuple[int, int]]) -> int:
-    return sum(e - s for s, e in intervals)
-
-
-def _subtract(base: list[tuple[int, int]], mask: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """base - mask（都为合并过的升序区间），返回剩余区间。"""
-    out: list[tuple[int, int]] = []
-    for s, e in base:
-        cur = s
-        for ms, me in mask:
-            if me <= cur or ms >= e:
-                continue
-            if ms > cur:
-                out.append((cur, ms))
-            cur = max(cur, me)
-            if cur >= e:
-                break
-        if cur < e:
-            out.append((cur, e))
-    return out
-
-
-def _intersect(base: list[tuple[int, int]], mask: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """base ∩ mask（都为合并过的升序区间），返回相交区间。"""
-    out: list[tuple[int, int]] = []
-    for s, e in base:
-        for ms, me in mask:
-            if me <= s or ms >= e:
-                continue
-            out.append((max(s, ms), min(e, me)))
-    return out
-
-
-def coverage_split(wall_start_ms: int, wall_end_ms: int,
-                   model_intervals: list[tuple[int, int]],
-                   subagent_intervals: list[tuple[int, int]],
-                   tool_intervals: list[tuple[int, int]] | None = None,
-                   task_intervals: list[tuple[int, int]] | None = None) -> dict:
-    """attempt 墙钟 → 互斥覆盖时长。v2 优先级分解（工具 > 子代理等待 > 模型
-    > 间隙），四类之和恒 = wallMs：
-
-    - toolMs          非 task 工具覆盖（bash/read 等真实工具执行）
-    - subagentWaitMs  子代理跨度 ∪ task 工具跨度（等委托），扣除非 task 工具
-                      ——task 跨度无论是否落在轮内都归等待（轮次时长是毛
-                      跨度含挂起等委托，不切出来会被误标为模型/工具）
-    - modelMs         模型轮次跨度扣除以上两类（纯推理）
-    - idleMs          其余
-    task_intervals 缺省为空：此时 subagentWait = 子代理跨度原值。"""
-    wall_ms = max(0, wall_end_ms - wall_start_ms)
-    model = _union(model_intervals, wall_start_ms, wall_end_ms)
-    sub = _union(subagent_intervals, wall_start_ms, wall_end_ms)
-    tool = _union(tool_intervals or [], wall_start_ms, wall_end_ms)
-    task = _union(task_intervals or [], wall_start_ms, wall_end_ms)
-    delegate = _union(sub + task, wall_start_ms, wall_end_ms)
-    tool_ms = _covered_ms(tool)
-    wait_ms = _covered_ms(_subtract(delegate, tool))
-    model_ms = _covered_ms(_subtract(_subtract(model, tool), delegate))
-    idle_ms = max(0, wall_ms - tool_ms - wait_ms - model_ms)
-    return {'wallMs': wall_ms, 'modelMs': model_ms, 'toolMs': tool_ms,
-            'subagentWaitMs': wait_ms, 'idleMs': idle_ms}
-
-
-# ---- 任务指标与聚合（SQL 层）----
-
-
-def _now_ms() -> int:
-    return int(_time.time() * 1000)
+from .intervals import _now_ms, _percentile, _to_ms, coverage_split
+from .runs import _open_conn, _run_attempt_row, resolve_session_runs
 
 
 def _iso(dt):
     return dt.isoformat() if dt is not None else None
-
-
-def _percentile(sorted_vals: list, q: float) -> int:
-    if not sorted_vals:
-        return 0
-    idx = min(len(sorted_vals) - 1, max(0, round(q * (len(sorted_vals) - 1))))
-    return sorted_vals[idx]
-
-
-def _open_conn(db_ctx):
-    """db_ctx 兼容两种形态：get_db 工厂（生产，skill_fit 惯例）或现成连接
-    （测试注入 db_conn）；None 回落默认池。"""
-    ctx = db_ctx
-    if ctx is None:
-        from db import get_db as _default
-        ctx = _default
-    return ctx() if callable(ctx) else ctx
-
-
-# ---- 端到端 run 口径（2026-11-02）----
-# 性能分析只算「端到端一次性」耗时：run = 一条 attempt 链（root =
-# parent_attempt_id IS NULL + 全部 parent 后代），链墙钟 = root.started →
-# 末成员.finished——自动恢复续跑（AUTO_RETRY/GATE_RETRY/RECONCILE_REQUEUE
-# 串链，见 batch_engine.AUTO_REQUEUE_CODES）连同重排队间隙计入；人工接管
-# （无链 continue root）及其后续整条 run 剔除。判据根基：parent_attempt_id
-# 只有批引擎自动重排队才写（batch_engine._close_attempt_for_requeue → 下一次
-# create_attempt 串链，跨重启由 _consume_parent_attempt 查库兜底）；人工
-# continue 的 attempt 恒 NULL。交互会话每次 send 自成 run（口径不变）。
-# 实现注记：SQL 一律字面量内联在 execute 调用处、参数全 %s（SQL 常量经
-# 变量中转进 execute 会被静态扫描误判为拼接——同 _MSG_SQL 上方注记）。
-
-
-def resolve_session_runs(cur, session_ids) -> dict:
-    """会话集 → 端到端 run（链）解析。返回 {session_id: [run, ...]}，run 按
-    根起点升序，键：sessionId / root / members / anchor / excludedRounds。
-
-    - members 时间序；anchor = 链末成员（run 的收口 attempt：聚合行的
-      attemptId/状态/model 取它）；
-    - root operation='continue' 的 run = 人工接管/人工续跑 → 整条剔除，
-      成员数累计进本会话各 run 的 excludedRounds（供展示「另有 M 轮人工
-      接管未计入」）；
-    - kefu / 未派发（started_at NULL）不产生 run。"""
-    ids = [s for s in dict.fromkeys(session_ids) if s]
-    if not ids:
-        return {}
-    cur.execute(
-        "SELECT id, session_id, source_type, source_id, parent_attempt_id,"
-        " attempt_no, operation, status, started_at, finished_at,"
-        " requested_model, effective_model, effective_agent"
-        " FROM ai_execution_attempts"
-        " WHERE session_id = ANY(%s) AND source_type <> 'kefu'"
-        " AND started_at IS NOT NULL"
-        " ORDER BY session_id, started_at, attempt_no", (ids,))
-    cols = [d[0] for d in cur.description]
-    rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    by_parent: dict = {}
-    for r in rows:
-        if r['parent_attempt_id']:
-            by_parent.setdefault(r['parent_attempt_id'], []).append(r)
-    out: dict = {}
-    for r in rows:
-        sid = r['session_id']
-        if sid in out:
-            continue
-        sess_rows = [x for x in rows if x['session_id'] == sid]
-        roots = [x for x in sess_rows if not x['parent_attempt_id']]
-        excluded = 0
-        runs = []
-        for root in roots:
-            members, stack, seen = [], [root], {root['id']}
-            while stack:
-                node = stack.pop()
-                members.append(node)
-                for child in by_parent.get(node['id'], []):
-                    if child['id'] not in seen:
-                        seen.add(child['id'])
-                        stack.append(child)
-            members.sort(key=lambda m: (m['started_at'], m['attempt_no']))
-            if root['operation'] == 'continue':
-                excluded += len(members)
-                continue
-            runs.append({'sessionId': sid, 'root': root, 'members': members,
-                         'anchor': members[-1], 'excludedRounds': 0})
-        if excluded:
-            for run in runs:
-                run['excludedRounds'] = excluded
-        out[sid] = runs
-    return out
-
-
-def _run_attempt_row(run: dict) -> dict:
-    """run → _attempt_metrics 的 attempt 行形态（窗口拉通到链跨度；
-    身份/状态/model 取 anchor）。"""
-    anchor, root = run['anchor'], run['root']
-    return {'id': anchor['id'], 'session_id': run['sessionId'],
-            'source_type': anchor['source_type'],
-            'source_id': anchor['source_id'], 'status': anchor['status'],
-            'started_at': root['started_at'],
-            'finished_at': anchor['finished_at'],
-            'requested_model': anchor.get('requested_model'),
-            'effective_model': anchor.get('effective_model')}
 
 
 def _run_chain_out(run: dict) -> list:
@@ -1062,3 +863,53 @@ def attempt_payload(db_ctx, attempt_id: str) -> dict | None:
             'tools': m.get('tools') or {},
             'skills': skills,
             'completeness': m.get('completeness')}
+
+
+
+__all__ = [
+    '_dt',
+    '_MSG_SQL',
+    '_SKILL_INV_SQL',
+    '_TOOL_TIMELINE_SQL',
+    '_attempt_metrics',
+    '_def_of_attempt',
+    '_definition_run_set',
+    '_first_text_preview',
+    '_iso',
+    '_iso_ms',
+    '_matched_attempt_ids',
+    '_norm_args',
+    '_now_ms',
+    '_open_conn',
+    '_overlap_ratio',
+    '_part_ref',
+    '_percentile',
+    '_run_attempt_row',
+    '_run_chain_out',
+    '_to_ms',
+    '_tool_aggregates',
+    'attempt_payload',
+    'coverage_split',
+    'definition_cause_distribution',
+    'definition_overview',
+    'definition_p50',
+    'derive_skill_durations',
+    'diagnose',
+    'list_definition_tasks',
+    'list_slow_tasks',
+    'load_attempt_metrics',
+    'resolve_session_runs',
+    'BIG_CONTEXT_TOKENS',
+    'IDLE_MIN_WALL_MS',
+    'IDLE_RATIO',
+    'MODEL_RATIO',
+    'OUTLIER_P50_FACTOR',
+    'REPEAT_TOOL_COUNT',
+    'SEQUENTIAL_OVERLAP',
+    'SLOW_TURN_MS',
+    'SUBAGENT_MIN_WALL_MS',
+    'SUBAGENT_WAIT_RATIO',
+    'TOOL_CALLS_MAX',
+    'TOOL_ERROR_COUNT',
+    'TOOL_HOTSPOT_RATIO',
+]

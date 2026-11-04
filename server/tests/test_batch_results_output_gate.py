@@ -23,7 +23,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-import utils.batch_repo as repo
+from ai.batch import repo as repo
 
 
 @pytest.fixture

@@ -27,7 +27,7 @@ def client():
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
+                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine') or mod_name.startswith('ai.batch.repo')
                 or mod_name == 'auth'):
             try:
                 mod.get_db = db_module.get_db
@@ -149,7 +149,7 @@ def test_fetch_action_checks_merge(db_conn):
     db_conn.commit()
 
 def test_create_batch_rejects_missing_policy(db_conn):
-    from utils.batch_repo import create_batch
+    from ai.batch.repo import create_batch
     with pytest.raises(ValueError, match='策略'):
         create_batch('user-admin', name='p', prompt='p', template_id=None,
                      files=[{'name': 'a.txt', 'path': 'batch-staging/u/a.txt'}],

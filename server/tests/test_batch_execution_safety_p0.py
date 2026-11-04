@@ -149,7 +149,7 @@ def _rebind_real_db():
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-            mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
+            mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine') or mod_name.startswith('ai.batch.repo')
                 or mod_name == 'auth'):
             try:
                 mod.get_db = _db_module.get_db
@@ -393,7 +393,7 @@ def test_mark_done_redirects_to_pause_flag(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_reexecute_and_continue_bump_generation(db_conn, user_id):
-    from utils.batch_repo import reexecute_child, continue_child
+    from ai.batch.repo import reexecute_child, continue_child
     bid, sids = _seed_batch(db_conn, user_id, 2)
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE id=%s",
@@ -667,7 +667,7 @@ def test_run_one_completes_without_checks(db_conn, user_id, monkeypatch, tmp_pat
 
 
 def test_apply_to_invalid_rejected():
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     with pytest.raises(ValueError):
         agent_ledger.validate_checks([
             {'name': 'c', 'tool': 'w', 'args_pattern': 'x',
@@ -684,7 +684,7 @@ def test_apply_to_invalid_rejected():
 
 def test_apply_to_preserved_through_validation():
     """F2：validate_checks 保留 apply_to（此前被剥离 → 落库前就丢）。"""
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     checks = agent_ledger.validate_checks([
         {'name': 'only-first', 'tool': 'w', 'args_pattern': 'x',
          'apply_to': {'batch_seq': [0]}}])
@@ -709,7 +709,7 @@ def test_apply_to_end_to_end_registration(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_f5_cancel_child_on_paused_lands_cancelled(db_conn, user_id):
-    from utils.batch_repo import cancel_child
+    from ai.batch.repo import cancel_child
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     _set_child(db_conn, sid, status='paused')
@@ -734,7 +734,7 @@ def test_f6_batch_seq_unique_index(db_conn, user_id):
 
 
 def test_f6_append_allocates_sequential_seqs(db_conn, user_id):
-    from utils.batch_repo import append_to_batch
+    from ai.batch.repo import append_to_batch
     bid, sids = _seed_batch(db_conn, user_id, 1)
     d = append_to_batch(user_id, bid,
                         [{'name': 'a', 'path': f'batch-staging/{user_id}/x/a.txt'},
@@ -744,7 +744,7 @@ def test_f6_append_allocates_sequential_seqs(db_conn, user_id):
 
 
 def test_f7_retry_failed_keeps_paused_status(db_conn, user_id):
-    from utils.batch_repo import reset_failed_to_pending
+    from ai.batch.repo import reset_failed_to_pending
     bid, sids = _seed_batch(db_conn, user_id, 2)
     _set_child(db_conn, sids[0], status='failed')
     _set_child(db_conn, sids[1], status='paused')
@@ -761,7 +761,7 @@ def test_f7_retry_failed_keeps_paused_status(db_conn, user_id):
 
 
 def test_f8_results_exclude_soft_deleted(db_conn, user_id):
-    from utils.batch_repo import get_batch_results
+    from ai.batch.repo import get_batch_results
     bid, sids = _seed_batch(db_conn, user_id, 2)
     _set_child(db_conn, sids[0], status='completed', deleted_at=datetime.now())
     _set_child(db_conn, sids[1], status='failed', error_message='x')
@@ -935,7 +935,7 @@ def test_continue_completed_child_keeps_counters(db_conn, user_id):
     """复核报告 §4.1（N1 严重缺陷）回归：对 **completed** 子任务执行 continue
     时计数回滚必须走 done-1（此前 RETURNING 取到更新后的 'pending'，错做
     failed-1 → failed 静默变负、批次终态算成 partial）。"""
-    from utils.batch_repo import continue_child
+    from ai.batch.repo import continue_child
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     _set_child(db_conn, sid, status='completed')
@@ -953,7 +953,7 @@ def test_continue_completed_child_keeps_counters(db_conn, user_id):
 def test_attach_expectations_fail_closed_on_unhealthy_ledger(db_conn, user_id):
     """复核报告 H3 残留回归：入口 D 补挂的期望（批级 applicable=0）在账本
     不健康时不得被静默放行——inconclusive 携带 expected 条数 → fail-closed。"""
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     from ai.batch.engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)   # 批级无 action_checks
     sid = sids[0]
@@ -1040,7 +1040,7 @@ def test_f1_subtask_row_written_before_ledger(monkeypatch):
 def test_cancel_resume_no_zombie_pending_with_cancel_flag(db_conn, user_id):
     """竞态矩阵（P0 §12）：cancel ↔ resume 不得出现「pending 且
     cancel_requested=true」的僵死组合——resume 必须清两个标志（F11 防回退）。"""
-    from utils.batch_repo import cancel_batch, resume_batch
+    from ai.batch.repo import cancel_batch, resume_batch
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     # cancel_batch：pending → cancel_requested（worker 未跑时停留在该形态）

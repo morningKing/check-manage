@@ -66,7 +66,7 @@ def _seed_child(db_conn, user_id, *, oc_sid, with_reply=True, with_trace=True):
 
 
 def _register(sid, name='结论含标记', rubric='回复包含 DONE-MARK', subagents=None):
-    from utils.agent_ledger import register_session_expectations
+    from ai.batch.ledger import register_session_expectations
     from db import get_db
     check = {'name': name, 'check_type': 'verifier', 'rubric': rubric}
     if subagents:

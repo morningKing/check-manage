@@ -19,7 +19,7 @@ from common.api_errors import (CONFLICT, INTERNAL_ERROR, INVALID_ARGUMENT, NOT_F
                               PAYLOAD_TOO_LARGE, UPSTREAM_UNAVAILABLE, err,
                               register_error_handlers)
 from ai.batch.engine import get_worker
-from utils.batch_repo import (append_to_batch, cancel_batch,
+from ai.batch.repo import (append_to_batch, cancel_batch,
                               create_batch, delete_batch, get_batch_detail,
                               get_batch_results, get_batch_usage,
                               get_children_progress, get_max_files_per_batch,
@@ -254,7 +254,7 @@ def _batch_out(b: dict) -> dict:
 def _batch_progress_ext(batch_id: str) -> dict:
     """扩展字段计算（best-effort，任何失败返回空 dict 不影响主契约）。"""
     try:
-        from utils.batch_repo import get_batch_progress_ext
+        from ai.batch.repo import get_batch_progress_ext
         return get_batch_progress_ext(batch_id) or {}
     except Exception:
         return {}
@@ -388,7 +388,7 @@ def create():
     # P0 F4（spec §7.2）：actionChecks 与内部创建接口同一道校验——此前原样
     # 透传入库，非法正则会在登记期望时才炸且被吞，产生"零期望 → passed"的
     # 假门禁。校验失败 400，不带病入库。
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     try:
         action_checks = agent_ledger.validate_checks(body.get('actionChecks'))
     except ValueError as e:
@@ -704,7 +704,7 @@ def _resolve_child(d: dict, child_id: str):
 @require_bound_key
 def session_messages(batch_id, child_id):
     """获取子会话的完整对话历史。"""
-    from utils.batch_repo import get_child_messages
+    from ai.batch.repo import get_child_messages
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -910,7 +910,7 @@ def session_files_download_all(batch_id, child_id):
 @require_bound_key
 def session_continue(batch_id, child_id):
     """在已完成/失败/已取消的子会话上追加一轮对话，保留历史上下文。"""
-    from utils.batch_repo import continue_child
+    from ai.batch.repo import continue_child
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -948,7 +948,7 @@ def session_reexecute(batch_id, child_id):
     与 retry-failed 不同：可对已完成的子会话重执行，不限于 failed。
     仅限终态（completed/failed/cancelled）的子会话。
     """
-    from utils.batch_repo import reexecute_child
+    from ai.batch.repo import reexecute_child
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -981,7 +981,7 @@ def update_config(batch_id):
     callbackSecret，只改 agent/model 而不重传它们会把已配置的回调清掉。
     修改在下一次 worker 拾取时生效（retry / reexecute / continue / pending）。
     """
-    from utils.batch_repo import update_batch_config
+    from ai.batch.repo import update_batch_config
     key = _current_key()
     body = request.get_json(silent=True) or {}
     agent = (body.get('agent') or '').strip() or None
@@ -993,7 +993,7 @@ def update_config(batch_id):
         return url_err
     # P0 spec §7.2：actionChecks 显式传入才更新（语义对齐内部 PATCH），
     # 同样先校验再落库。gateRetry 同理（可选）。
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     patch_kwargs = {}
     if 'actionChecks' in body:
         try:
@@ -1090,7 +1090,7 @@ def ai_query():
 @require_bound_key
 def pause(batch_id):
     """暂停整批排队/运行中的子任务（与内部语义一致，按密钥隔离）。"""
-    from utils.batch_repo import pause_batch
+    from ai.batch.repo import pause_batch
     from ai.batch import execution_commands as execution_commands
     key = _current_key()
     cmd = execution_commands.submit_command(
@@ -1119,7 +1119,7 @@ def pause(batch_id):
 @require_bound_key
 def resume(batch_id):
     """继续执行已暂停/已中断的批任务（与内部语义一致，按密钥隔离）。"""
-    from utils.batch_repo import resume_batch
+    from ai.batch.repo import resume_batch
     from ai.batch import execution_commands as execution_commands
     key = _current_key()
     cmd = execution_commands.submit_command(
@@ -1149,7 +1149,7 @@ def resume(batch_id):
 def session_cancel(batch_id, child_id):
     """取消单个子会话：pending 直接取消、running 协作式中断、paused 同步落
     cancelled（P0 F5 语义）。"""
-    from utils.batch_repo import cancel_child
+    from ai.batch.repo import cancel_child
     from ai.batch import execution_commands as execution_commands
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
@@ -1218,23 +1218,23 @@ def submit_command(batch_id):
     snapshot = None
     try:
         if command_type == 'pause':
-            from utils.batch_repo import pause_batch
+            from ai.batch.repo import pause_batch
             dd = pause_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
             snapshot = dd['batch']['status'] if dd else None
         elif command_type == 'resume':
-            from utils.batch_repo import resume_batch
+            from ai.batch.repo import resume_batch
             dd = resume_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
             snapshot = dd['batch']['status'] if dd else None
         elif command_type == 'cancel':
-            from utils.batch_repo import cancel_batch
+            from ai.batch.repo import cancel_batch
             cancel_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
             snapshot = 'cancel_requested'
         elif command_type in ('retry', 'retry-failed'):
-            from utils.batch_repo import reset_failed_to_pending
+            from ai.batch.repo import reset_failed_to_pending
             snapshot = {'retried': reset_failed_to_pending(
                 key['ownerUserId'], batch_id, api_key_id=key['id'])}
         elif command_type == 'force_stop':
-            from utils.batch_repo import force_stop_batch
+            from ai.batch.repo import force_stop_batch
             r = force_stop_batch(batch_id, operator=f'api_key:{key["id"]}',
                                  api_key_id=key['id'])
             snapshot = r

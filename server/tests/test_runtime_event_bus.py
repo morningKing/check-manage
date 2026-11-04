@@ -157,7 +157,7 @@ def test_delegate_discovers_subtask(stub_delegate):
 
 
 def test_tool_parts_reach_ledger_extraction(stub):
-    from utils.agent_ledger import extract_tool_parts
+    from ai.batch.ledger import extract_tool_parts
     oc = stub.create_session(directory='/ws/led')
     stub.dispatch(oc, 'work', directory='/ws/led')
     deadline = time.time() + 3

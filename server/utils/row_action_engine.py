@@ -23,7 +23,7 @@ from ai.scan.ai_scan_engine import (
     claim_one, build_context_dir, assemble_prompt, _workspace_root, _revert_claimed,
 )
 from ai.scan.ai_scan_repo import get_task
-from utils.batch_repo import create_batch
+from ai.batch.repo import create_batch
 
 logger = logging.getLogger(__name__)
 

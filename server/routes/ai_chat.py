@@ -63,7 +63,7 @@ from ai.sessions.session_file_import import import_recorded_files, MAX_IMPORT_PA
 from ai.sessions.session_history import render_history_block
 from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
     INTERNAL_MCP_NAME as MCP_NAME
-from utils import agent_ledger
+from ai.batch import ledger as agent_ledger
 from ai.sessions.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
     has_listener, live_listener_sids,
@@ -1883,7 +1883,7 @@ def sse_events(sid):
                     # 动作账本与到位门禁（设计 M2）：与后台监听器的收口互为备份，
                     # 幂等键 (oc_session_id, part_id) 去重，双路径只落一份账。
                     try:
-                        from utils import agent_ledger as _al
+                        from ai.batch import ledger as _al
                         _al.finalize_interactive_turn(sid, opencode_session_id,
                                                       state, get_db=get_db)
                     except Exception:

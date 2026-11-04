@@ -13,7 +13,7 @@ import logging
 import secrets
 
 from db import get_db as _default_get_db
-from utils.perf_analysis import attempt_payload
+from ai.batch.perf import attempt_payload
 
 log = logging.getLogger(__name__)
 

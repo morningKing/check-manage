@@ -263,7 +263,7 @@ def _set_child(db_conn, sid, **fields):
 
 
 def test_h3_attach_expectations_fail_closed(db_conn, user_id):
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     _set_child(db_conn, sid, status='running', opencode_session_id='oc-att-x')
@@ -283,7 +283,7 @@ def test_h3_attach_expectations_fail_closed(db_conn, user_id):
 def test_h3_exception_branch_also_fails_closed(db_conn, user_id, monkeypatch):
     """10 号 §3.1：核对自身异常的兜底分支同样携带 expected——
     "有期望但核对异常"不得被引擎判 skipped 放行。"""
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     _set_child(db_conn, sid, status='running', opencode_session_id='oc-att-e')
@@ -294,7 +294,8 @@ def test_h3_exception_branch_also_fails_closed(db_conn, user_id, monkeypatch):
     # 让核对过程自身抛异常（树展开查询爆炸）
     def _boom(*a, **k):
         raise RuntimeError('ledger exploded')
-    monkeypatch.setattr(agent_ledger, '_subtree_oc_ids', _boom)
+    from ai.batch.ledger import record as ledger_record
+    monkeypatch.setattr(ledger_record, '_subtree_oc_ids', _boom)
     gate = agent_ledger.check_session_gate(sid, ledger_healthy=True,
                                            get_db=get_db)
     assert gate['status'] == 'inconclusive'
@@ -310,7 +311,7 @@ def test_h3_exception_branch_also_fails_closed(db_conn, user_id, monkeypatch):
 def test_validate_checks_rejects_pg_incompatible_regex(db_conn):
     """10 号 §3.1：Python re 接受但 PG `~` 拒绝的方言（embedded 命名组），
     登记时就以 PG 口径拒绝——不再写入"永远无法核对"的期望。"""
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     with pytest.raises(ValueError, match='PostgreSQL'):
         agent_ledger.validate_checks(
             [{'name': 'bad', 'tool': 'bash', 'args_pattern': r'(?P<x>a)b'}])
@@ -440,7 +441,7 @@ def test_outbox_uncertain_delivery_sets_unknown_effect(db_conn, user_id,
 
 def test_m1_reexecute_cas_miss_concurrent(db_conn, user_id):
     from concurrent.futures import ThreadPoolExecutor
-    from utils.batch_repo import reexecute_child
+    from ai.batch.repo import reexecute_child
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     _set_child(db_conn, sid, status='failed')
@@ -1018,7 +1019,7 @@ def test_force_stop_batch_cancels_running(db_conn, user_id, monkeypatch):
     """缺口补齐 4（P1 §6.4）：force_stop 立即取消全部非终态子任务
     （fencing+1 使旧执行体失效），批次落 failed，abort 尽力执行。"""
     from unittest.mock import MagicMock
-    from utils.batch_repo import force_stop_batch
+    from ai.batch.repo import force_stop_batch
     bid, sids = _seed_batch(db_conn, user_id, 2)
     _set_child(db_conn, sids[0], status='running', opencode_session_id='oc-fs-1')
     _set_child(db_conn, sids[1], status='pending')
@@ -1181,7 +1182,7 @@ def gap_open_client(db_conn):
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
+                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine') or mod_name.startswith('ai.batch.repo')
                 or mod_name == 'auth'):
             try:
                 mod.get_db = real_get_db
@@ -2091,7 +2092,7 @@ def _cleanup_expectations(*scope_ids):
 
 def test_pre_check_tool_denies():
     """P3-C3：pre 模式期望匹配 → deny。"""
-    from utils.agent_ledger import register_session_expectations, pre_check_tool
+    from ai.batch.ledger import register_session_expectations, pre_check_tool
     sid = f'gap-pre-{uuid.uuid4().hex[:10]}'
     try:
         register_session_expectations(sid, [
@@ -2106,7 +2107,7 @@ def test_pre_check_tool_denies():
 
 def test_pre_check_tool_allows_non_matching():
     """pre 模式期望不匹配 → allow。"""
-    from utils.agent_ledger import register_session_expectations, pre_check_tool
+    from ai.batch.ledger import register_session_expectations, pre_check_tool
     sid = f'gap-pre-{uuid.uuid4().hex[:10]}'
     try:
         register_session_expectations(sid, [
@@ -2122,7 +2123,7 @@ def test_pre_check_tool_allows_non_matching():
 
 def test_pre_check_post_mode_ignored():
     """post 模式期望不参与 pre-check。"""
-    from utils.agent_ledger import register_session_expectations, pre_check_tool
+    from ai.batch.ledger import register_session_expectations, pre_check_tool
     sid = f'gap-pre-{uuid.uuid4().hex[:10]}'
     try:
         register_session_expectations(sid, [
@@ -2139,7 +2140,7 @@ def test_pre_check_post_mode_ignored():
 def test_validate_checks_mode_backward_compatible():
     """P3-C3：mode 缺省 'post'（既有创建路径零改动）；非法值拒绝；
     pre 只支持 tool 型检查（file/db_record/verifier 是效果断言，只能终态核对）。"""
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     out = validate_checks(
         [{'name': 'm-default', 'tool': 'bash', 'args_pattern': 'x'}])
     assert out[0]['mode'] == 'post'
@@ -2162,8 +2163,8 @@ def test_gate_terminal_check_skips_pre_mode(db_conn, user_id):
     终态"该做的做了没"对 deny 规则无意义）；post 行核对行为不变；
     inconclusive 的 expected 计数同样只数 post 行（仅 pre 期望的会话
     不再触发 fail-closed——过程拦截与终态核对互不纠缠）。"""
-    from utils.agent_ledger import (register_session_expectations,
-                                    check_session_gate)
+    from ai.batch.ledger import (register_session_expectations,
+                                        check_session_gate)
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     _set_child(db_conn, sid, status='running', opencode_session_id='oc-pre-x')
@@ -2620,7 +2621,7 @@ def test_orchestration_step_action_checks(db_conn, user_id):
     → 终态核对生效。"""
     from utils.orchestration_defs import publish_definition
     from utils import orchestration_engine as oe
-    from utils.agent_ledger import check_session_gate
+    from ai.batch.ledger import check_session_gate
 
     d = publish_definition('gate-test', description=None,
         nodes=[

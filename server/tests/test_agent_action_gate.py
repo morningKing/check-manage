@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from db import get_db                                    # noqa: E402
-from utils import agent_ledger                           # noqa: E402
+from ai.batch import ledger as agent_ledger                           # noqa: E402
 from ai.gate import action_check_extractor as action_check_extractor                 # noqa: E402
 
 # migrations 目录下文件名以数字开头,不能直接 import;走 app.py boot 同款动态加载。
@@ -179,7 +179,7 @@ def test_validate_checkpoint_defaults_and_errors():
 
 
 def test_check_applies_to_child_conditions():
-    from utils.agent_ledger import check_applies_to_child as applies
+    from ai.batch.ledger import check_applies_to_child as applies
     assert applies({}, 0, 'a.txt') is True                      # 无条件 → 全部生效
     check = {'apply_to': {'batch_seq': [0, 2]}}
     assert applies(check, 0, 'a.txt') is True
@@ -717,7 +717,7 @@ def test_wait_subtasks_drained_polls_until_converged(gate_fixture, monkeypatch):
                                 "WHERE id=%s", (f['child1'],))
             conn.commit()
 
-    monkeypatch.setattr('utils.agent_ledger.time.sleep', flip_when_polled)
+    monkeypatch.setattr('ai.batch.ledger.record.time.sleep', flip_when_polled)
     assert agent_ledger.wait_subtasks_drained(f['sid'], timeout_sec=10,
                                               poll_sec=0.01) is True
 
@@ -729,7 +729,7 @@ def test_wait_subtasks_drained_times_out(gate_fixture, monkeypatch):
             cur.execute("UPDATE ai_chat_subtasks SET status='running' "
                         "WHERE id=%s", (f['child2'],))
     conn.commit()
-    monkeypatch.setattr('utils.agent_ledger.time.sleep', lambda s: None)
+    monkeypatch.setattr('ai.batch.ledger.record.time.sleep', lambda s: None)
     assert agent_ledger.wait_subtasks_drained(f['sid'], timeout_sec=0) is False
 
 
@@ -914,7 +914,7 @@ def test_gate_retry_batch_flag_off_blocks_env(gate_fixture, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_validate_verifier_check_ok():
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     checks = validate_checks([{'name': '结论含标记', 'check_type': 'verifier',
                                'rubric': '最终回复必须包含 DONE-MARK'}])
     c = checks[0]
@@ -925,7 +925,7 @@ def test_validate_verifier_check_ok():
 
 
 def test_validate_verifier_rejects_tool_fields():
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     base = {'name': 'x', 'check_type': 'verifier', 'rubric': 'r'}
     with pytest.raises(ValueError, match='tool'):
         validate_checks([dict(base, tool='bash')])
@@ -936,7 +936,7 @@ def test_validate_verifier_rejects_tool_fields():
 
 
 def test_validate_verifier_requires_rubric():
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     with pytest.raises(ValueError, match='rubric'):
         validate_checks([{'name': 'x', 'check_type': 'verifier'}])
     with pytest.raises(ValueError, match='rubric'):
@@ -947,7 +947,7 @@ def test_validate_verifier_roundtrip_idempotent():
     """登记路径幂等：创建时归一化的形状（tool='verifier' 哨兵、rubric 在
     effect_spec 里）再次进 validate_checks 必须原样通过——派发登记会对
     落库形状再校验，不幂等会让所有经 API 创建的 verifier 批任务登记失败。"""
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     first = validate_checks([{'name': '结论含标记', 'check_type': 'verifier',
                               'rubric': '回复包含 MARK'}])
     again = validate_checks(first)
@@ -956,7 +956,7 @@ def test_validate_verifier_roundtrip_idempotent():
 
 def test_validate_verifier_malformed_effect_spec_is_400():
     """effect_spec 非字典真值必须 ValueError（路由转 400），不能 AttributeError（500）。"""
-    from utils.agent_ledger import validate_checks
+    from ai.batch.ledger import validate_checks
     with pytest.raises(ValueError, match='rubric'):
         validate_checks([{'name': 'x', 'check_type': 'verifier', 'effect_spec': 'oops'}])
 
@@ -1007,7 +1007,7 @@ def _seed_gate_session(db_conn, user_id, *, oc_sid):
 def test_gate_check_skips_verifier_expectations(db_conn, user_id):
     """verifier 期望不参与证据匹配——否则 args_text ~ '' 恒真、verifier 行
     被误判成 tool 核对。它的核对由引擎钩子（ai/batch/verifier）负责。"""
-    from utils.agent_ledger import register_session_expectations, check_session_gate
+    from ai.batch.ledger import register_session_expectations, check_session_gate
     from db import get_db
     sid = _seed_gate_session(db_conn, user_id, oc_sid='oc-vskip')
     n = register_session_expectations(
@@ -1023,7 +1023,7 @@ def test_gate_check_skips_verifier_expectations(db_conn, user_id):
 
 
 def test_expectation_desc_and_failure_message_for_verifier():
-    from utils.agent_ledger import _expectation_desc, gate_failure_message
+    from ai.batch.ledger import _expectation_desc, gate_failure_message
     row = {'name': '结论含标记', 'kind': 'verifier', 'check_type': 'verifier',
            'status': 'failed', 'reasons': ['缺少 DONE-MARK', '证据不足'],
            'evidence': '', 'min_count': 1}
@@ -1224,7 +1224,7 @@ class TestPostCheck:
             if mod is None:
                 continue
             if getattr(mod, 'get_db', None) is not None and (
-                    mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
+                    mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine') or mod_name.startswith('ai.batch.repo')
                     or mod_name == 'auth'):
                 try:
                     mod.get_db = db_module.get_db

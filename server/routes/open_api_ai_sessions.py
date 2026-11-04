@@ -19,7 +19,7 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, require_bound_key
 from routes.open_api_batches import MAX_PROMPT_CHARS, _validate_files
-from utils.batch_repo import get_max_files_per_batch
+from ai.batch.repo import get_max_files_per_batch
 from ai.sessions.ai_session_repo import cancel_session, create_session, get_session_for_owner
 from common.api_errors import CONFLICT, INVALID_ARGUMENT, NOT_FOUND, err, register_error_handlers
 from ai.batch.engine import get_worker

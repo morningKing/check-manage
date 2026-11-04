@@ -84,7 +84,7 @@ def test_create_rejects_foreign_path(client, mock_conn, mock_cursor):
 
 
 def test_create_rejects_too_many_files(client, mock_conn, mock_cursor):
-    from utils.batch_repo import MAX_FILES_PER_BATCH
+    from ai.batch.repo import MAX_FILES_PER_BATCH
     _auth_passes(mock_cursor)
     patch('routes.open_api_batches.get_max_files_per_batch',
           return_value=MAX_FILES_PER_BATCH).start()
@@ -186,7 +186,7 @@ def test_patch_forwards_callback_fields(client, mock_conn, mock_cursor):
                          'created_at': None, 'completed_at': None}}
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_batches._current_key', return_value=_key()), \
-         patch('utils.batch_repo.update_batch_config', return_value=updated) as uc:
+         patch('ai.batch.repo.update_batch_config', return_value=updated) as uc:
         resp = client.patch(f'{BASE}/b-1', headers=HDR,
                             json={'callbackUrl': 'https://example.com/hook',
                                   'callbackSecret': 's3cret'})

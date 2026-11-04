@@ -3,7 +3,7 @@ import traceback
 import uuid
 
 from db import get_db
-from utils import agent_ledger
+from ai.batch import ledger as agent_ledger
 from ai.sessions.ai_message_meta import meta_from_info, public_meta
 
 from .discovery import (discover_subtasks, subtask_status_from_messages,
@@ -242,7 +242,7 @@ class WorkerSubtasksMixin:
         running 且代数未变——retry/reexecute 换代后，旧 turn 的迟到进度快照
         不再写入，避免旧回合消息污染新回合的对话历史。"""
         if generation is not None:
-            from utils import batch_repo
+            from ai.batch import repo as batch_repo
             st = batch_repo.read_child_control_state(session_id)
             if st and (st['status'] != 'running'
                        or st['execution_generation'] != generation):

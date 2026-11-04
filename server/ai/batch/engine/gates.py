@@ -4,7 +4,7 @@ import os
 import secrets
 
 from db import get_db
-from utils import agent_ledger
+from ai.batch import ledger as agent_ledger
 from ai.batch import verifier as verifier
 
 from .facade import opencode_client

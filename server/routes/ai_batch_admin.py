@@ -15,7 +15,7 @@ from flask import Blueprint, jsonify, request, send_file
 
 from auth import require_permission, require_permission_sse
 from ai.batch.engine import get_worker
-from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
+from ai.batch.repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
                               admin_get_batch_owner, admin_get_child_messages,
                               admin_get_child_session, admin_list_batches,
                               admin_soft_delete_child, reexecute_child,
@@ -121,7 +121,7 @@ def child_perf(batch_id, sid):
     if sess is None:
         return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
     from db import get_db
-    from utils.perf_analysis import attempt_payload, resolve_session_runs
+    from ai.batch.perf import attempt_payload, resolve_session_runs
     with get_db() as conn:
         with conn.cursor() as cur:
             runs = resolve_session_runs(cur, [sid]).get(sid) or []

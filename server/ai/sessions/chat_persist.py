@@ -729,7 +729,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             # 动作账本与到位门禁（设计 M2）：回合收敛即落账并核对该会话期望。
             # best-effort 不阻断收尾；不过门只记期望行与日志（交互不阻断回合）。
             try:
-                from utils import agent_ledger as _al
+                from ai.batch import ledger as _al
                 _al.finalize_interactive_turn(sid, opencode_session_id, state,
                                               get_db=get_db)
             except Exception as _e:

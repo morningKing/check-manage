@@ -86,7 +86,7 @@ def test_append_rejects_missing_staged_file(client, mock_conn, mock_cursor, tmp_
 
 
 def test_append_rejects_too_many_files_in_one_call(client, mock_conn, mock_cursor):
-    from utils.batch_repo import MAX_FILES_PER_BATCH
+    from ai.batch.repo import MAX_FILES_PER_BATCH
     _auth_passes(mock_cursor)
     patch('routes.open_api_batches.get_max_files_per_batch',
           return_value=MAX_FILES_PER_BATCH).start()

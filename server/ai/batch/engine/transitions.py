@@ -132,7 +132,7 @@ class WorkerTransitionsMixin:
         由 CAS 的 WHERE 条件保证不匹配时 0 行。"""
         if generation is not None:
             return generation
-        from utils import batch_repo
+        from ai.batch import repo as batch_repo
         st = batch_repo.read_child_control_state(session_id)
         return (st or {}).get('execution_generation') or 0
 
@@ -143,7 +143,7 @@ class WorkerTransitionsMixin:
         redirect=True（来自 done/failed 写回）时按当前控制标志重定向到
         cancel/pause 落库；redirect=False（cancel/pause 写回自身未命中）只记
         日志即止，绝不递归。"""
-        from utils import batch_repo
+        from ai.batch import repo as batch_repo
         st = batch_repo.read_child_control_state(session_id)
         if st is None:
             return  # 行已消失（批被删，FK CASCADE）
@@ -173,7 +173,7 @@ class WorkerTransitionsMixin:
         """完成落库。CAS（running+generation+无控制标志）命中时同一事务完成
         计数与批次状态重算；未命中按控制标志重定向或忽略，**不**重复计数。"""
         _require_fencing(fencing_token)
-        from utils import batch_repo
+        from ai.batch import repo as batch_repo
         reparked = batch_repo.try_repark_transition(
             session_id, generation=self._resolve_generation(session_id, generation),
             fencing_token=fencing_token)
@@ -211,7 +211,7 @@ class WorkerTransitionsMixin:
                      gate_error: str | None = None,
                      fencing_token: int | None = None):
         _require_fencing(fencing_token)
-        from utils import batch_repo
+        from ai.batch import repo as batch_repo
         from ai.batch import execution_audit as execution_audit
         reparked = batch_repo.try_repark_transition(
             session_id, generation=self._resolve_generation(session_id, generation),
@@ -256,7 +256,7 @@ class WorkerTransitionsMixin:
         a deliberate cancel apart from a genuine error. CAS 带
         cancel_requested=true 期望（spec §6.1：取消按取消条件收口）。"""
         _require_fencing(fencing_token)
-        from utils import batch_repo
+        from ai.batch import repo as batch_repo
         from ai.batch import execution_audit as execution_audit
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='CANCELLED')
@@ -285,7 +285,7 @@ class WorkerTransitionsMixin:
         failed 计数**（暂停不是失败，批次还能整体 resume），error_message 留空。
         CAS 带 pause_requested=true 且 cancel 优先（spec §4.2：cancel > pause）。"""
         _require_fencing(fencing_token)
-        from utils import batch_repo
+        from ai.batch import repo as batch_repo
         from ai.batch import execution_audit as execution_audit
         execution_audit.finish_latest_running(session_id, 'stopped',
                                               error_code='PAUSED')
@@ -305,7 +305,7 @@ class WorkerTransitionsMixin:
         不得自动重放。计入 failed 聚合（与 cancelled 同桶），子任务行保留
         字面 'needs_review' 状态供管理面展示。"""
         _require_fencing(fencing_token)
-        from utils import batch_repo
+        from ai.batch import repo as batch_repo
         from ai.batch import execution_audit as execution_audit
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='NEEDS_REVIEW',

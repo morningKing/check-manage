@@ -102,7 +102,7 @@ def _batch(db_conn, bid):
 # ---------------------------------------------------------------------------
 
 def test_pause_batch_flags_children_and_marks_batch(db_conn, user_id, claim_guard):
-    from utils.batch_repo import pause_batch
+    from ai.batch.repo import pause_batch
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     result = pause_batch(user_id, bid)
     assert result['batch']['status'] == 'paused'   # 即时反馈
@@ -114,7 +114,7 @@ def test_pause_batch_flags_children_and_marks_batch(db_conn, user_id, claim_guar
 
 
 def test_worker_sweep_lands_paused_without_failed_count(db_conn, user_id, claim_guard):
-    from utils.batch_repo import pause_batch
+    from ai.batch.repo import pause_batch
     from ai.batch.engine import get_worker
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     pause_batch(user_id, bid)
@@ -128,7 +128,7 @@ def test_worker_sweep_lands_paused_without_failed_count(db_conn, user_id, claim_
 
 
 def test_resume_batch_resumes_paused_without_counter_change(db_conn, user_id, claim_guard):
-    from utils.batch_repo import pause_batch, resume_batch
+    from ai.batch.repo import pause_batch, resume_batch
     from ai.batch.engine import get_worker
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     # 一个暂停前已开跑（有 oc 会话 → resume 应置 continue_prompt）
@@ -150,7 +150,7 @@ def test_resume_batch_resumes_paused_without_counter_change(db_conn, user_id, cl
 
 
 def test_cancel_batch_converts_paused_children(db_conn, user_id, claim_guard):
-    from utils.batch_repo import pause_batch, cancel_batch
+    from ai.batch.repo import pause_batch, cancel_batch
     from ai.batch.engine import get_worker
     bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     pause_batch(user_id, bid)

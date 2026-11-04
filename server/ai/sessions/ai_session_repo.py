@@ -12,7 +12,7 @@ import psycopg2.extras
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
-from utils.batch_repo import _text_from_content, get_session_usage
+from ai.batch.repo import _text_from_content, get_session_usage
 
 
 def create_session(user_id: str, *, prompt: str,

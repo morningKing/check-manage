@@ -31,7 +31,7 @@ import requests
 
 from db import get_db
 from config import AI_WORKSPACE_ROOT
-from utils import agent_ledger
+from ai.batch import ledger as agent_ledger
 from utils.workspace import (create_session_workspace, _rm_force,
                              batch_workspace_root, legacy_batch_workspace_root,
                              resolve_batch_data_path)
@@ -549,7 +549,7 @@ class WorkerRunnerMixin:
                 from ai.batch import execution_checkpoint as execution_checkpoint
                 usage = None
                 try:
-                    from utils.batch_repo import get_session_usage
+                    from ai.batch.repo import get_session_usage
                     usage = get_session_usage(sid)
                 except Exception:
                     usage = None

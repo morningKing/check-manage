@@ -426,7 +426,9 @@ def _rebind_module_get_db_to_real():
     # real ThreadedConnectionPool against the dev DB.
     if hasattr(db_module.pool, '_mock_name'):
         db_module.pool = None
-    for mod_name in ('ai.sessions.prompt_template', 'utils.batch_repo',
+    for mod_name in ('ai.sessions.prompt_template',
+                     'ai.batch.repo.queries', 'ai.batch.repo.config',
+                     'ai.batch.repo.lifecycle', 'ai.batch.repo.children',
                      'ai.batch.engine.lifecycle', 'ai.batch.engine.worker',
                      'ai.batch.engine.runner', 'ai.batch.engine.gates',
                      'ai.batch.engine.subtasks', 'ai.batch.engine.transitions',

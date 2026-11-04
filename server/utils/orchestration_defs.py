@@ -72,7 +72,7 @@ def validate_definition(nodes, edges) -> tuple[list, list]:
         # 400，不静默丢弃带病入库）；登记时的二次校验/PG 正则核对由
         # agent_ledger.validate_checks 与 register_session_expectations 承担
         if node['action_checks']:
-            from utils.agent_ledger import validate_checks
+            from ai.batch.ledger import validate_checks
             try:
                 validate_checks(node['action_checks'])
             except ValueError as e:

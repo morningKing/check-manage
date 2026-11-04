@@ -14,7 +14,7 @@ import re
 import requests
 
 from ai.sessions.ai_query import get_ai_settings, get_http_session
-from utils.agent_ledger import validate_checks
+from ai.batch.ledger import validate_checks
 
 log = logging.getLogger(__name__)
 

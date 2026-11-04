@@ -1584,7 +1584,7 @@ def skill_fit_diagnose(result_id):
 @require_permission('admin.ai_chat_admin')
 def perf_overview():
     from db import get_db
-    from utils.perf_analysis import definition_overview
+    from ai.batch.perf import definition_overview
     return jsonify({'defs': definition_overview(get_db)})
 
 
@@ -1592,7 +1592,7 @@ def perf_overview():
 @require_permission('admin.ai_chat_admin')
 def perf_def_tasks(kind, name):
     from db import get_db
-    from utils.perf_analysis import list_definition_tasks
+    from ai.batch.perf import list_definition_tasks
     try:
         limit = min(max(int(request.args.get('limit') or 50), 1), 200)
     except (TypeError, ValueError):
@@ -1605,7 +1605,7 @@ def perf_def_tasks(kind, name):
 def perf_def_cause_distribution(kind, name):
     """定义级慢因分布：四段覆盖加总 + 主导慢因计数 + 逐任务归属（点击筛选）。"""
     from db import get_db
-    from utils.perf_analysis import definition_cause_distribution
+    from ai.batch.perf import definition_cause_distribution
     try:
         limit = min(max(int(request.args.get('limit') or 200), 1), 200)
     except (TypeError, ValueError):
@@ -1617,7 +1617,7 @@ def perf_def_cause_distribution(kind, name):
 @require_permission('admin.ai_chat_admin')
 def perf_attempt(aid):
     from db import get_db
-    from utils.perf_analysis import attempt_payload
+    from ai.batch.perf import attempt_payload
     # 装配抽到 perf_analysis.attempt_payload（2026-10-15）：批任务子会话
     # 性能报告入口共用同一响应形状，两处不再分叉。
     payload = attempt_payload(get_db, aid)
@@ -1634,7 +1634,7 @@ def perf_reconcile_task_durations(aid):
     ——性能分解等待段画不出来。从 OC REST 重取消息走同一条 upsert 补齐。
     会话已删/OC 不可达返回 skipped，不报错。"""
     from db import get_db
-    from utils.agent_ledger import reconcile_task_durations
+    from ai.batch.ledger import reconcile_task_durations
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT session_id FROM ai_execution_attempts WHERE id = %s",
@@ -1653,8 +1653,8 @@ def perf_reconcile_task_durations(aid):
 @require_permission('admin.ai_chat_admin')
 def perf_attempt_diagnosis(aid):
     from db import get_db
-    from utils.perf_analysis import (load_attempt_metrics, diagnose,
-                                     definition_p50, _def_of_attempt)
+    from ai.batch.perf import (load_attempt_metrics, diagnose,
+                                         definition_p50, _def_of_attempt)
     m = load_attempt_metrics(get_db, aid)
     if not m:
         return jsonify({'error': 'attempt not found'}), 404
@@ -1671,7 +1671,7 @@ def perf_attempt_diagnosis(aid):
 @require_permission('admin.ai_chat_admin')
 def perf_slow_tasks():
     from db import get_db
-    from utils.perf_analysis import list_slow_tasks
+    from ai.batch.perf import list_slow_tasks
     try:
         limit = min(max(int(request.args.get('limit') or 10), 1), 50)
     except (TypeError, ValueError):

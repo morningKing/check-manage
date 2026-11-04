@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.perf_analysis import (coverage_split, load_attempt_metrics,
+from ai.batch.perf import (coverage_split, load_attempt_metrics,
                                  list_definition_tasks, list_slow_tasks,
                                  definition_overview, diagnose,
                                  definition_cause_distribution, definition_p50)
@@ -385,8 +385,8 @@ class TestAttemptMetrics:
         assert turns[1]['toolCount'] == 1
 
     def test_tool_calls_cap_truncation(self, db_conn, user_id, monkeypatch):
-        from utils import perf_analysis as pf
-        monkeypatch.setattr(pf, 'TOOL_CALLS_MAX', 3)
+        from ai.batch.perf import report as pf_report
+        monkeypatch.setattr(pf_report, 'TOOL_CALLS_MAX', 3)
         _bid, _sid, aid = _seed_perf(db_conn, user_id)
         with db_conn.cursor() as cur:
             for i in range(5):
@@ -847,7 +847,7 @@ def pf_client(db_conn):
         if mod is None:
             continue
         if getattr(mod, 'get_db', None) is not None and (
-                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine')
+                mod_name.startswith('routes.') or mod_name.startswith('utils.') or mod_name.startswith('ai.batch.engine') or mod_name.startswith('ai.batch.repo')
                 or mod_name == 'auth'):
             try:
                 mod.get_db = db_module.get_db
@@ -1000,7 +1000,7 @@ class TestToolDurationSchema:
 # Skill 调用耗时推导（方案 2：runtime 精确 + 启发式 inferred，纯读）
 # ---------------------------------------------------------------------------
 
-from utils.perf_analysis import derive_skill_durations  # noqa: E402
+from ai.batch.perf import derive_skill_durations  # noqa: E402
 
 
 def _seed_invocation(db_conn, aid, sid, name, *, source='runtime',

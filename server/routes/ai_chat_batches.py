@@ -14,8 +14,8 @@ from auth import login_required, login_required_sse
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                              cleanup_batch_workspaces, validate_staged_files,
                              WorkspacePathError)
-from utils import agent_ledger
-from utils.batch_repo import (
+from ai.batch import ledger as agent_ledger
+from ai.batch.repo import (
     append_to_batch,
     get_max_files_per_batch,
     cancel_batch,
@@ -699,8 +699,8 @@ def submit_batch_command(batch_id):
     幂等键缺省由 (type, batch, requester) 派生；同步应用（既有 HTTP 语义，
     pause 立即生效——实现取舍见 utils/execution_commands.py docstring）。"""
     from ai.batch import execution_commands as execution_commands
-    from utils.batch_repo import (pause_batch, resume_batch, cancel_batch,
-                                  reset_failed_to_pending)
+    from ai.batch.repo import (pause_batch, resume_batch, cancel_batch,
+                                      reset_failed_to_pending)
     body = request.get_json(silent=True) or {}
     command_type = (body.get('type') or body.get('commandType') or '').strip()
     idem = (request.headers.get('Idempotency-Key') or '').strip()
@@ -809,7 +809,7 @@ def batch_command_status(batch_id, command_id):
 def force_stop(batch_id):
     """P1 §6.4 `force_stop`（缺口补齐 4）：drain 超时后的管理员强制通道。
     立即取消全部非终态子任务（fencing+1 使旧执行体失效），批次落 failed。"""
-    from utils.batch_repo import force_stop_batch
+    from ai.batch.repo import force_stop_batch
     from ai.batch import execution_commands as execution_commands
     user = g.current_user
     if user.get('role') != 'admin':

@@ -85,7 +85,7 @@ def stress_db(stack):
 
 def register_expectations(stack, sid, checks) -> int:
     """生产登记函数 + 压测库连接：与路由/引擎同一条登记代码路径。"""
-    from utils import agent_ledger
+    from ai.batch import ledger as agent_ledger
     getdb = stress_db(stack)
     return agent_ledger.register_session_expectations(
         sid, checks, source='stress', get_db=getdb)

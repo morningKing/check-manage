@@ -62,7 +62,7 @@ def _seed_batch(db_conn, user_id, *, reuse=None, oc_sid=None):
 # ---------------------------------------------------------------------------
 
 def test_validate_subagent_reuse():
-    from utils.batch_repo import validate_subagent_reuse
+    from ai.batch.repo import validate_subagent_reuse
     assert validate_subagent_reuse(None) == []
     assert validate_subagent_reuse([]) == []
     assert validate_subagent_reuse(['dev', ' dev ', 'dev']) == ['dev']
@@ -80,7 +80,7 @@ def test_validate_subagent_reuse():
 # ---------------------------------------------------------------------------
 
 def test_create_and_update_subagent_reuse(db_conn, user_id):
-    from utils.batch_repo import create_batch, update_batch_config
+    from ai.batch.repo import create_batch, update_batch_config
     out = create_batch(user_id, name='sru', prompt='p', template_id=None,
                        files=[], subagent_reuse=['dev', 'reviewer'])
     bid = out['batch']['id']

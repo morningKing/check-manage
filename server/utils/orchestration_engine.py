@@ -555,8 +555,8 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
                     try:
                         cur.execute("SAVEPOINT orch_action_checks")
                         from contextlib import contextmanager as _cm
-                        from utils.agent_ledger import (
-                            register_session_expectations)
+                        from ai.batch.ledger import (
+                                                    register_session_expectations)
 
                         @_cm
                         def _same_conn():
@@ -758,7 +758,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     elif child_status == 'completed' and ctype == 'db_record':
         # 复用动作账本的 db-record 证据通道（与动作门禁同一事实源）
         try:
-            from utils import agent_ledger as _al
+            from ai.batch import ledger as _al
             _eff = (contract.get('effect_spec')
                     or {'collection': contract.get('collection'),
                         'filter': contract.get('filter') or {}})

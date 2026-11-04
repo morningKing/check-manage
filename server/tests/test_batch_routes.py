@@ -30,7 +30,7 @@ def setup_app(db_conn):
     # `patch.stop()` only restores `db.get_db`, not the dangling binding in
     # the importer. Rebind explicitly so we hit the real DB.
     import db as db_module
-    import utils.batch_repo as batch_repo
+    from ai.batch import repo as batch_repo
     from ai.batch.engine import (lifecycle as engine_lifecycle,
                                  worker as engine_worker,
                                  runner as engine_runner,
@@ -38,8 +38,10 @@ def setup_app(db_conn):
                                  subtasks as engine_subtasks,
                                  transitions as engine_transitions)
     db_module.pool = None  # force the real pool to be (re)created
-    batch_repo.get_db = db_module.get_db
-    for _mod in (engine_lifecycle, engine_worker, engine_runner,
+    # batch_repo 拆包（批次4c）：get_db 绑定按读者叶子逐个重绑
+    for _mod in (batch_repo.queries, batch_repo.config,
+                 batch_repo.lifecycle, batch_repo.children,
+                 engine_lifecycle, engine_worker, engine_runner,
                  engine_gates, engine_subtasks, engine_transitions):
         _mod.get_db = db_module.get_db
 

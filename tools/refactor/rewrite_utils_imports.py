@@ -124,6 +124,10 @@ MAPPING = {
     'subtask_repo': 'ai.batch.subtask_repo',
     # ---- batch 4b: ai/batch/engine/ ----
     'batch_engine': 'ai.batch.engine',
+    # ---- batch 4c: ai/batch/{repo,ledger,perf}/ ----
+    'batch_repo': 'ai.batch.repo',
+    'agent_ledger': 'ai.batch.ledger',
+    'perf_analysis': 'ai.batch.perf',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

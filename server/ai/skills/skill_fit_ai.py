@@ -26,7 +26,7 @@ import requests
 import yaml
 
 from ai.sessions.ai_query import get_ai_settings, get_http_session
-from utils.agent_ledger import validate_pg_regex
+from ai.batch.ledger import validate_pg_regex
 from ai.skills.skill_fit import match_steps
 from db import get_db as _default_get_db
 

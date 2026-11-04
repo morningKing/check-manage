@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import agent_ledger
+from ai.batch import ledger as agent_ledger
 from ai.batch import verifier as verifier  # noqa: E402 —— 动作门禁/判官接线用例
 
 
@@ -1043,7 +1043,7 @@ def test_restart_audit_resets_orphaned_running(user_id, db_conn, monkeypatch):
 def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
     """create_batch persists provision_repo/ref and the worker reads them via
     _fetch_batch_context (so the provisioning step gets them per run)."""
-    from utils.batch_repo import create_batch
+    from ai.batch.repo import create_batch
     from ai.batch.engine import BatchWorker
     data = create_batch(
         user_id, name='prov-test', prompt='do', template_id=None,
@@ -1279,7 +1279,7 @@ def test_dispatch_tick_noop_when_no_free_slots():
 def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_path):
     """When batch has agent set, send_message receives that agent."""
     from ai.batch import engine as eng
-    from utils.batch_repo import create_batch
+    from ai.batch.repo import create_batch
     from unittest.mock import MagicMock
 
     staging = tmp_path / 'batch-staging' / 'x'
@@ -2035,7 +2035,7 @@ def _seed_gate_child(db_conn, user_id, *, oc_sid, with_reply=False):
 def test_check_action_gate_merges_verifier(db_conn, user_id, monkeypatch):
     from ai.batch.engine import BatchWorker
     from ai.batch import verifier as verifier_mod
-    from utils.agent_ledger import register_session_expectations, gate_failure_message
+    from ai.batch.ledger import register_session_expectations, gate_failure_message
     from db import get_db
     w = BatchWorker()
     # 零开销路径：无 verifier 期望 → run_verifier 不被调用
@@ -2065,7 +2065,7 @@ def test_check_action_gate_verifier_error_fail_closed(db_conn, user_id, monkeypa
     """verifier 基础设施故障 → gate inconclusive → 引擎既有分支落 failed。"""
     from ai.batch.engine import BatchWorker
     from ai.batch import verifier as verifier_mod
-    from utils.agent_ledger import register_session_expectations
+    from ai.batch.ledger import register_session_expectations
     from db import get_db
     w = BatchWorker()
     sid = _seed_gate_child(db_conn, user_id, oc_sid='oc-vg2', with_reply=True)
@@ -2095,7 +2095,7 @@ def test_delegation_gate_fills_materials_from_db(db_conn, user_id, monkeypatch):
     import json as _json
     from ai.batch.engine import BatchWorker
     from ai.batch import verifier as _v
-    from utils.agent_ledger import register_session_expectations
+    from ai.batch.ledger import register_session_expectations
     from db import get_db
     w = BatchWorker()
     sid = _seed_gate_child(db_conn, user_id, oc_sid=f'oc-dg-{uuid.uuid4().hex[:8]}',
