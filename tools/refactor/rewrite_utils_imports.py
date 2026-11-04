@@ -11,6 +11,11 @@ Spec: docs/superpowers/specs/2026-11-03-backend-restructure-design.md SS6
 - Idempotent: rewritten files no longer reference mapped modules.
 - A chain binding colliding with file-local names -> file reported for
   manual handling (exit 2); safe files still rewritten.
+- Multi-statement rewrites inherit the host line's indent and terminator
+  (CRLF/LF), and analyze() assembles + re-parses every edit set before
+  returning it — so `--check` previews exactly what the run would do and
+  an assembly that fails validation is reported as MANUAL in BOTH modes
+  (never "0 manual" at check time, exit 2 at apply time).
 
 Usage (repo root):
   python tools/refactor/rewrite_utils_imports.py           # rewrite in place
@@ -182,6 +187,51 @@ def _alias_text(a):
     return a.name + (' as ' + a.asname if a.asname else '')
 
 
+def _host_line_ctx(src, start, end):
+    """(indent, terminator) of the physical line hosting a statement span.
+
+    Statements are spanned from their keyword, i.e. AFTER the physical
+    indent, so `indent` = whitespace between the line start and `start`.
+    `term` = the host line's terminator (CRLF or LF), taken from the line
+    itself (found after `end`), falling back to the previous line when the
+    statement sits on the last line without a trailing newline.
+    """
+    ls = src.rfind('\n', 0, start) + 1
+    indent = src[ls:start]
+    nl = src.find('\n', end)
+    if nl != -1:
+        term = '\r\n' if nl and src[nl - 1:nl] == '\r' else '\n'
+    else:
+        nl = src.rfind('\n', 0, start)
+        term = '\r\n' if nl > 0 and src[nl - 1:nl] == '\r' else '\n'
+    return indent, term
+
+
+def _replace_block(lines, indent, term):
+    """Replacement text for a statement span that starts AFTER the physical
+    indent: the first line inherits the indent in place, every continuation
+    line is re-prefixed with it, and lines are joined with the host
+    terminator (CRLF/LF kept consistent within the generated block).
+
+    `indent` is whatever sits between the line start and the keyword —
+    normally whitespace; for a statement mid-line (semicolon chain) it is
+    the preceding code, and the assembled text then fails validation,
+    reporting the file for manual handling (fail-closed).
+    """
+    out = lines[0]
+    for p in lines[1:]:
+        out += term + indent + p
+    return out
+
+
+def _prefix_block(lines, indent, term):
+    """Text inserted BEFORE an existing statement at a span that starts
+    after the indent (pending chain-binding block): like _replace_block,
+    plus a trailing term+indent so the following statement keeps its
+    column instead of dedenting to column 0."""
+    return _replace_block(lines, indent, term) + term + indent
+
+
 def _local_binding_names(tree):
     """Names the file binds in ANY scope — conservative shadow-collision set.
 
@@ -321,6 +371,16 @@ def analyze(path):
                 parts.append('import ' + ', '.join(plain))
             text = '' if not parts else '\n'.join(parts) + suffix
         if text != chunk:
+            if '\n' in text:
+                # Multi-statement expansion of an indented import: the span
+                # starts at the keyword, so the first line inherits the
+                # physical indent — re-prefix it on every continuation line
+                # and keep the host file's terminator (CRLF/LF) consistent.
+                # Normalize any CRLF carried over from a multi-line source
+                # chunk before rejoining, to avoid doubled CR.
+                indent, term = _host_line_ctx(src, span[0], span[1])
+                text = _replace_block(
+                    text.replace('\r\n', '\n').split('\n'), indent, term)
             import_edits.append((span[0], span[1], text))
 
     # ---- chain bindings not provided by any rewritten import ----
@@ -342,22 +402,36 @@ def analyze(path):
                         'name(s): %s' % (rel, ', '.join(clashes))]
     pending = [_binding_line(m) for m in pending_mods]
     if pending:
-        blk = '\n'.join(pending) + '\n'
         host = import_edits[0] if import_edits else None
         if host is not None and host[0] == min(
                 (s for s, _, _ in import_edits), default=None):
+            # Prepend into the first import edit: every block line carries
+            # the host indent and the block ends with term+indent so the
+            # host text keeps its column.
+            indent, term = _host_line_ctx(src, host[0], host[1])
+            blk = _prefix_block(pending, indent, term)
             import_edits[0] = (host[0], host[1], blk + host[2])
         else:
             first_import = import_nodes[0][0]
-            pos = _stmt_span(src, first_import)[0]
-            import_edits.append((pos, pos, blk))
+            s0, e0 = _stmt_span(src, first_import)
+            indent, term = _host_line_ctx(src, s0, e0)
+            blk = _prefix_block(pending, indent, term)
+            import_edits.append((s0, s0, blk))
     edits.extend(import_edits)
+    if edits and _assemble(src, edits) is None:
+        # Preview what apply would reject (overlap or non-parsing assembly):
+        # report it HERE so --check and the actual run always agree — the
+        # file drops out of the rewrite set and is counted as manual in
+        # both modes, instead of "0 manual" at --check time and exit 2 at
+        # apply time.
+        return [], ['%s: rewrite failed validation, left unchanged' % rel]
     return edits, problems
 
 
-def apply_edits(path, edits):
-    with open(path, 'r', encoding='utf-8-sig', newline='') as f:
-        src = f.read()
+def _assemble(src, edits):
+    """Apply edits (reverse order) to src; -> new text, or None when the
+    edit set overlaps or the assembled text does not parse (fail-closed:
+    callers leave the file completely untouched)."""
     edits = sorted(edits, key=lambda x: (x[0], x[1]))
     for (s1, e1, _), (s2, e2, _) in zip(edits, edits[1:]):
         if e1 > s2:
@@ -370,6 +444,12 @@ def apply_edits(path, edits):
     except SyntaxError:
         return None
     return out
+
+
+def apply_edits(path, edits):
+    with open(path, 'r', encoding='utf-8-sig', newline='') as f:
+        src = f.read()
+    return _assemble(src, edits)
 
 
 def main():

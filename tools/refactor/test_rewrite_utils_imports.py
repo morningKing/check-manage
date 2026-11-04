@@ -6,10 +6,11 @@ Run from anywhere:
     python tools/refactor/test_rewrite_utils_imports.py
 Exit 0 = all cases pass; 1 = at least one failure.
 
-Synthetic files are written (LF endings) into a temp dir created INSIDE the
-repo — analyze() only accepts paths under REPO — and removed afterwards.
-The end-to-end main() checks temporarily repoint the module's SERVER and
-SCAN_* constants at the temp dir and restore them.
+Synthetic files are written (LF endings; one CRLF case locks terminator
+preservation) into a temp dir created INSIDE the repo — analyze() only
+accepts paths under REPO — and removed afterwards. The end-to-end main()
+checks temporarily repoint the module's SERVER and SCAN_* constants (and,
+for the validation-preview case, MAPPING) at the temp dir and restore them.
 """
 import shutil
 import sys
@@ -45,21 +46,24 @@ CASES = [
      '\n'
      'permissions.check()\n'
      'rbac_guard.guard(a, b)\n'),
+    # NOTE: uses synthetic never-mapped names — field_indexes /
+    # page_config_relations entered MAPPING in batch 1, which silently
+    # turned the original batch-0 expectations stale (suite red since).
     ('chain_unmapped_kept',
      'import utils\n'
-     'utils.field_indexes.sync()\n'
-     'utils.page_config_relations.get()\n',
+     'utils.totally_unmapped_mod.sync()\n'
+     'utils.totally_unmapped_other.get()\n',
      'import utils\n'
-     'utils.field_indexes.sync()\n'
-     'utils.page_config_relations.get()\n'),
+     'utils.totally_unmapped_mod.sync()\n'
+     'utils.totally_unmapped_other.get()\n'),
     ('chain_mixed_mapped_and_unmapped',
      'import utils\n'
      'utils.permissions.check()\n'
-     'utils.field_indexes.sync()\n',
+     'utils.totally_unmapped_mod.sync()\n',
      'from common import permissions as permissions\n'
      'import utils\n'
      'permissions.check()\n'
-     'utils.field_indexes.sync()\n'),
+     'utils.totally_unmapped_mod.sync()\n'),
     ('from_bare_multi_name',
      'from utils import permissions, log_tail, json\n'
      'permissions.check()\n',
@@ -114,16 +118,19 @@ CASES = [
      '\n'
      'x = "中文注释"\n'
      'permissions.check(x)  # 中文调用\n'),
-    ('deferred_reload_point_untouched',
+    # was written unmapped in batch 0 ("untouched"); page_config_relations
+    # entered MAPPING in batch 1 — the reload pattern now rewrites, binding
+    # name stays the old module name (reload() target follows the binding).
+    ('deferred_reload_point_rewritten',
      'def reload_mod():\n'
      '    import utils.page_config_relations\n'
      '    importlib.reload(utils.page_config_relations)\n'
      '    from utils.page_config_relations import get_f as g\n'
      '    return g\n',
      'def reload_mod():\n'
-     '    import utils.page_config_relations\n'
-     '    importlib.reload(utils.page_config_relations)\n'
-     '    from utils.page_config_relations import get_f as g\n'
+     '    from data import page_config_relations as page_config_relations\n'
+     '    importlib.reload(page_config_relations)\n'
+     '    from data.page_config_relations import get_f as g\n'
      '    return g\n'),
     # ---- binding already emitted by a rewritten import: NO false positive ----
     ('emitted_binding_not_flagged',
@@ -179,6 +186,37 @@ CASES = [
      '\n'
      'permissions.check()\n',
      None),
+    # ---- fix round 1: multi-name expansion of an INDENTED import inherits
+    # ---- the host line's indent (batch 4a: 9 sites across 3 files exited 2
+    # ---- because continuation lines landed at column 0)
+    ('indent_multiname_all_mapped',
+     'import os\n'
+     '\n'
+     'def f():\n'
+     '    from utils import permissions, log_tail\n'
+     '    return permissions, log_tail\n',
+     'import os\n'
+     '\n'
+     'def f():\n'
+     '    from common import permissions as permissions\n'
+     '    from common import log_tail as log_tail\n'
+     '    return permissions, log_tail\n'),
+    ('indent_multiname_mixed_unmapped',
+     'def g():\n'
+     '    from utils import permissions, totally_unmapped_mod\n'
+     '    return permissions\n',
+     'def g():\n'
+     '    from utils import totally_unmapped_mod\n'
+     '    from common import permissions as permissions\n'
+     '    return permissions\n'),
+    ('indent_importline_multiname',
+     'def h():\n'
+     '    import utils.permissions as p, utils.log_tail as lt\n'
+     '    return p, lt\n',
+     'def h():\n'
+     '    from common import permissions as p\n'
+     '    from common import log_tail as lt\n'
+     '    return p, lt\n'),
 ]
 
 COLLIDE_SRC = CASES[13][1]  # shadow_function_local_store
@@ -227,6 +265,70 @@ def run_main_exit_codes(scratch):
         sys.argv = old_argv
 
 
+def run_crlf_multiname(scratch):
+    """fix round 1 (i)b: a CRLF host file's generated block keeps CRLF —
+    no bare LF may be introduced by the expansion."""
+    path = Path(scratch) / 'crlf_multiname.py'
+    src = ('def g():\r\n'
+           '    from utils import permissions, totally_unmapped_mod\r\n'
+           '    return permissions\r\n')
+    _write(path, src)
+    edits, probs = rw.analyze(path)
+    assert not probs, 'unexpected problems %r' % (probs,)
+    out = rw.apply_edits(path, edits)
+    expected = ('def g():\r\n'
+                '    from utils import totally_unmapped_mod\r\n'
+                '    from common import permissions as permissions\r\n'
+                '    return permissions\r\n')
+    assert out == expected, 'expected %r\n  got      %r' % (expected, out)
+    assert out.count('\n') == out.count('\r\n'), \
+        'bare LF introduced into CRLF file'
+    assert _read(path) == src, 'analyze/apply must not touch disk'
+
+
+def run_analyze_validation_preview(scratch):
+    """fix round 1 (ii): analyze must reject at preview time what apply would
+    reject at run time — no edits, a 'rewrite failed validation' problem, and
+    --check exits 2 (MANUAL) with the file untouched."""
+    path = Path(scratch) / 'validation_fail.py'
+    src = ('def f():\n'
+           '    from utils import alpha\n'
+           '    return alpha\n')
+    _write(path, src)
+    saved_map = rw.MAPPING
+    saved_srv = (rw.SERVER, rw.SCAN_FILES, rw.SCAN_DIRS)
+    old_argv = sys.argv
+    try:
+        # 'class' is a keyword: the generated `from pkg.class import class
+        # as alpha` can never parse — a deterministic apply-validation
+        # failure simulation.
+        rw.MAPPING = {'alpha': 'pkg.class'}
+        edits, probs = rw.analyze(path)
+        assert not edits, 'validation failure must yield no edits: %r' % (edits,)
+        assert any('rewrite failed validation' in p and 'validation_fail.py' in p
+                   for p in probs), \
+            'analyze must report the validation failure: %r' % (probs,)
+        assert _read(path) == src, 'file must stay untouched'
+
+        # end-to-end: --check previews the MANUAL (exit 2), same message.
+        rw.SERVER = Path(scratch)
+        rw.SCAN_FILES, rw.SCAN_DIRS = ('validation_fail.py',), ()
+        sys.argv = ['rewrite_utils_imports', '--check']
+        assert rw.main() == 2, '--check must preview the MANUAL (exit 2)'
+        assert _read(path) == src, '--check must not touch the file'
+    finally:
+        rw.MAPPING = saved_map
+        rw.SERVER, rw.SCAN_FILES, rw.SCAN_DIRS = saved_srv
+        sys.argv = old_argv
+
+
+DEDICATED_CHECKS = (
+    ('main_exit_codes', run_main_exit_codes),
+    ('crlf_multiname_indent', run_crlf_multiname),
+    ('analyze_validation_preview', run_analyze_validation_preview),
+)
+
+
 def main():
     scratch = tempfile.mkdtemp(dir=str(rw.REPO))
     failures = 0
@@ -238,15 +340,16 @@ def main():
             except AssertionError as e:
                 failures += 1
                 print('FAIL %s: %s' % (name, e))
-        try:
-            run_main_exit_codes(scratch)
-            print('PASS main_exit_codes')
-        except AssertionError as e:
-            failures += 1
-            print('FAIL main_exit_codes: %s' % e)
+        for name, fn in DEDICATED_CHECKS:
+            try:
+                fn(scratch)
+                print('PASS %s' % name)
+            except AssertionError as e:
+                failures += 1
+                print('FAIL %s: %s' % (name, e))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    total = len(CASES) + 1
+    total = len(CASES) + len(DEDICATED_CHECKS)
     print('%d/%d passed' % (total - failures, total))
     return 1 if failures else 0
 
