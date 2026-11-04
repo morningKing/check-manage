@@ -28,7 +28,7 @@ from ai.batch.repo import (append_to_batch, cancel_batch,
 from common.filename import safe_filename
 from common.operation_log import log_api_operation
 # 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
-# rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
+# rfile.read() 之前拦截），两处各写一遍必然漂移。见 common/upload_limits.py。
 from common.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
                                  MAX_UPLOAD_TOTAL_BYTES, body_limit_for_path)
 from projects.workspace import (batch_staging_dir, batch_workspace_root,
@@ -65,7 +65,7 @@ def _guard_request_body_size():
     ⚠️ 这道门只覆盖直连后端 / 经 Vite 开发代理的请求。生产入口 `proxy.py` 在
     转发前就把整个 body 读进代理进程内存（`self.rfile.read(content_length)`），
     发生在本钩子之前 —— 所以 `proxy.py` 里有一道**同源**的前置门（共用
-    `utils/upload_limits.py` 的数值），两处必须都在。
+    `common/upload_limits.py` 的数值），两处必须都在。
     """
     limit = body_limit_for_path(request.path) or MAX_JSON_BODY_BYTES
     length = request.content_length
@@ -87,7 +87,7 @@ def _current_key() -> dict:
 
 
 def _workspace_root() -> str:
-    # Unified with config.AI_WORKSPACE_ROOT (see utils.workspace); kept as a
+    # Unified with config.AI_WORKSPACE_ROOT (see projects.workspace); kept as a
     # function because tests patch it.
     return batch_workspace_root()
 

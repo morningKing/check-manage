@@ -1,4 +1,4 @@
-"""Tests for utils.ai_message_meta (timing / tokens / cost extraction)."""
+"""Tests for ai.sessions.ai_message_meta (timing / tokens / cost extraction)."""
 import os
 import sys
 

@@ -92,7 +92,7 @@ def test_augment_with_data_file_id_in_place():
 
     implementation 用 `from db import get_db` 懒导入（与 workspace_changes
     里的 record_session_files 同模式），所以 patch 的源是 `db.get_db`，
-    而不是 `utils.workspace_outputs.get_db`——后者只是模块属性影子，懒导入
+    而不是 `projects.workspace_outputs.get_db`——后者只是模块属性影子，懒导入
     每次仍从 `db` 模块原样取，patch 无效。
     """
     files = [

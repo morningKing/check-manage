@@ -229,7 +229,7 @@ def run_task(task_id):
             pool.putconn(exec_conn)
 
     # 正式运行：插入一条 pending 日志行立即返回，真正执行交给后台调度器
-    # （utils/etl_scheduler.py）。
+    # （data/etl_scheduler.py）。
     log_id = f'etl-log-{uuid.uuid4().hex[:12]}'
     started_at = datetime.now(timezone.utc)
     with get_db() as conn2:

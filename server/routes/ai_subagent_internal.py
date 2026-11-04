@@ -1,6 +1,6 @@
 """子代理会话复用——OC 插件契约端点（NOT for browsers）。
 
-OpenCode 插件 baize-subagent-reuse.js（由 utils.subagent_reuse_plugin 随启动
+OpenCode 插件 baize-subagent-reuse.js（由 ai.opencode.subagent_reuse_plugin 随启动
 部署）在 task 工具执行前后回调这里：
 
 - GET  /reuse?session=<父OC会话id>&agent=<subagent_type>

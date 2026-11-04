@@ -604,7 +604,7 @@ class TestStatusBadgeTimestampOpenApi:
 class TestSearchTextStampingOpenApi:
     """Open API 的 create/update 也要维护 search_text 预计算列，与内部 UI 写路径
     （routes/dynamic.py 的 create_item/update_item）保持一致，否则第三方系统
-    写入的记录搜不到（见 utils/search_text.py）。"""
+    写入的记录搜不到（见 common/search_text.py）。"""
 
     TEXT_FIELDS = [
         {'fieldName': 'name', 'controlType': 'text'},

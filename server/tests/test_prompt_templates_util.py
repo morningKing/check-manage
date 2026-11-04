@@ -1,4 +1,4 @@
-"""Tests for utils.prompt_template CRUD helpers."""
+"""Tests for ai.sessions.prompt_template CRUD helpers."""
 import os
 import sys
 import uuid

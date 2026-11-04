@@ -306,7 +306,7 @@ def test_td_d08_delete_impact_and_delete_cascades(admin):
 
 
 # ==================== 族D-2 跨项目依赖（TD-D09–D14） ====================
-# 契约核对（routes/cross_project_dependencies.py + utils/cross_project_dependency.py），
+# 契约核对（routes/cross_project_dependencies.py + projects/dependencies/），
 # 与 brief 草稿的三处偏差均为对齐实测契约：
 # 1. relationType 枚举仅 track-main | read-write | read-only——草稿的 uses/consumes
 #    会被 400 拒收，D09 PUT 的 consumes 相应改为 track-main；

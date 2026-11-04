@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""utils/mcp_tool_rules 数据层测试：分组视图/全量替换/校验拒绝/行缺失回默认。
+"""data/mcp_tool_rules 数据层测试：分组视图/全量替换/校验拒绝/行缺失回默认。
 
 矩阵与快照是全局状态：夹具先快照现有矩阵行 → 清空 → 插入 mtg-test-% 假
 工具行构造沙箱；teardown 恢复原矩阵并删假行（casemanage_test 也别留脏）。

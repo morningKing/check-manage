@@ -1,6 +1,6 @@
 """字段索引后台任务：轮询 field_indexes 表，异步 CREATE/DROP INDEX CONCURRENTLY。
 
-见 utils/field_indexes.py（资格判定 + 与 page_configs.fields 的同步）。
+见 data/field_indexes.py（资格判定 + 与 page_configs.fields 的同步）。
 CONCURRENTLY 不能在事务块里跑，每次建/删都用独立的 autocommit 连接。
 """
 import logging

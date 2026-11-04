@@ -1924,7 +1924,7 @@ def test_batch_engine_dispatcher_has_listen():
 
 def test_batch_engine_uses_runtime_adapter():
     """P3-A8：batch_engine 的 OpenCode 调用经 runtime adapter。"""
-    from utils.runtime import get_runtime
+    from ai.runtime import get_runtime
     rt = get_runtime()
     assert rt is not None, 'runtime adapter 应可用'
     assert hasattr(rt, 'get_client'), 'OpenCodeLocalRuntime 应有 get_client 方法'
@@ -1933,7 +1933,7 @@ def test_batch_engine_uses_runtime_adapter():
 def test_runtime_get_client_returns_opencode_client():
     """P3-A8：get_client() 返回 OpenCodeClient 实例（与直连构造同型，
     行为不变可回退）。"""
-    from utils.runtime import get_runtime
+    from ai.runtime import get_runtime
     from ai.opencode.opencode_client import OpenCodeClient
     client = get_runtime().get_client()
     assert isinstance(client, OpenCodeClient)
@@ -1942,7 +1942,7 @@ def test_runtime_get_client_returns_opencode_client():
 def test_facade_client_prefers_runtime_and_falls_back(monkeypatch):
     """P3-A8：facade._client() 优先 runtime.get_client()；runtime 不可用
     （返回 None / 抛异常 / 无 get_client）时兜底直连，不 crash。"""
-    from utils import runtime as rt_mod
+    from ai import runtime as rt_mod
     from ai.batch import engine as eng
     from ai.opencode.opencode_client import OpenCodeClient
 

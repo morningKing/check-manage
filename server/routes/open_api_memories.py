@@ -1,8 +1,8 @@
 """长期记忆（mem0）对外管理（/api/v1/memories/*）。
 
-直接复用 utils/memory.py 的 list_memories/add_memory_text/get_memory/delete_memory，
+直接复用 ai/sessions/memory.py 的 list_memories/add_memory_text/get_memory/delete_memory，
 **完整照抄** routes/ai.py::delete_my_memory 的鉴权模式——这是本文件唯一的安全
-关键点：utils/memory.py::delete_memory(memory_id) 不按 user_id 过滤（直接调
+关键点：ai/sessions/memory.py::delete_memory(memory_id) 不按 user_id 过滤（直接调
 mem0 的 m.delete(memory_id=...)），所以删除前必须先 list_memories(owner) 建一个
 "这把密钥能看到的记忆 id 集合"，确认目标 id 在集合里才能删——否则外部调用方
 只要拿到/猜到任意一个 memory_id（mem0 的不透明 UUID），就能删除别的用户的记忆

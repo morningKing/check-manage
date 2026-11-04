@@ -5,7 +5,7 @@ guarded by WERKZEUG_RUN_MAIN to avoid double-start under Flask's reloader.
 
 OpenCode API adaptation
 -----------------------
-The project's OpenCodeClient (utils/opencode_client.py) is an HTTP wrapper class.
+The project's OpenCodeClient (ai/opencode/opencode_client.py) is an HTTP wrapper class.
 The plan called for module-level free functions (create_session, send_message,
 list_messages) — those don't exist. Instead we keep a module-level client
 singleton and expose three thin wrappers:
@@ -15,8 +15,10 @@ singleton and expose three thin wrappers:
   opencode_client.list_messages(oc_sid, directory)  → list[dict]
       (polls SSE events; returns a synthetic list once session.idle fires)
 
-Tests monkeypatch the `opencode_client` name at module level (eng.opencode_client)
-so all three calls resolve through the patched object.
+Tests monkeypatch the `opencode_client` name at leaf-module level
+(`ai.batch.engine.runner.opencode_client` 等——T6 后 patch 落叶子模块，
+聚合 setattr(eng, ...) 拦不到叶子内互调) so all three calls resolve
+through the patched object.
 """
 import logging
 import os
@@ -735,7 +737,7 @@ class WorkerRunnerMixin:
         session + 注入历史摘要 + 更新绑定 + 重发。返回新的 opencode_session_id。
 
         镜像 routes/ai_chat.py::_recover_session_and_resend（M3，交互式聊天
-        侧的同一个机制），共用 utils/session_history.py 的历史摘要渲染。
+        侧的同一个机制），共用 ai/sessions/session_history.py 的历史摘要渲染。
 
         恢复本身失败就直接抛，不重试——调用方 _run_one 的 except Exception
         会接住，落 failed 并带上真实的恢复失败原因；原始的派发失败原因已经

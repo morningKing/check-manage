@@ -2,8 +2,8 @@
 to start the agent runtime.
 
 Deliberately ZERO-dependency (no flask/db imports) so both the standalone
-proxy.py process (same pattern as utils.upload_limits) and the Flask-side
-restart orchestration (utils.opencode_global) share one source of truth.
+proxy.py process (same pattern as common.upload_limits) and the Flask-side
+restart orchestration (ai.opencode.opencode_global) share one source of truth.
 
 Config (server/.env or environment):
   OPENCODE_BIN        opencode executable. Default 'opencode' (PATH lookup).

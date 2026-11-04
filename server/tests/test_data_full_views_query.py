@@ -5,7 +5,7 @@
 limit 1..2000、label 重映射。
 
 执行者实读核对（brief 注意块三项）：
-- G06 label 重映射：utils/mongo_query.remap_labels 确认 label≠fieldName 时
+- G06 label 重映射：data/mongo_query.remap_labels 确认 label≠fieldName 时
   映射生效（'名称'→'name'），用 label 直查成立；
 - G07 非法查询：mongo_query.translate 对 `$or` 非列表抛
   MongoQueryError("$or requires an array")，query.py 捕获后回

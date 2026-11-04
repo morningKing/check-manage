@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from utils.runtime.stub import StubRuntime, parse_profile
+from ai.runtime.stub import StubRuntime, parse_profile
 
 PROFILE_FAST = {'delay_ms': [0, 0], 'error_rate': 0.0, 'hang_rate': 0.0}
 
@@ -107,7 +107,7 @@ def test_get_runtime_concurrent_first_call_single_instance(monkeypatch):
     抛 KeyError，子任务被误判 failed。StubClient 自身字典操作已在锁内，
     脑裂只可能发生在 get_runtime 单例层。
     """
-    import utils.runtime as rtmod
+    import ai.runtime as rtmod
     monkeypatch.setenv('AI_AGENT_RUNTIME', 'stub')
     monkeypatch.setenv('AI_STUB_ALLOW', '1')                # 防呆门显式放行
     monkeypatch.delenv('AI_STUB_PROFILE', raising=False)   # 默认 profile 即可
@@ -135,8 +135,8 @@ def test_get_runtime_concurrent_first_call_single_instance(monkeypatch):
 def test_get_runtime_stub_requires_explicit_allow(monkeypatch):
     """防呆（压测终审 M8）：AI_AGENT_RUNTIME=stub 未带 AI_STUB_ALLOW=1 必须
     拒绝——stub 会假成功所有 agent 任务，误配到生产等于 AI 全体放假。"""
-    import utils.runtime as rtmod
-    from utils.runtime.base import RuntimeCapabilityError
+    import ai.runtime as rtmod
+    from ai.runtime.base import RuntimeCapabilityError
     monkeypatch.setenv('AI_AGENT_RUNTIME', 'stub')
     monkeypatch.delenv('AI_STUB_ALLOW', raising=False)
     monkeypatch.setattr(rtmod, '_default', None)

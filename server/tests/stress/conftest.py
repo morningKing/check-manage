@@ -252,7 +252,7 @@ class Stack:
 
     def invariants(self) -> dict:
         # 计数守恒：ai_chat_batches 没有 cancelled 列（cancelled 子任务计入
-        # failed 聚合，见 utils/batch_repo.py 与 batch_engine._recompute_batch_status
+        # failed 聚合，见 ai/batch/repo/ 与 batch_engine._recompute_batch_status
         # —— 终态时 terminal=done+failed 必须 == total），故守恒式为 total=done+failed。
         bad = self.db_query(
             "SELECT count(*) FROM ai_chat_batches "
@@ -343,7 +343,7 @@ def create_batch(stack, n_children: int, *, callback_url=None, api=None,
     故 >50 时复用同一 staged 文件路径凑不满——套件用 ≤50）。api=可选
     dict(base, headers) 走开放 API（空壳批/回调场景）；默认管理 API。
 
-    已核实形状（routes/ai_chat_batches.py:64-95/139-141, utils/batch_repo.py:313,
+    已核实形状（routes/ai_chat_batches.py:64-95/139-141, ai/batch/repo/ :313,
     routes/open_api_batches.py:147-194/413-414/637-668）：
     - 内部 staging：POST form {file(单数), upload_session_id} → 201 扁平 {name, path}
     - 内部建批：files=[{name, path}], ... → 201 {'batch': {...}, 'sessions': [...]}

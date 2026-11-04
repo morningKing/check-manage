@@ -60,7 +60,7 @@ def setup(mock_conn, mock_cursor):
         p.start()
 
     # Per-page RBAC gating (Task 3.3/3.4) resolves the role's permissions via
-    # utils.permissions, which queries the DB. Prime the cache so the 'admin'
+    # common.permissions, which queries the DB. Prime the cache so the 'admin'
     # role resolves as a superuser (bypasses every page check) without consuming
     # entries from the per-test mock cursor's fetchone/fetchall side effects.
     from common import permissions as _perms
@@ -596,7 +596,7 @@ class TestStatusBadgeTimestamp:
 
 
 class TestSearchTextStamping:
-    """create_item/update_item 应维护 search_text 预计算列（配合 pg_trgm 索引加速关键字搜索，见 utils/search_text.py）"""
+    """create_item/update_item 应维护 search_text 预计算列（配合 pg_trgm 索引加速关键字搜索，见 common/search_text.py）"""
 
     TEXT_FIELDS = [
         {'fieldName': 'name', 'controlType': 'text'},

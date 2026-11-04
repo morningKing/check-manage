@@ -1,4 +1,4 @@
-"""字段索引后台任务测试（utils/field_index_scheduler.py）。"""
+"""字段索引后台任务测试（data/field_index_scheduler.py）。"""
 import sys
 import os
 from contextlib import contextmanager

@@ -136,7 +136,7 @@ def get_batch_results(batch_id: str) -> list[dict]:
 def get_session_usage(session_id: str) -> dict | None:
     """Aggregate one session's per-message `meta` (durationMs/tokensInput/
     tokensOutput/cost — stamped by batch_engine._persist_conversation via
-    utils.ai_message_meta.meta_from_info/public_meta, one row per OpenCode
+    ai.sessions.ai_message_meta.meta_from_info/public_meta, one row per OpenCode
     assistant message) into a single usage summary for the external API.
 
     Same combination rule as ai_message_meta.aggregate_metas (tokensInput

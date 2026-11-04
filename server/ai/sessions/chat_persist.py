@@ -12,7 +12,7 @@ import threading
 import time
 
 from db import get_db
-from utils.runtime import get_runtime
+from ai.runtime import get_runtime
 from ai.sessions.ai_message_meta import (
     meta_from_info, aggregate_metas, public_meta)
 from common.notifier import create_notification

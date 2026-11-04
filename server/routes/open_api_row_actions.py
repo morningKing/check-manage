@@ -1,7 +1,7 @@
 """行操作对外触发（/api/v1/collections/<collection>/<recordId>/row-actions/<actionId>/run）。
 
 独立成一个蓝图文件，不并进 routes/open_api.py：本端点直接透传
-utils/row_action_engine.py::RowActionError.message（该模块里硬编码的是中文），
+collab/row_action_engine.py::RowActionError.message（该模块里硬编码的是中文），
 和 open-api.md 里"全英文 error"的既有承诺冲突；单独成文档更容易讲清楚这一处例外。
 
 API Key 没有角色概念，run_action 的 role-白名单校验按"密钥属主本人的角色"解析

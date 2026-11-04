@@ -1,4 +1,4 @@
-"""Tests for utils.workspace_changes.git_changes (real temp git repo)."""
+"""Tests for projects.workspace_changes.git_changes (real temp git repo)."""
 import os
 import subprocess
 import sys

@@ -6,9 +6,9 @@
 
 Ruling C：save_workspace_file / data_file_meta 在 import_recorded_files
 内部以 `from routes.data_files import ...` 形式懒导入，故 monkeypatch 必须落在
-源模块 routes.data_files 上，patch 全名 `utils.session_file_import.save_workspace_file`
-会 AttributeError。get_recorded_path / set_data_file_id 是 utils.session_file_import
-顶层 `from utils.workspace_changes import ...` 进来的，照常 patch 本模块名即可。
+源模块 routes.data_files 上，patch 全名 `ai.sessions.session_file_import.save_workspace_file`
+会 AttributeError。get_recorded_path / set_data_file_id 是 ai.sessions.session_file_import
+顶层 `from projects.workspace_changes import ...` 进来的，照常 patch 本模块名即可。
 """
 import os
 import sys

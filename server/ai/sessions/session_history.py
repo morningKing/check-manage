@@ -2,7 +2,7 @@
 
 Used to re-inject context into a freshly recovered OpenCode session when the
 old `opencode_session_id` has gone stale — see `routes/ai_chat.py::
-_recover_session_and_resend` (interactive chat, M3) and `utils/batch_engine.py::
+_recover_session_and_resend` (interactive chat, M3) and `ai/batch/engine/ (原 utils/batch_engine.py)::
 BatchWorker._recover_session` (batch/scan children). Both hit this when
 `send_prompt_async`/`send_message` fails against the old id: a brand-new
 OpenCode session has no memory of prior turns, so the new prompt is prefixed

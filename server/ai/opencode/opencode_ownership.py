@@ -92,7 +92,7 @@ def status(port: int, listener_pids: list[int] | None = None) -> dict:
     """Classify the current serve listener for the given port.
 
     `listener_pids` is injectable for tests; production callers pass None and
-    let the function discover listeners itself (utils.opencode_global's
+    let the function discover listeners itself (ai.opencode.opencode_global's
     port-scan helper). Returns {mode, pid, recordedPid, recordedAt, listenerPids}.
     """
     if listener_pids is None:

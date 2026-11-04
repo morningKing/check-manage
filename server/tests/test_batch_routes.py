@@ -24,7 +24,7 @@ def setup_app(db_conn):
     DB. Also seed a `user-admin` row so the FK on `ai_chat_batches.user_id`
     resolves; teardown deletes it (CASCADE cleans up batches/sessions).
     """
-    # If `utils.batch_repo` (or `utils.batch_engine`) was first imported while
+    # If `ai.batch.repo` (or `ai.batch.engine`) was first imported while
     # an earlier test's `patch('db.get_db', ...)` was active, the module-level
     # `get_db` reference inside those modules is the MOCK function — and
     # `patch.stop()` only restores `db.get_db`, not the dangling binding in

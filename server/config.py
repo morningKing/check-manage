@@ -118,7 +118,7 @@ OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', '').strip()
 # Windows — NOT `~/.opencode`). Config is loaded ONCE at serve startup and
 # never hot-reloaded (verified: file writes and PATCH /global/config are both
 # invisible to a running serve), so every change needs a serve restart to take
-# effect. The serve command itself lives in utils/opencode_launch.py — one
+# effect. The serve command itself lives in ai/opencode/opencode_launch.py — one
 # source shared with proxy.py's managed startup (OPENCODE_BIN /
 # OPENCODE_SERVE_CMD / OPENCODE_SERVE_CWD / OPENCODE_AUTOSTART in server/.env).
 # RESTART_POLICY=auto makes every admin save immediately restart serve

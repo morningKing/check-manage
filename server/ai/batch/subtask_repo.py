@@ -2,7 +2,7 @@
 
 供两条持久化路径（chat_persist.py / batch_engine.py，见 Task 4/5）与两个只读
 端点（routes/ai_chat.py 的所有权校验版本、routes/ai_batch_admin.py 的管理员
-版本）共用——跟 utils/batch_repo.py 里 `api_key_id: str | None = None` 那个既有
+版本）共用——跟 ai/batch/repo/ 里 `api_key_id: str | None = None` 那个既有
 模式一致：一个可选的作用域参数决定是否额外校验归属，而不是写成两个互相独立、
 容易漏掉某一层校验的函数。
 """

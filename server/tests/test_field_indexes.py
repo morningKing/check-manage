@@ -1,4 +1,4 @@
-"""单测：utils/field_indexes.py 的资格判定与 field_indexes 表同步逻辑。"""
+"""单测：data/field_indexes.py 的资格判定与 field_indexes 表同步逻辑。"""
 from unittest.mock import MagicMock
 
 from data.field_indexes import (

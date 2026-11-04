@@ -38,7 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_dynamic_data_coll_branch ON dynamic_data(collecti
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_coll_branch_created ON dynamic_data(collection, branch_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_gin ON dynamic_data USING gin(data);
 
--- 关键字搜索加速：预计算列 + pg_trgm GIN 索引（见 utils/search_text.py）。
+-- 关键字搜索加速：预计算列 + pg_trgm GIN 索引（见 common/search_text.py）。
 -- data->>field ILIKE 逐字段扫描在千万级数据下退化为全表扫描；search_text
 -- 由写路径（create_item/update_item/batch_create_items + Open API 对应端点）
 -- 维护，配合下方的 trigram 索引可以让 ILIKE 走索引。
@@ -46,9 +46,9 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ALTER TABLE dynamic_data ADD COLUMN IF NOT EXISTS search_text TEXT;
 
 -- 按字段配置生成的表达式索引：管理员在字段配置里勾选"加速筛选/排序"后，
--- 这里先记一行 pending，utils/field_index_scheduler.py 的后台任务异步
+-- 这里先记一行 pending，data/field_index_scheduler.py 的后台任务异步
 -- CREATE INDEX CONCURRENTLY 建出 (data->>'field') 表达式索引，避免在保存
--- 页面配置的请求里同步等一个可能耗时很久的建索引操作（见 utils/field_indexes.py）。
+-- 页面配置的请求里同步等一个可能耗时很久的建索引操作（见 data/field_indexes.py）。
 CREATE TABLE IF NOT EXISTS field_indexes (
     collection    VARCHAR(200) NOT NULL,
     field_name    VARCHAR(200) NOT NULL,
@@ -120,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_operation_logs_action ON operation_logs(action);
 CREATE INDEX IF NOT EXISTS idx_operation_logs_target_type ON operation_logs(target_type);
 -- Marks a log row as originating from an external API Key call rather than a
 -- JWT/UI action by the same operator. operator_id/name/role still attribute
--- the call to the key's bound user (log_api_operation in utils/operation_log.py) —
+-- the call to the key's bound user (log_api_operation in common/operation_log.py) —
 -- this column is only the "came in via a key" flag, nullable so UI-originated
 -- rows stay untouched.
 ALTER TABLE operation_logs ADD COLUMN IF NOT EXISTS api_key_id VARCHAR(100);
@@ -176,7 +176,7 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS default_chat_model VARCHAR(200)
 -- 不再写入内部 MCP 条目（外部 MCP 照常）。默认开启。
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS mcp_internal_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 -- 批任务子会话个数上限：每个输入文件对应一个子会话，管理员可在 AI 配置页
--- 调整（utils/batch_repo.get_max_files_per_batch 读取，缺省/非法回落 50）。
+-- 调整（ai/batch/repo.get_max_files_per_batch 读取，缺省/非法回落 50）。
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS max_batch_sessions INTEGER NOT NULL DEFAULT 50;
 
 -- External MCP servers registered by an admin and merged into every AI-chat

@@ -1,4 +1,4 @@
-"""Tests for server/utils/workspace.py path-traversal defense and mkdir."""
+"""Tests for server/projects/workspace.py path-traversal defense and mkdir."""
 
 import os
 import pytest

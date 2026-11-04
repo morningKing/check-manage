@@ -2,14 +2,14 @@
 
 管理员在字段配置里把某个字段标记为"加速筛选/排序"后（FieldConfig.indexed），
 这里负责把期望状态（哪些字段该有索引）同步进 field_indexes 表；真正的
-CREATE/DROP INDEX CONCURRENTLY 由 utils/field_index_scheduler.py 的后台
+CREATE/DROP INDEX CONCURRENTLY 由 data/field_index_scheduler.py 的后台
 任务异步执行——建索引在千万级表上可能耗时很久，不能卡在保存页面配置的
 请求里。
 
 实测（EXPLAIN ANALYZE 对照）：psycopg2 的 %s 参数替换是客户端侧 mogrify，
 发给 Postgres 的是字面量 SQL 文本，所以 data->>%s 这类查询本来就能被
 (data->>'field') 表达式索引命中——不需要改写 routes/dynamic.py 或
-utils/mongo_query.py 里的查询构造，只要索引真的建出来即可生效。
+data/mongo_query.py 里的查询构造，只要索引真的建出来即可生效。
 """
 import hashlib
 

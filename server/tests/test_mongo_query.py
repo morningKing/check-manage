@@ -1,4 +1,4 @@
-"""Tests for MongoDB-style query translator (utils/mongo_query.py)."""
+"""Tests for MongoDB-style query translator (data/mongo_query.py)."""
 
 import pytest
 import sys

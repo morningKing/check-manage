@@ -5,7 +5,7 @@
 (POST /pageConfigs/ai-draft),真正创建必须由管理员在页面配置对话框逐项确认;
 封装后 agent 可在对话里直接建表。
 
-草案复用服务端唯一实现 `utils.ai_schema_designer.draft_page_schema`(同一
+草案复用服务端唯一实现 `ai.scan.ai_schema_designer.draft_page_schema`(同一
 ai_settings、同一安全控制类型白名单与归一化),运行时把仓库内的 server/
 目录加入 sys.path——mcp-server 本就依赖同级的 server/.env(见 app_config),
 目录约定一致。ai_schema_designer 需要 requests,已列入本包依赖。

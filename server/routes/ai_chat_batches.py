@@ -1,6 +1,6 @@
 """REST endpoints for AI chat batch tasks (CRUD + staging upload).
 
-Worker engine lives in utils.batch_engine; this module only owns the HTTP edge.
+Worker engine lives in ai.batch.engine; this module only owns the HTTP edge.
 """
 import uuid
 from pathlib import Path
@@ -697,7 +697,7 @@ def reexecute(batch_id, session_id):
 def submit_batch_command(batch_id):
     """统一命令入口（P1 §8.1，缺口补齐 4.3）：内部 UI/脚本经命令表落意图，
     幂等键缺省由 (type, batch, requester) 派生；同步应用（既有 HTTP 语义，
-    pause 立即生效——实现取舍见 utils/execution_commands.py docstring）。"""
+    pause 立即生效——实现取舍见 ai/batch/execution_commands.py docstring）。"""
     from ai.batch import execution_commands as execution_commands
     from ai.batch.repo import (pause_batch, resume_batch, cancel_batch,
                                       reset_failed_to_pending)

@@ -50,7 +50,7 @@ class WorkerGatesMixin:
     def _check_action_gate(self, sid: str, *, workspace_path=None, model=None) -> dict:
         """终态核对。inconclusive(账本不健康/查询异常/判官故障)不算新语义:
         统一走既有 fail-closed 分支,任务落 failed、期望行与日志留痕。
-        verifier 期望由判官核对(utils/verifier,方案 B)——无 verifier 期望时
+        verifier 期望由判官核对(ai/batch/verifier,方案 B)——无 verifier 期望时
         run_verifier 返回 None,零开销跳过。委派级门禁（定向组子代理终态时
         提前判定）的暂存 verdict 先行合并，已判期望跳过重复判官。"""
         healthy = self._ledger_health.pop(sid, True)

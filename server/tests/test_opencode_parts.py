@@ -1,4 +1,4 @@
-"""server/utils/opencode_parts.py 的测试。
+"""server/ai/opencode/opencode_parts.py 的测试。
 
 map_part 是从 chat_persist.py（apply_event 的 text/tool 分支）与
 batch_engine.py（_content_from_parts）里抽出来的共享映射——这两处原来的实现

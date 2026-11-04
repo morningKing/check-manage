@@ -2,7 +2,7 @@
 
 A standalone session is an ai_chat_sessions row with batch_id=NULL and
 api_key_id set. It's executed by the exact same worker/dispatcher as batch
-children — see utils/batch_engine.py's `if batch_id is None:` branch in
+children — see ai/batch/engine/ (原 utils/batch_engine.py)'s `if batch_id is None:` branch in
 `_run_one` — not a separate execution path. This module only owns the two
 queries the external API needs: create + owner-scoped read.
 """
@@ -97,7 +97,7 @@ def cancel_session(session_id: str, user_id: str, api_key_id: str) -> dict | Non
     batch_repo.cancel_batch for a single non-batch row). A pending session is
     converted to 'cancelled' on the worker's next tick without ever running;
     a running one is cooperatively aborted mid-poll — see
-    utils.batch_engine.BatchWorker._await_finished / _cancel_pending_requests
+    ai.batch.engine.BatchWorker._await_finished / _cancel_pending_requests
     (both key off cancel_requested with no batch_id filter, so they already
     cover standalone sessions for free).
 

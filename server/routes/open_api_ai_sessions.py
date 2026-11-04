@@ -1,6 +1,6 @@
 """AI 单会话对外 API（/api/v1/ai-sessions）。
 
-跟批任务共用同一套执行引擎（server/utils/batch_engine.py 里 `batch_id IS NULL`
+跟批任务共用同一套执行引擎（server/ai/batch/engine/ 里 `batch_id IS NULL`
 的分支——见该文件 `_run_one` 的注释），区别是只产生一个会话，不按文件拆分子任务。
 error 文案沿用中文惯例，跟 open_api_batches.py 同一个"AI 相关对外端点"家族，
 不是 open-api.md 的英文惯例。

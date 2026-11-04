@@ -115,7 +115,7 @@ def test_backup_restore_round_trip_preserves_seq_order_and_reseeds_sequence(db_c
     backup_id = None
     zip_path = None
     try:
-        # 备份（真实 DB，走 utils.backup.get_db，未 mock）
+        # 备份（真实 DB，走 projects.backup.get_db，未 mock）
         result = create_backup(backup_type='manual', created_by='test',
                                tables=['ai_chat_messages'])
         backup_id = result['id']

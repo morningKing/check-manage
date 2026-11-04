@@ -1,4 +1,4 @@
-"""Tests for utils.data_export (intent detection + xlsx export)."""
+"""Tests for data.data_export (intent detection + xlsx export)."""
 
 import os
 import sys

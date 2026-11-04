@@ -1,4 +1,4 @@
-"""Tests for utils.opencode_launch — the shared `opencode serve` launch config
+"""Tests for ai.opencode.opencode_launch — the shared `opencode serve` launch config
 used by both proxy.py (managed startup) and the admin restart orchestration."""
 
 import os
@@ -52,7 +52,7 @@ def test_cwd_and_autostart_parsing(monkeypatch):
 
 def test_module_is_zero_dependency():
     """proxy.py imports this from a standalone process — it must never grow
-    flask/db imports (same contract as utils.upload_limits)."""
+    flask/db imports (same contract as common.upload_limits)."""
     src = open(launch.__file__, encoding='utf-8').read()
     for banned in ('import flask', 'from flask', 'from db', 'import config'):
         assert banned not in src, banned

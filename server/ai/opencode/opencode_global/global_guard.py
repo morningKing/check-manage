@@ -66,7 +66,7 @@ def _reject_symlink_components(base: str, *parts: str) -> None:
 
 
 # Managed-content size caps (Spec §13 限制单文件和总目录大小). The zip path is
-# already capped by utils.skill_upload (5 MiB archive / 200 entries); these cap
+# already capped by ai.skills.skill_upload (5 MiB archive / 200 entries); these cap
 # the raw-editor routes, which bypass zip extraction entirely.
 MAX_MANAGED_FILE_BYTES = 1024 * 1024
 MAX_MANAGED_TOTAL_BYTES = 64 * 1024 * 1024

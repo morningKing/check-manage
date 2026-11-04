@@ -433,7 +433,7 @@ def list_items(collection):
 
         # 排序参数（列名与方向均走白名单，防 SQL 注入）。标记了 indexed 的字段，
         # 管理员已确认会为它建 (data->>'field') 表达式索引，因此额外放开允许排序
-        # （见 utils/field_indexes.py；未标记的字段依旧不能排序，避免无索引的
+        # （见 data/field_indexes.py；未标记的字段依旧不能排序，避免无索引的
         # 全表排序拖垮千万级数据下的查询）。
         _SORT_COLUMNS = {'createdAt': 'created_at', 'updatedAt': 'updated_at', 'id': 'id'}
         for f in (fields or []):

@@ -652,10 +652,10 @@ class TestMergeValidationIntegration:
 
                     # 直接测试逻辑（不通过路由）
                     from projects.dependencies import (
-                                            batch_update_dependencies_after_merge,
-                                            get_dependent_projects,
-                                            validate_project_dependency,
-                                        )
+                        batch_update_dependencies_after_merge,
+                        get_dependent_projects,
+                        validate_project_dependency,
+                    )
 
                     # 执行合并后逻辑
                     batch_update_dependencies_after_merge('project-1', 'version-1')

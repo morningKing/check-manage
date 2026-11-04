@@ -694,7 +694,7 @@ def export_document_vocabulary(doc_id: str):
 # ------------------------------- 检查规则（全局 + 文档级） -------------------------------
 #
 # 真源为 JSON 文件（全局 .data/规则-全局.json、文档 ws/<id>/规则.json），Node 分析前
-# 读 aiPrompt、前端 REST 拉取编译本地规则。校验/CSV 解析见 utils/suggest_editor_rules。
+# 读 aiPrompt、前端 REST 拉取编译本地规则。校验/CSV 解析见 editor/suggest_editor_rules。
 
 DEFAULT_RULES = {
     "rules": [{

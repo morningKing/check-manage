@@ -5,7 +5,7 @@ Contracts (see spec §12):
   `cwd`/`directory` are ignored by OpenCode.
 - prompt_async body is {parts:[{type:"text","text":...}]}.
 - MCP is NOT registered through this client; each session's workspace carries
-  an opencode.json with the MCP entry (see utils.workspace).
+  an opencode.json with the MCP entry (see projects.workspace).
 
 SSE is exposed as an iterator of {"event": str, "data": dict} dicts. OpenCode
 emits a {type, properties} envelope; callers map event names themselves.

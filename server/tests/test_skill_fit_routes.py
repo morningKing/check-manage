@@ -37,7 +37,7 @@ def client():
     """真实 DB 的 test client（shadow 掉 conftest 的 mock-DB `client`）。
 
     权限判定仍走 conftest autouse 的 RBAC 预置缓存（admin=superuser /
-    developer 无 admin 键），不需要 DB；数据面走真实 dev 库。utils.skill_fit
+    developer 无 admin 键），不需要 DB；数据面走真实 dev 库。ai.skills.skill_fit
     的模块级绑定叫 `_default_get_db`，通用 get_db 扫不到，单独补齐——否则
     recompute 在早前 mock 导入的进程态下会打到 mock 连接。
     """

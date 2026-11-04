@@ -7,7 +7,7 @@ drive the full success path with every external dependency patched, so a
 name-level mistake in the handler fails here instead of in production.
 
 Patching note: analyze_session imports its collaborators INSIDE the function
-body (`from utils.workspace import ...` etc.), so those must be patched at
+body (`from projects.workspace import ...` etc.), so those must be patched at
 their SOURCE modules — a `routes.ai_session_admin.write_opencode_config`
 patch would never be seen. Only `admin_get_session_detail`/`get_db` are
 module-level from-imports of the route module and are patched there.

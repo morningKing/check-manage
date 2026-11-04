@@ -43,7 +43,7 @@ def create_run(def_id: str, requested_by: str, *,
     # 解释"当时用什么环境跑的"
     manifest_id = None
     try:
-        from utils.runtime import get_runtime
+        from ai.runtime import get_runtime
         import hashlib as _hashlib
         _rt = get_runtime()
         _caps = _rt.capabilities()

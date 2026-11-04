@@ -1,6 +1,6 @@
 """OpenCode 本地 Runtime（P2 首发默认实现，spec §8.2）。
 
-包装既有 opencode_client（utils/opencode_client.py），语义与 batch_engine
+包装既有 opencode_client（ai/opencode/opencode_client.py），语义与 batch_engine
 的 _OpenCodeFacade 完全一致——引擎上层经 AgentRuntime 抽象访问，测试打桩
 点（batch_engine.opencode_client 模块名）保持不变。
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import requests
 
-from utils.runtime.base import AgentRuntime
+from ai.runtime.base import AgentRuntime
 
 
 class OpenCodeLocalRuntime(AgentRuntime):

@@ -63,7 +63,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# 与 server/utils/script_runner.py _build_safe_globals 完全一致
+# 与 server/data/script_runner.py _build_safe_globals 完全一致
 # ---------------------------------------------------------------------------
 def _build_sandbox_globals():
     return {

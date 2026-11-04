@@ -174,7 +174,7 @@ def init_db():
         print("Tables created.")
 
         # Keyword search acceleration: search_text 预计算列 + pg_trgm GIN 索引
-        # （见 utils/search_text.py）。索引用独立 autocommit 连接并发建，
+        # （见 common/search_text.py）。索引用独立 autocommit 连接并发建，
         # 存量数据补算走批量 backfill，均可在已有数据的库上安全重复执行。
         _create_search_text_trgm_index()
         _create_search_text_pending_index()

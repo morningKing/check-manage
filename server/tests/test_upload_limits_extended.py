@@ -1,4 +1,4 @@
-"""utils/upload_limits 扩展面（D3 修复回归）：全部 AI 对外 JSON 端点
+"""common/upload_limits 扩展面（D3 修复回归）：全部 AI 对外 JSON 端点
 纳入 1 MB 请求体门，而 /v1/collections 数据接口与备份还原保持不限。"""
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))

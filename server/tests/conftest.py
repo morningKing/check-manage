@@ -121,9 +121,9 @@ def _reset_and_prime_permission_cache():
     """Keep RBAC permission resolution deterministic across the whole suite.
 
     The `@require_permission` decorator and per-page gating resolve the current
-    role's permissions via `utils.permissions.get_role_perms`, which is cached
+    role's permissions via `common.permissions.get_role_perms`, which is cached
     in a module-global dict and (when not patched) queries the DB. Route-test
-    modules patch `utils.permissions.get_db` inconsistently, so without a reset
+    modules patch `common.permissions.get_db` inconsistently, so without a reset
     the cache leaks across modules (e.g. an admin row resolved under one mock
     cursor lingers, or a developer role gets a polluted entry). That made dozens
     of admin-route tests flip between 200/403 depending on collection order.
@@ -134,7 +134,7 @@ def _reset_and_prime_permission_cache():
       - developer -> default write access, no admin keys
       - guest     -> default read-only access
     Then clear the cache on teardown so a test that wants custom resolution
-    (by patching `utils.permissions.get_db` itself) starts clean.
+    (by patching `common.permissions.get_db` itself) starts clean.
     """
     from common import permissions as _perms
     _perms.invalidate_cache()

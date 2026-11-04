@@ -151,7 +151,7 @@ def delete_skill(name):
 @ai_opencode_admin_bp.post('/skills/publish')
 @require_permission('admin.ai_runtime_publish')
 def publish_platform_skill():
-    """Copy a platform global-skill (utils.global_skills storage) into the
+    """Copy a platform global-skill (ai.skills.global_skills storage) into the
     OpenCode global skill dir."""
     body = request.get_json(silent=True) or {}
     skill_id = (body.get('skillId') or '').strip()

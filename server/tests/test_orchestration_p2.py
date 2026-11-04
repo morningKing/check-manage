@@ -517,7 +517,7 @@ def test_ingest_session_outputs(user_id, tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_runtime_adapter_default_and_capabilities():
-    from utils import runtime
+    from ai import runtime
     rt = runtime.get_runtime()
     assert rt.kind == 'opencode_local'
     caps = rt.capabilities()
@@ -536,7 +536,7 @@ def test_runtime_adapter_default_and_capabilities():
 
 
 def test_opencode_local_wraps_client(monkeypatch):
-    from utils.runtime import OpenCodeLocalRuntime
+    from ai.runtime import OpenCodeLocalRuntime
     from unittest.mock import MagicMock
     rt = OpenCodeLocalRuntime()
     fake_client = MagicMock()

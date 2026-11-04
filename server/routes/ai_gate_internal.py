@@ -1,6 +1,6 @@
 """P3-C3：PreToolUse 门禁拦截——OpenCode 插件在工具调用前校验（NOT for browsers）。
 
-OpenCode 插件 baize-trace.js（utils.skillopt 随启动部署）注册
+OpenCode 插件 baize-trace.js（ai.skills.skillopt 随启动部署）注册
 `tool.execute.before` 钩子：每次工具调用前 POST 本端点，命中 deny list
 （action_expectations 中 mode='pre' 的行）或 checkpoint(before) 预算注入
 时插件抛错阻断该次工具执行——动作门禁从"终态核对该做的做了没"补上

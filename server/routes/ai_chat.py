@@ -49,7 +49,7 @@ from common.filename import safe_filename
 from db import get_db
 from auth import login_required, login_required_sse, write_required, require_permission
 from ai.opencode.opencode_client import OpenCodeClient
-from utils.runtime import get_runtime
+from ai.runtime import get_runtime
 from projects.workspace import (
     create_session_workspace, write_opencode_config,
     safe_resolve, cleanup_session_workspace,
@@ -1982,7 +1982,7 @@ def list_files(sid):
     dir='outputs' under outputs/, else dir='workspace') plus uploads/ inputs
     (dir='uploads'). Excludes nested git repos, noise dirs, dotfiles and the
     per-session opencode.json. Heavy lifting lives in
-    utils.workspace_outputs.list_session_files so the admin cross-user endpoint
+    projects.workspace_outputs.list_session_files so the admin cross-user endpoint
     and future callers share one scan impl — see §2.7 of the admin 产出文件
     design."""
     user = flask_g.current_user
@@ -2031,7 +2031,7 @@ def session_file_records(sid):
 def import_session_files(sid):
     """把记录过的会话产出文件按需导入系统 data_files，返回文件 id。
     body: {'paths': [<工作区相对路径>, ...]}。幂等——已导入过的直接返回原 id。
-    只允许导入被自动记录过的路径（白名单），见 utils/session_file_import.py。"""
+    只允许导入被自动记录过的路径（白名单），见 ai/sessions/session_file_import.py。"""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:

@@ -26,8 +26,8 @@ VALID_T = 'tk_ok'
 # 合跑隔离（回归修复，同 test_open_api_takeover_link.py）：conftest 的 `app`
 # 夹具先 patch db.get_db/db.pool 再 `from app import app`——进程内第一次用到
 # 它时，整个 app 导入图在 patch 窗口内首次加载，顶层 `from db import get_db`
-# 的模块（auth / utils.ai_query / utils.memory / utils.gate_policy_repo /
-# utils.agent_ledger / routes.* …）从此永久绑住 yield 一次性 mock_conn 的
+# 的模块（auth / ai.sessions.ai_query / ai.sessions.memory / ai.gate.gate_policy_repo /
+# ai.batch.ledger / routes.* …）从此永久绑住 yield 一次性 mock_conn 的
 # lambda，patch 退出只还原 db.get_db 本身。同进程后续真库用例（P0 门禁四例）
 # 会读到假连接：merged_action_checks 查无批次 → applicable=0 → 门禁被误判
 # 'skipped'（应为 'inconclusive'）。已有 Heal（conftest 只覆盖 4 个模块、

@@ -67,7 +67,7 @@ def _url(rule):
 
 
 def _fake_sess(workspace=None, sid='s-x', owner='u-owner', status='completed'):
-    """admin_get_child_session 的返回形状（与 utils.batch_repo 实现一致）。
+    """admin_get_child_session 的返回形状（与 ai.batch.repo 实现一致）。
 
     workspace 默认 None：list_child_files 端点把它当「无工作区」分支用。其余端点
     会显式传 'ws-fake' 或 tmp_path（safe_resolve 对不存在的根也只做规范化，不报错）。

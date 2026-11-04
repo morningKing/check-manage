@@ -8,7 +8,7 @@ _mark_done / _mark_failed 开头先试 batch_repo.try_repark_transition——
 _mark_failed 的 repark 判定必须先于 failed 审计，接管轮绝不记 'failed'。
 
 纯 mock-seam 测试：BatchWorker.__new__ 跳过 __init__，_resolve_generation
-打桩直传，ai.batch.repo / ai.batch.execution_audit / utils.skill_fit
+打桩直传，ai.batch.repo / ai.batch.execution_audit / ai.skills.skill_fit
 全部 monkeypatch，零 DB。
 """
 import os

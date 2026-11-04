@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'backups')
 
 # 外部文件目录（不在 DB 里；默认随备份一起打包/还原）。在此从 env 直接读，避免
-# import utils.memory / config 的副作用。AI 会话工作区（AI_WORKSPACE_ROOT）是临时
+# import ai.sessions.memory / config 的副作用。AI 会话工作区（AI_WORKSPACE_ROOT）是临时
 # 数据（TTL），故意不纳入备份。
 MEM0_STORE_ROOT = os.environ.get(
     'MEM0_STORE_ROOT', os.path.join(os.path.expanduser('~'), '.check-manage', 'mem0'))        # mem0 向量库

@@ -1102,7 +1102,7 @@ def skill_fit_detail(attempt_id):
 @ai_execution_admin_bp.post('/skill-fit/<attempt_id>/recompute')
 @require_permission('admin.ai_chat_admin')
 def skill_fit_recompute(attempt_id):
-    """幂等重算：委托 utils.skill_fit.compute_attempt_fit，结果行按
+    """幂等重算：委托 ai.skills.skill_fit.compute_attempt_fit，结果行按
     (attempt_id, def_name) upsert（唯一索引 uq_skill_fit_attempt_def），
     重复调用行数不膨胀，结果以最后一次为准。"""
     from db import get_db
@@ -1394,7 +1394,7 @@ def _path_in_allowed_roots(path: str) -> bool:
     """SkillOpt 定义文件路径 confinement（终审 Fix 3）：path realpath 归一后
     必须落在允许根内（AI 工作区根 / 平台全局技能根——后者是前者子目录，
     显式并列以容忍二者将来分体部署 / OpenCode 受管技能根，系统技能的
-    SKILL.md 就在那里，2026-10-11 起纳入）。参照 utils/global_skills.py
+    SKILL.md 就在那里，2026-10-11 起纳入）。参照 ai/skills/global_skills.py
     read_skill_file 的 normpath+commonpath 模式——commonpath 相等比较
     （优于 startswith 前缀碰撞），跨盘符等无法比较的情形一律视为逃逸。"""
     from config import AI_WORKSPACE_ROOT
@@ -1417,7 +1417,7 @@ def _path_in_allowed_roots(path: str) -> bool:
 @require_permission('admin.ai_chat_admin')
 def skill_def_steps_resolve():
     """按 (kind, name[, contentHash]) 自动定位定义文件路径（生成器预填用）：
-    最新注入记录优先、hash 一致者优先、文件须仍存在（utils.skill_fit
+    最新注入记录优先、hash 一致者优先、文件须仍存在（ai.skills.skill_fit
     .resolve_definition_path）。无可用记录 404——前端回落为手动填路径。
     路径 confinement 由 generate/apply 在读取/写盘前执行，与手输一致。"""
     from ai.skills.skill_fit import resolve_definition_path

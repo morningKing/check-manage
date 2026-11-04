@@ -27,7 +27,7 @@ class _OpenCodeFacade:
         # adapter 私有 _client → 既有直连。测试对 eng.opencode_client 的
         # 整体替换不受影响。
         try:
-            from utils.runtime import get_runtime
+            from ai.runtime import get_runtime
             rt = get_runtime()
         except Exception:
             rt = None  # runtime 不可用/未启用 → 走下方兜底直连

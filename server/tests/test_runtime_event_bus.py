@@ -14,7 +14,7 @@ import pytest
 @pytest.fixture()
 def stub(monkeypatch):
     monkeypatch.setenv('AI_STUB_ALLOW', '1')
-    from utils.runtime.stub import StubRuntime
+    from ai.runtime.stub import StubRuntime
     rt = StubRuntime(profile={'delay_ms': [10, 20], 'tool_parts': 2})
     yield rt
 
@@ -107,7 +107,7 @@ def test_no_replay_for_late_subscriber(stub):
 
 
 def test_facade_delegates_to_client(monkeypatch):
-    from utils.runtime.base import AgentRuntime
+    from ai.runtime.base import AgentRuntime
 
     class FakeClient:
         def subscribe_events(self, directory='', read_timeout=None):
@@ -122,14 +122,14 @@ def test_facade_delegates_to_client(monkeypatch):
 
 
 def test_facade_subscribe_is_agentruntime_method():
-    from utils.runtime.base import AgentRuntime
+    from ai.runtime.base import AgentRuntime
     assert hasattr(AgentRuntime, 'subscribe_events')
 
 
 @pytest.fixture()
 def stub_delegate(monkeypatch):
     monkeypatch.setenv('AI_STUB_ALLOW', '1')
-    from utils.runtime.stub import StubRuntime
+    from ai.runtime.stub import StubRuntime
     rt = StubRuntime(profile={'delay_ms': [10, 20], 'delegate': ['explorer'],
                               'tool_parts': 1})
     yield rt

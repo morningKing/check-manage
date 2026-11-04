@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 
-from utils.runtime.base import AgentRuntime
+from ai.runtime.base import AgentRuntime
 
 DEFAULT_PROFILE = {'delay_ms': [2000, 8000], 'error_rate': 0.0,
                    'hang_rate': 0.0, 'hang_recover_after_ms': 0,

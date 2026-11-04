@@ -66,7 +66,7 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS input_files JSONB;
 -- Cooperative-cancel flag for the external POST .../cancel endpoints (both
 -- batch children and standalone sessions live in this one table). No CHECK
 -- constraint on `status`, so the worker can write the literal 'cancelled'
--- terminal value straight into that column — see utils/batch_engine.py's
+-- terminal value straight into that column — see ai/batch/engine/ (原 utils/batch_engine.py)'s
 -- claim-time sweep + mid-run _await_finished check.
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE;
 -- Cooperative-PAUSE flag (批任务「暂停」): same mechanism as cancel_requested

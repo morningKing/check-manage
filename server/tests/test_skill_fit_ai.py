@@ -201,7 +201,7 @@ def test_preview_steps_matches(tmp_path):
 def client():
     """真实 DB 的 test client（shadow 掉 conftest 的 mock-DB `client`）。
 
-    断言走真库（attempt 缺失 → 404），并把 utils.skill_fit_ai 的
+    断言走真库（attempt 缺失 → 404），并把 ai.skills.skill_fit_ai 的
     `_default_get_db` 重绑回真实实现——防止该模块在早前 app 夹具的
     db.get_db mock 窗口内首次导入时绑到 mock 连接。权限判定走 conftest
     autouse 的 RBAC 预置缓存（admin=superuser），不需要 DB。"""

@@ -6,7 +6,7 @@
 后端 / 经 Vite 开发代理时有效，经生产入口 `:8080` 时被完全绕过。
 
 这些测试钉住三件事：
-1. 上限数值只有一份（Flask 与 proxy 都读 utils/upload_limits）；
+1. 上限数值只有一份（Flask 与 proxy 都读 common/upload_limits）；
 2. 限制**只**作用于 AI 批任务对外端点 —— 尤其备份还原必须无上限；
 3. 超限请求在 `rfile.read()` **被调用之前**就被拒（用一个"一读就爆"的 rfile 证明）。
 """

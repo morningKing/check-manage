@@ -217,7 +217,7 @@ class TestDeletePageConfig:
 
 
 class TestFieldIndexSyncOnSave:
-    """保存字段配置时，indexed 标记要同步进 field_indexes（见 utils/field_indexes.py）。"""
+    """保存字段配置时，indexed 标记要同步进 field_indexes（见 data/field_indexes.py）。"""
 
     def test_newly_indexed_field_inserts_pending_row(self, setup):
         client, mock_cursor, admin_h, _ = setup

@@ -11,7 +11,7 @@ _FORBIDDEN_PARAM_CONTROLS = ('relation', 'reference', 'quoteSelect', 'autoSequen
 # checkbox/file/image 存的是数组，relation/reference/quoteSelect 干脆不落在
 # 这行的 data 里（走 data_relations 表）。行动作的状态字段/显示条件字段/响应
 # 映射目标字段都要求"能读出一个标量、能整体覆盖写回一个标量"，用这些控件
-# 配置出来，条件求值器会把它们当 ''（见 utils/row_action_condition.py），
+# 配置出来，条件求值器会把它们当 ''（见 collab/row_action_condition.py），
 # 写回则会把数组/关联字段静默改写成一个字符串，是不折不扣的脏数据。
 _NON_SCALAR_CONTROLS = ('multiSelect', 'checkbox', 'file', 'image',
                         'relation', 'reference', 'quoteSelect')

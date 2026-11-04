@@ -140,7 +140,7 @@ app.register_blueprint(metrics_bp)
 
 @app.before_request
 def _ai_open_api_body_limit():
-    """AI 对外 JSON 端点的请求体门（utils/upload_limits.body_limit_for_path 的
+    """AI 对外 JSON 端点的请求体门（common/upload_limits.body_limit_for_path 的
     Flask 侧执行点之二）。
 
     open_api_batches 蓝图有自己的 before_request（语义相同）；这里补上其余
@@ -166,16 +166,31 @@ def _ai_open_api_body_limit():
 
 # 执行审计表/回填随启动幂等执行（execution-audit §17）：旧分析会话
 # （标题前缀）自动补 kind=trace_analysis，无需手动跑迁移。
-try:
+# 迁移启动注册表（显式有序，行为等价于原逐段 try/except 块；新迁移必须在此
+# 登记且顺序不可调整——后续迁移依赖前面迁移建的表。init_db 的自动扫描不覆盖
+# 生产重启路径，见 docs/superpowers/specs/2026-11-03-backend-restructure-design.md §7）。
+# SkillOpt/插件启动块（原 L182-322）位于 PRE 与 MAIN 之间，执行顺序原样保留。
+_BOOT_MIGRATIONS_PRE = [
+    ('2026_09_17_execution_audit_tables.py',
+     'execution audit migration on boot failed'),
+]
+
+
+def _run_boot_migrations(entries):
     import importlib.util as _ilu
-    _mp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       'migrations', '2026_09_17_execution_audit_tables.py')
-    _spec = _ilu.spec_from_file_location('_exec_audit_migration_boot', _mp)
-    _m = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_m)
-    _m.run()
-except Exception as _e:
-    logging.warning('execution audit migration on boot failed: %s', _e)
+    _base = os.path.dirname(os.path.abspath(__file__))
+    for _fname, _errmsg in entries:
+        _mp = os.path.join(_base, 'migrations', _fname)
+        try:
+            _spec = _ilu.spec_from_file_location('_boot_' + _fname[:-3], _mp)
+            _m = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_m)
+            _m.run()
+        except Exception as _e:
+            logging.warning('%s: %s', _errmsg, _e)
+
+
+_run_boot_migrations(_BOOT_MIGRATIONS_PRE)
 
 # SkillOpt P2：运行时插件自动安装（skill load/invoke 事件上报 → invoked
 # confirmed）与审计事件保留策略（明文 30 天/行 180 天）
@@ -321,389 +336,41 @@ try:
 except Exception as _e:
     logging.warning('SkillOpt boot failed (non-fatal): %s', _e)
 
-# 会话自定义分组表（2026-09-18）：同样随启动幂等执行
-try:
-    _mp2 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_18_session_groups.py')
-    _spec2 = _ilu.spec_from_file_location('_session_groups_migration_boot', _mp2)
-    _m2 = _ilu.module_from_spec(_spec2)
-    _spec2.loader.exec_module(_m2)
-    _m2.run()
-except Exception as _e:
-    logging.warning('session groups migration on boot failed: %s', _e)
+_BOOT_MIGRATIONS_MAIN = [
+    ('2026_09_18_session_groups.py', 'session groups migration on boot failed'),
+    ('2026_09_18_session_group_icon.py', 'session group icon migration on boot failed'),
+    ('2026_09_19_session_pin.py', 'session pin migration on boot failed'),
+    ('2026_09_18_scan_output_field.py', 'scan output field migration on boot failed'),
+    ('2026_09_20_agent_action_gate.py', 'agent action gate migration on boot failed'),
+    ('2026_09_18_skillopt_p2.py', 'skillopt p2 migration on boot failed'),
+    ('2026_09_21_batch_child_soft_delete.py', 'batch child soft-delete migration on boot failed'),
+    ('2026_09_23_harness_p0_execution_safety.py', 'harness p0 migration on boot failed'),
+    ('2026_09_23_harness_p1_durable_execution.py', 'harness p1 migration on boot failed'),
+    ('2026_09_23_harness_p2_orchestration.py', 'harness p2 migration on boot failed'),
+    ('2026_09_24_subagent_session_reuse.py', 'subagent reuse migration on boot failed'),
+    ('2026_09_25_artifact_owner_scope.py', 'artifact owner scope migration on boot failed'),
+    ('2026_09_28_message_search_text.py', 'message search_text migration on boot failed'),
+    ('2026_09_29_tool_calls_backfill.py', 'tool calls backfill migration on boot failed'),
+    ('2026_09_29_embedding_provider.py', 'embedding provider migration on boot failed'),
+    ('2026_09_26_batch_notify_trigger.py', 'batch notify trigger migration on boot failed'),
+    ('2026_09_26_action_gate_mode.py', 'action gate mode migration on boot failed'),
+    ('2026_10_11_gate_checkpoint_policy.py', 'gate checkpoint/policy migration on boot failed'),
+    ('2026_10_01_skill_fit_tables.py', 'skill fit tables migration on boot failed'),
+    ('2026_10_05_def_version_content_archive.py', 'def version content archive migration on boot failed'),
+    ('2026_10_27_run_diagnoses.py', 'run diagnoses migration on boot failed'),
+    ('2026_10_27_skill_candidates.py', 'skill candidates migration on boot failed'),
+    ('2026_10_10_tool_call_duration.py', 'tool call duration migration on boot failed'),
+    ('2026_10_18_suggest_editor_tables.py', 'suggest editor migration on boot failed'),
+    ('2026_10_21_suggest_editor_attachments.py', 'suggest editor attachments migration on boot failed'),
+    ('2026_10_25_batch_takeover.py', 'batch takeover migration on boot failed'),
+    ('2026_10_25b_platform_plugins.py', 'platform plugins migration on boot failed'),
+    ('2026_10_25c_mcp_tool_governance.py', 'mcp tool governance migration on boot failed'),
+    ('2026_10_27_batch_multi_model.py', 'batch multi-model migration on boot failed'),
+    ('2026_10_30_message_feedback.py', 'message feedback migration on boot failed'),
+    ('2026_10_31_session_permission_mode.py', 'session permission_mode migration on boot failed'),
+]
 
-# 分组图标列（2026-09-18）：随启动幂等执行
-try:
-    _mp4 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_18_session_group_icon.py')
-    _spec4 = _ilu.spec_from_file_location('_session_group_icon_boot', _mp4)
-    _m4 = _ilu.module_from_spec(_spec4)
-    _spec4.loader.exec_module(_m4)
-    _m4.run()
-except Exception as _e:
-    logging.warning('session group icon migration on boot failed: %s', _e)
-
-# 会话置顶列（2026-09-19）：随启动幂等执行
-try:
-    _mp5 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_19_session_pin.py')
-    _spec5 = _ilu.spec_from_file_location('_session_pin_boot', _mp5)
-    _m5 = _ilu.module_from_spec(_spec5)
-    _spec5.loader.exec_module(_m5)
-    _m5.run()
-except Exception as _e:
-    logging.warning('session pin migration on boot failed: %s', _e)
-
-# 扫描任务产出文件字段（2026-09-18）：随启动幂等执行
-try:
-    _mp3 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_18_scan_output_field.py')
-    _spec3 = _ilu.spec_from_file_location('_scan_output_field_boot', _mp3)
-    _m3 = _ilu.module_from_spec(_spec3)
-    _spec3.loader.exec_module(_m3)
-    _m3.run()
-except Exception as _e:
-    logging.warning('scan output field migration on boot failed: %s', _e)
-
-# Agent 动作账本与到位门禁（2026-09-20）：随启动幂等执行
-try:
-    _mp6 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_20_agent_action_gate.py')
-    _spec6 = _ilu.spec_from_file_location('_agent_action_gate_boot', _mp6)
-    _m6 = _ilu.module_from_spec(_spec6)
-    _spec6.loader.exec_module(_m6)
-    _m6.run()
-except Exception as _e:
-    logging.warning('agent action gate migration on boot failed: %s', _e)
-
-# SkillOpt P2：ai_skill_invocations / ai_suggestion_feedback（2026-09-18）。
-# 此前该迁移从未注册进启动钩子——依赖它的表在生产等只靠部署启动建表的环境
-# 永远不会创建，AI 技能优化页直接报"关系 ai_skill_invocations 不存在"。
-# 依赖执行审计表（09_17 钩子在前），顺序不可提前。
-try:
-    _mp7 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_18_skillopt_p2.py')
-    _spec7 = _ilu.spec_from_file_location('_skillopt_p2_boot', _mp7)
-    _m7 = _ilu.module_from_spec(_spec7)
-    _spec7.loader.exec_module(_m7)
-    _m7.run()
-except Exception as _e:
-    logging.warning('skillopt p2 migration on boot failed: %s', _e)
-
-# 批子任务软删除列（2026-09-21）：随启动幂等执行
-try:
-    _mp8 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_21_batch_child_soft_delete.py')
-    _spec8 = _ilu.spec_from_file_location('_batch_child_soft_delete_boot', _mp8)
-    _m8 = _ilu.module_from_spec(_spec8)
-    _spec8.loader.exec_module(_m8)
-    _m8.run()
-except Exception as _e:
-    logging.warning('batch child soft-delete migration on boot failed: %s', _e)
-
-# AI Harness P0 执行安全基线（2026-09-23）：ai_chat_turns / execution_generation /
-# gate 列 / worker 租约表 / batch_seq 唯一约束。随启动幂等执行。
-try:
-    _mp9 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'migrations', '2026_09_23_harness_p0_execution_safety.py')
-    _spec9 = _ilu.spec_from_file_location('_harness_p0_boot', _mp9)
-    _m9 = _ilu.module_from_spec(_spec9)
-    _spec9.loader.exec_module(_m9)
-    _m9.run()
-except Exception as _e:
-    logging.warning('harness p0 migration on boot failed: %s', _e)
-
-# AI Harness P1 持久化执行（2026-09-23）：执行租约列 / attempt 列与唯一索引 /
-# checkpoints / effects / commands / batch_events / delivery_outbox / budgets /
-# usage。随启动幂等执行。
-try:
-    _mp10 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_23_harness_p1_durable_execution.py')
-    _spec10 = _ilu.spec_from_file_location('_harness_p1_boot', _mp10)
-    _m10 = _ilu.module_from_spec(_spec10)
-    _spec10.loader.exec_module(_m10)
-    _m10.run()
-except Exception as _e:
-    logging.warning('harness p1 migration on boot failed: %s', _e)
-
-# AI Harness P2 编排（2026-09-23）：orchestration 定义/run/step、审批、产物、
-# runtime manifest、会话关联列。随启动幂等执行。
-try:
-    _mp11 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_23_harness_p2_orchestration.py')
-    _spec11 = _ilu.spec_from_file_location('_harness_p2_boot', _mp11)
-    _m11 = _ilu.module_from_spec(_spec11)
-    _spec11.loader.exec_module(_m11)
-    _m11.run()
-except Exception as _e:
-    logging.warning('harness p2 migration on boot failed: %s', _e)
-
-# 子代理会话复用（2026-09-24）：批级 subagent_reuse 配置列 / 复用锚定表
-# ai_subagent_pins / 子代理任务段 turn_segments。随启动幂等执行。
-try:
-    _mp12 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_24_subagent_session_reuse.py')
-    _spec12 = _ilu.spec_from_file_location('_subagent_reuse_boot', _mp12)
-    _m12 = _ilu.module_from_spec(_spec12)
-    _spec12.loader.exec_module(_m12)
-    _m12.run()
-except Exception as _e:
-    logging.warning('subagent reuse migration on boot failed: %s', _e)
-
-# M9/M12 回修（2026-09-25）：artifact 去重按 owner 隔离 + outbox sending
-# 回收索引。随启动幂等执行。
-try:
-    _mp13 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_25_artifact_owner_scope.py')
-    _spec13 = _ilu.spec_from_file_location('_artifact_owner_boot', _mp13)
-    _m13 = _ilu.module_from_spec(_spec13)
-    _spec13.loader.exec_module(_m13)
-    _m13.run()
-except Exception as _e:
-    logging.warning('artifact owner scope migration on boot failed: %s', _e)
-
-# 会话内容搜索物化（2026-09-28 大数据量优化 §1.2）：ai_chat_messages.search_text
-# 触发器维护 + trgm 索引 + 存量回填。随启动幂等执行。
-# 注意 exec_module 不可省：缺了它模块代码从未执行，run() 报
-# "module '_msg_search_boot' has no attribute 'run'"（被 except 吞成 warning，
-# 重启路径上该迁移静默永不执行——2026-10-27 生产启动实测）。
-try:
-    _mp14 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_28_message_search_text.py')
-    _spec14 = _ilu.spec_from_file_location('_msg_search_boot', _mp14)
-    _m14 = _ilu.module_from_spec(_spec14)
-    _spec14.loader.exec_module(_m14)
-    _m14.run()
-except Exception as _e:
-    logging.warning('message search_text migration on boot failed: %s', _e)
-
-# 存量会话工具调用回填（2026-09-29）：老会话消息里的 tool_use 片段补录进
-# agent_tool_calls 账本（「工具调用」面板数据源）。幂等可重跑，重跑只补增量。
-try:
-    _mp15 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_29_tool_calls_backfill.py')
-    _spec15 = _ilu.spec_from_file_location('_toolcalls_backfill_boot', _mp15)
-    _m15 = _ilu.module_from_spec(_spec15)
-    _spec15.loader.exec_module(_m15)
-    _m15.run()
-except Exception as _e:
-    logging.warning('tool calls backfill migration on boot failed: %s', _e)
-
-# mem0 嵌入模型提供方列（2026-09-29）：embedding_provider/ollama_url/dims。
-# 随启动幂等执行。
-try:
-    _mp16 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_29_embedding_provider.py')
-    _spec16 = _ilu.spec_from_file_location('_embed_provider_boot', _mp16)
-    _m16 = _ilu.module_from_spec(_spec16)
-    _spec16.loader.exec_module(_m16)
-    _m16.main()
-except Exception as _e:
-    logging.warning('embedding provider migration on boot failed: %s', _e)
-
-# PG LISTEN/NOTIFY 触发器（2026-09-26 P3-C1）：子会话入队（status→pending）
-# 时 pg_notify('batch_claim_ready')，batch dispatcher 的专用 LISTEN 连接
-# select 唤醒立即 claim（替代等待下一轮 2s poll）。随启动幂等执行。
-try:
-    _mp17 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_26_batch_notify_trigger.py')
-    _spec17 = _ilu.spec_from_file_location('_batch_notify_boot', _mp17)
-    _m17 = _ilu.module_from_spec(_spec17)
-    _spec17.loader.exec_module(_m17)
-    _m17.run()
-except Exception as _e:
-    logging.warning('batch notify trigger migration on boot failed: %s', _e)
-
-# action gate mode 列（2026-09-26 P3-C3）：'post'=终态核对（既有）/
-# 'pre'=PreToolUse 拦截（deny list）。随启动幂等执行，必须先于任何
-# pre-check 查询（列缺失会让核对 SQL 报错 → 全部 inconclusive）。
-try:
-    _mp18 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_09_26_action_gate_mode.py')
-    _spec18 = _ilu.spec_from_file_location('_gate_mode_boot', _mp18)
-    _m18 = _ilu.module_from_spec(_spec18)
-    _spec18.loader.exec_module(_m18)
-    _m18.run()
-except Exception as _e:
-    logging.warning('action gate mode migration on boot failed: %s', _e)
-
-# 动作门禁过程检查 + 策略库（2026-10-11）：checkpoint 承载列 / gate_policies /
-# 批引用列。随启动幂等执行；漏注册会让 pre/post-check 查询报列不存在 → 全部
-# fail-open 放行（过程检查静默失效）。
-try:
-    _mp19 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_10_11_gate_checkpoint_policy.py')
-    _spec19 = _ilu.spec_from_file_location('_gate_checkpoint_boot', _mp19)
-    _m19 = _ilu.module_from_spec(_spec19)
-    _spec19.loader.exec_module(_m19)
-    _m19.run()
-except Exception as _e:
-    logging.warning('gate checkpoint/policy migration on boot failed: %s', _e)
-
-# SkillOpt 任务拟合表（2026-10-01）：ai_skill_fit_results / ai_skill_def_versions
-# / ai_skill_invocations.subtask_id。随启动幂等执行。漏注册事故第二例（2026-10-08
-# 生产任务拟合页全空）——init_db 自动扫描只覆盖全新库，生产「拉代码+重启」
-# 路径只认这里的显式注册；护栏测试 tests/test_migration_boot_registration.py
-# 防再犯。
-try:
-    _mp18b = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'migrations', '2026_10_01_skill_fit_tables.py')
-    _spec18b = _ilu.spec_from_file_location('_skill_fit_tables_boot', _mp18b)
-    _m18b = _ilu.module_from_spec(_spec18b)
-    _spec18b.loader.exec_module(_m18b)
-    _m18b.run()
-except Exception as _e:
-    logging.warning('skill fit tables migration on boot failed: %s', _e)
-
-# 定义版本正文归档列（2026-10-05）：ai_skill_def_versions 加
-# content/content_captured_at（SkillOpt 版本归档与对比）。随启动幂等执行；
-# init_db 的 _run_dated_migrations 自动扫描不覆盖生产「拉代码+重启」路径，
-# 新迁移必须在此显式注册（2026_09_18_skillopt_p2 漏注册事故同因）。
-try:
-    _mp19 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_10_05_def_version_content_archive.py')
-    _spec19 = _ilu.spec_from_file_location('_def_version_content_boot', _mp19)
-    _m19 = _ilu.module_from_spec(_spec19)
-    _spec19.loader.exec_module(_m19)
-    _m19.run()
-except Exception as _e:
-    logging.warning('def version content archive migration on boot failed: %s', _e)
-
-# O1 统一运行诊断表（2026-10-27）：ai_run_diagnoses。随启动幂等执行；
-# 漏注册会让 run_diagnosis 聚合器建行报「表不存在」→ 批 finalize 后
-# 诊断静默缺失（best-effort 吞掉），必须在此显式注册。
-try:
-    _mp21 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_10_27_run_diagnoses.py')
-    _spec21 = _ilu.spec_from_file_location('_run_diag_boot', _mp21)
-    _m21 = _ilu.module_from_spec(_spec21)
-    _spec21.loader.exec_module(_m21)
-    _m21.run()
-except Exception as _e:
-    logging.warning('run diagnoses migration on boot failed: %s', _e)
-
-# O2 技能进化候选区表（2026-10-27）：ai_skill_candidates。随启动幂等执行；
-# 漏注册会让候选创建/列表端点 500。
-try:
-    _mp22 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_10_27_skill_candidates.py')
-    _spec22 = _ilu.spec_from_file_location('_skill_cand_boot', _mp22)
-    _m22 = _ilu.module_from_spec(_spec22)
-    _spec22.loader.exec_module(_m22)
-    _m22.run()
-except Exception as _e:
-    logging.warning('skill candidates migration on boot failed: %s', _e)
-
-# 工具级耗时采集列（2026-10-10）：agent_tool_calls 加 started_at/duration_ms
-# + root/manifest 聚合索引（SkillOpt 性能分析二期，spec §7）。随启动幂等执行。
-try:
-    _mp20 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         'migrations', '2026_10_10_tool_call_duration.py')
-    _spec20 = _ilu.spec_from_file_location('_tool_duration_boot', _mp20)
-    _m20 = _ilu.module_from_spec(_spec20)
-    _spec20.loader.exec_module(_m20)
-    _m20.run()
-except Exception as _e:
-    logging.warning('tool call duration migration on boot failed: %s', _e)
-
-# 智能写作三张表 + 内置模板/菜单 seed（2026-10-18）。随启动幂等执行；
-# 新迁移必须在此显式注册（init_db 自动扫描只覆盖全新库，见护栏测试）。
-try:
-    _mp_se = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'migrations', '2026_10_18_suggest_editor_tables.py')
-    _spec_se = _ilu.spec_from_file_location('_suggest_editor_tables_boot', _mp_se)
-    _m_se = _ilu.module_from_spec(_spec_se)
-    _spec_se.loader.exec_module(_m_se)
-    _m_se.run()
-except Exception as _e:
-    logging.warning('suggest editor migration on boot failed: %s', _e)
-
-# 智能写作附件表 + 导入种子列（2026-10-21）。幂等；同样必须显式注册。
-try:
-    _mp_se_att = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                              'migrations', '2026_10_21_suggest_editor_attachments.py')
-    _spec_se_att = _ilu.spec_from_file_location('_suggest_editor_attachments_boot', _mp_se_att)
-    _m_se_att = _ilu.module_from_spec(_spec_se_att)
-    _spec_se_att.loader.exec_module(_m_se_att)
-    _m_se_att.run()
-except Exception as _e:
-    logging.warning('suggest editor attachments migration on boot failed: %s', _e)
-
-# 批任务接管令牌表 + continue_repark 列（对外接管页，2026-10-25 spec）
-try:
-    import importlib.util as _ilu_bt
-    _mp_bt = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'migrations', '2026_10_25_batch_takeover.py')
-    _spec_bt = _ilu_bt.spec_from_file_location('_batch_takeover_boot', _mp_bt)
-    _m_bt = _ilu_bt.module_from_spec(_spec_bt)
-    _spec_bt.loader.exec_module(_m_bt)
-    _m_bt.run()
-except Exception as _e:
-    logging.warning('batch takeover migration on boot failed: %s', _e)
-
-# 第一方插件开关表 + 注册表种子（2026-10-25 插件架构）。幂等；种子 ON
-# CONFLICT DO NOTHING 不覆盖管理员选择；同样必须显式注册（护栏测试）。
-try:
-    import importlib.util as _ilu_pp
-    _mp_pp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'migrations', '2026_10_25b_platform_plugins.py')
-    _spec_pp = _ilu_pp.spec_from_file_location('_platform_plugins_boot', _mp_pp)
-    _m_pp = _ilu_pp.module_from_spec(_spec_pp)
-    _spec_pp.loader.exec_module(_m_pp)
-    _m_pp.run()
-except Exception as _e:
-    logging.warning('platform plugins migration on boot failed: %s', _e)
-
-# 内置 MCP 工具治理两表（2026-10-25 工具治理 spec）。幂等建表；矩阵默认行
-# 由 mcp-server 启动同步播种（工具清单真相源在 mcp-server manifest）。
-try:
-    import importlib.util as _ilu_mtg
-    _mp_mtg = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           'migrations', '2026_10_25c_mcp_tool_governance.py')
-    _spec_mtg = _ilu_mtg.spec_from_file_location('_mcp_tool_governance_boot', _mp_mtg)
-    _m_mtg = _ilu_mtg.module_from_spec(_spec_mtg)
-    _spec_mtg.loader.exec_module(_m_mtg)
-    _m_mtg.run()
-except Exception as _e:
-    logging.warning('mcp tool governance migration on boot failed: %s', _e)
-
-# 批任务多模型分配列（2026-10-27）。幂等；新迁移必须在此显式注册
-# （init_db 自动扫描只覆盖全新库，见护栏测试）。
-try:
-    import importlib.util as _ilu_mm
-    _mp_mm = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'migrations', '2026_10_27_batch_multi_model.py')
-    _spec_mm = _ilu_mm.spec_from_file_location('_batch_multi_model_boot', _mp_mm)
-    _m_mm = _ilu_mm.module_from_spec(_spec_mm)
-    _spec_mm.loader.exec_module(_m_mm)
-    _m_mm.run()
-except Exception as _e:
-    logging.warning('batch multi-model migration on boot failed: %s', _e)
-
-# 消息反馈表（2026-10-30 第一档 Feature A）：点赞/点踩独立小表。随启动幂等执行。
-try:
-    import importlib.util as _ilu_mf
-    _mp_mf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'migrations', '2026_10_30_message_feedback.py')
-    _spec_mf = _ilu_mf.spec_from_file_location('_msg_feedback_boot', _mp_mf)
-    _m_mf = _ilu_mf.module_from_spec(_spec_mf)
-    _spec_mf.loader.exec_module(_m_mf)
-    _m_mf.run()
-except Exception as _e:
-    logging.warning('message feedback migration on boot failed: %s', _e)
-
-# 会话级权限模式列（2026-10-31 bypass spec §2.1）。幂等加列；新迁移必须在此
-# 显式注册（init_db 自动扫描只覆盖全新库，见护栏测试）。
-try:
-    import importlib.util as _ilu_pm
-    _mp_pm = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          'migrations', '2026_10_31_session_permission_mode.py')
-    _spec_pm = _ilu_pm.spec_from_file_location('_session_permission_mode_boot', _mp_pm)
-    _m_pm = _ilu_pm.module_from_spec(_spec_pm)
-    _spec_pm.loader.exec_module(_m_pm)
-    _m_pm.run()
-except Exception as _e:
-    logging.warning('session permission_mode migration on boot failed: %s', _e)
+_run_boot_migrations(_BOOT_MIGRATIONS_MAIN)
 
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
@@ -778,12 +445,12 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     except Exception as _e5:
         logging.warning('oc-watchdog start failed: %s', _e5)
 
-    # Start ETL background scheduler (async run of large imports, see utils/etl_scheduler.py)
+    # Start ETL background scheduler (async run of large imports, see data/etl_scheduler.py)
     from data.etl_scheduler import start_etl_scheduler
     start_etl_scheduler(app)
 
     # P1：outbox 投递器（持 delivery 租约；AI_DELIVERY_OUTBOX_ENABLED=0 时回退
-    # 旧直接 POST 回调路径，见 utils/delivery_outbox.py）
+    # 旧直接 POST 回调路径，见 ai/batch/delivery_outbox.py）
     from ai.batch.delivery_outbox import start_delivery_loop
     start_delivery_loop()
 

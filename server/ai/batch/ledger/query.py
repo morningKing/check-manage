@@ -59,7 +59,7 @@ def reconcile_task_durations(session_id: str, *, get_db=None,
             if incomplete == 0 and task_rows >= len(child_ids):
                 return {'status': 'clean'}
     try:
-        from utils.runtime import get_runtime
+        from ai.runtime import get_runtime
         client = oc_client or get_runtime().get_client()
         msgs = client.get_messages(oc_sid, directory=(ws or '')) or []
         if not msgs:

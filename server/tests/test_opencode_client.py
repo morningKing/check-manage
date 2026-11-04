@@ -1,4 +1,4 @@
-"""Tests for server/utils/opencode_client.py — mocked HTTP and SSE.
+"""Tests for server/ai/opencode/opencode_client.py — mocked HTTP and SSE.
 
 Contracts assert the real OpenCode 1.2.26 API (see spec §12):
 - directory binds via the ?directory= query param (not body cwd)

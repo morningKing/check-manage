@@ -233,7 +233,7 @@ def test_td_f05_trigger_delete_event_never_fires(admin):
 
 # ---- 校验脚本 TD-F06–F08 ----
 
-# 沙箱 locals 预初始化 errors=[]/warnings=[]（utils/script_runner.py
+# 沙箱 locals 预初始化 errors=[]/warnings=[]（data/script_runner.py
 # run_validation_script），脚本直接调 add_error/add_warning 即可——
 # 无需（brief 草稿里的）`errors = errors or []` 兜底前缀。
 VAL_OK = ("if not (record.get('name') or '').strip():\n"
@@ -330,7 +330,7 @@ class _StubHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
-        # 引擎按 title-case 发送（X-Webhook-Event 等，utils/webhook_engine.py:331-336）；
+        # 引擎按 title-case 发送（X-Webhook-Event 等，collab/webhook_engine.py:331-336）；
         # HTTP 头名大小写不敏感，stub 统一小写存档便于断言。
         rec = {'path': self.path,
                'headers': {k.lower(): v for k, v in self.headers.items()
@@ -424,14 +424,14 @@ def test_td_f11_webhook_after_payload_signature_and_logs(admin, stub):
         assert hit['headers'].get('x-webhook-event') == 'create'
         ts = hit['headers'].get('x-webhook-timestamp')
         sig = hit['headers'].get('x-webhook-signature')
-        # 真实签名格式（utils/webhook_engine.py:327-329 + 393-405）：
+        # 真实签名格式（collab/webhook_engine.py:327-329 + 393-405）：
         # payload_json = json.dumps(payload, ensure_ascii=False) 且原样作为
         # 请求体字节发送（data=payload_json.encode('utf-8')，无尾换行），
         # message = f'{timestamp}.{payload}'——故用收到的 body 原文重算即可。
         expected = hmac.new(secret.encode(), f'{ts}.{hit["body"]}'.encode(),
                             hashlib.sha256).hexdigest()
         assert sig == expected, f'签名不符: {sig} != {expected}'
-        # payload 真实结构（utils/webhook_engine.py _build_payload :248-256 公共键
+        # payload 真实结构（collab/webhook_engine.py _build_payload :248-256 公共键
         # event/timing/timestamp/ruleId/ruleName/operator/branchId；:259-277 数据事件
         # 追加 collection/pageName/recordId；:296-300 after/create 追加 record=new_data）
         assert payload.get('recordId') == rec['id'], \
@@ -532,7 +532,7 @@ def test_td_f13_row_action_run_async_writeback(admin, stub):
             live.api('GET', f"/{page['collection']}/{rec['id']}", admin)),
             timeout_s=20, label='回写终态')
         assert done['ra_status'] == 'done', f"应回写 done，得 {done['ra_status']}"
-        # stub 返回 {"ok": true}；实际契约（utils/row_action_engine.py）：
+        # stub 返回 {"ok": true}；实际契约（collab/row_action_engine.py）：
         # _map_response 取回的是布尔 True（:331-332），write_back 以 str(val)
         # 落库（:77-78 to_jsonb(%s::text)）——即 Python 的 'True'，不是 'true'。
         assert done.get('ra_receipt') == 'True'

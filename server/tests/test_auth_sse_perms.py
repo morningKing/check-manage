@@ -1,5 +1,5 @@
 """require_permission_sse 装饰器测试：支持 Authorization 头与 ?access_token=
-两种取 token 路径；能力门二态由 utils.permissions.can_admin 决定，超管放行。
+两种取 token 路径；能力门二态由 common.permissions.can_admin 决定，超管放行。
 
 _token 来源差异（header only / header or query）让两装饰器分道，能力判定
 收敛到 auth._user_has_permission 这一条路径——逻辑漂移即安全事故，故用此套

@@ -4,11 +4,13 @@
 P2 首发只提供 OpenCodeLocalRuntime（包装既有 opencode_client，行为保持
 byte-for-byte 兼容）；Docker / Windows Job / K8s 适配器按环境启用（后续
 Phase E，接口已预留 capabilities()）。
+
+原 utils/runtime/ 整包迁入（重构批次 6 收口补录——§4 映射清单此前遗漏此包）。
 """
 import threading
 
-from utils.runtime.base import AgentRuntime, RuntimeCapabilityError
-from utils.runtime.opencode_local import OpenCodeLocalRuntime
+from ai.runtime.base import AgentRuntime, RuntimeCapabilityError
+from ai.runtime.opencode_local import OpenCodeLocalRuntime
 
 __all__ = ['AgentRuntime', 'RuntimeCapabilityError', 'OpenCodeLocalRuntime',
            'get_runtime']
@@ -39,7 +41,7 @@ def get_runtime() -> AgentRuntime:
                         raise RuntimeCapabilityError(
                             'AI_AGENT_RUNTIME=stub 需要显式 AI_STUB_ALLOW=1 '
                             '（防误配：stub 会假成功所有 agent 任务）')
-                    from utils.runtime.stub import StubRuntime
+                    from ai.runtime.stub import StubRuntime
                     _default = StubRuntime()      # profile 由 AI_STUB_PROFILE 注入
                 elif kind != 'opencode_local':
                     raise RuntimeCapabilityError(

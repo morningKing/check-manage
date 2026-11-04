@@ -16,7 +16,7 @@
   红线：绝不调 /backups/<id>/restore 与 /backups/factory-reset。
   历史缺陷 04 #7（2026-10-07 定档并已修）：POST /backups 全量导出曾在
   ai_execution_usage 表 500——cost 列 NUMERIC 返回 Decimal，
-  utils/backup._serialize_value（:476-484）未处理 Decimal 且 json.dumps 无
+  projects/backup._serialize_value（:476-484）未处理 Decimal 且 json.dumps 无
   default= → TypeError「Object of type Decimal is not JSON serializable」。
   修复：_serialize_value 增加 Decimal→float 分支；H04 改回 201 契约
   （建档（记录耗时）→列表→下载→DELETE 删除腿）。

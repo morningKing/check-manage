@@ -1,6 +1,6 @@
 """Prompt 模板对外 CRUD（/api/v1/prompt-templates/*）。
 
-直接复用 utils/prompt_template.py 的五个函数——它们本来就以 user_id 为第一
+直接复用 ai/sessions/prompt_template.py 的五个函数——它们本来就以 user_id 为第一
 参数、SQL 层面按 user_id 过滤，只需把内部路由（routes/ai_chat_prompt_templates.py）
 里的 g.current_user['userId'] 换成 API Key 的 ownerUserId。校验逻辑和错误文案
 （英文）照抄内部路由——那个文件本身用的就是英文 error，不是"AI 相关对外端点"

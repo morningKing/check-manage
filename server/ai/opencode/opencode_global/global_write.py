@@ -233,7 +233,7 @@ def install_skill_zip_bytes(data: bytes, zip_filename: str,
                             overwrite: bool = False) -> str:
     """Install an uploaded skill zip into the global skill dir.
 
-    Reuses utils.skill_upload.extract_skill_zip wholesale — same validation
+    Reuses ai.skills.skill_upload.extract_skill_zip wholesale — same validation
     contract (5 MiB / 200 entries / SKILL.md / name charset / zip-slip guard /
     single-top-level-dir strip / name fallback to the zip filename) — by
     extracting into a throwaway workspace and moving the produced
@@ -291,7 +291,7 @@ def _tree_size(path: str) -> int:
 
 def publish_platform_skill(platform_skill_dir: str, name: str,
                            overwrite: bool = False) -> str:
-    """Copy a platform global-skill directory (utils.global_skills storage)
+    """Copy a platform global-skill directory (ai.skills.global_skills storage)
     into the OpenCode global skill dir. Returns the installed name."""
     name = validate_name(name)
     src_md = os.path.join(platform_skill_dir, 'SKILL.md')
@@ -885,7 +885,7 @@ def _restart_serve_locked() -> dict:
     """Restart `opencode serve` so freshly written skill/agent files load.
 
     Ownership-gated (Spec §11 进程治理): only a listener the platform itself
-    launched (recorded by utils.opencode_ownership at spawn time) may be
+    launched (recorded by ai.opencode.opencode_ownership at spawn time) may be
     killed. An unknown/external listener — hand-launched serve, service
     manager, another developer's instance — is never touched; the admin stops
     it by hand, then retries.

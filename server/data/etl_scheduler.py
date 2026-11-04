@@ -1,6 +1,6 @@
 """ETL 任务后台调度器：单线程轮询 etl_logs 里的 pending 行，异步执行。
 
-见 utils/etl_engine.py::execute_task。跑一次 ETL 任务可能是几万到几十万次
+见 data/etl_engine.py::execute_task。跑一次 ETL 任务可能是几万到几十万次
 数据库写入，不能再放在 HTTP 请求线程里同步跑（会拖住请求线程、占着连接池
 里的连接不放，浏览器超时后后端还在傻跑）。routes/etl_tasks.py::run_task
 现在只插入一条 status='pending' 的 etl_logs 行就立即返回，真正的执行在这里。
@@ -96,7 +96,7 @@ def _run_one(log_id, task_id):
     # 是 db.pool 从 None 变成真实连接池实例）之前就被导入（例如 pytest 收集
     # 测试模块时），若在模块顶层 `from db import pool`，绑定的会是当时那个
     # None，之后 db.py 里 pool 被重新赋值也不会反映到这里。同一手法见
-    # utils/backup.py 里的 `from db import pool` 局部导入。
+    # projects/backup/ 里的 `from db import pool` 局部导入。
     from db import pool
 
     with get_db() as conn:

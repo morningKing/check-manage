@@ -902,7 +902,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                      scope, check_type, effect_spec, subagents,
                      exp_mode, assert_spec) in exps:
                     if check_type == 'verifier':
-                        # 判官核对由引擎钩子（utils/verifier）负责：证据循环
+                        # 判官核对由引擎钩子（ai/batch/verifier）负责：证据循环
                         # 跳过——verifier 行 args_pattern='' 会让 `~ ''` 恒真
                         continue
                     if exp_mode == 'checkpoint':

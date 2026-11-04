@@ -352,7 +352,7 @@ def test_td_e14_export_batch_zip(admin, pageh):
 def test_td_e15_menu_export_preview_zip_and_batch_clear(admin):
     """batchClear 清空整个 collection——用独立页，不碰模块共享 pageh。
 
-    实测适配（brief 注意块，证据 utils/menu_export.py:143-181）：POST
+    实测适配（brief 注意块，证据 collab/menu_export.py:143-181）：POST
     /menuExport 默认走绑定驱动模式——menu/页面级都无绑定导出脚本时该页被
     跳过，0 文件 → 400「所有导出任务均失败」。故导出前给 solo 页绑定一个
     页面级脚本（body 不传 scriptId，走产品默认路径），finally 一并回收。"""

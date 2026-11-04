@@ -1,4 +1,4 @@
-"""utils/skillopt.py —— SkillOpt 采集/上报/插件安装/保留策略（此前零测试）。"""
+"""ai/skills/skillopt.py —— SkillOpt 采集/上报/插件安装/保留策略（此前零测试）。"""
 import sys, os
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager

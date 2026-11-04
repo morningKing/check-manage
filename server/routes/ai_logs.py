@@ -2,7 +2,7 @@
 
 GET /ai/logs/tail?file=chat|serve&offset=&limit= —— 只读跟尾，双文件白名单，
 路径不接受用户输入；权限 admin.ai_chat_admin（日志含聊天内容与提示词）。
-前端 1.5s 增量轮询消费；跟尾语义细节见 utils/log_tail.py。
+前端 1.5s 增量轮询消费；跟尾语义细节见 common/log_tail.py。
 """
 import logging
 import os

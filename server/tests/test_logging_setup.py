@@ -1,4 +1,4 @@
-"""Tests for utils/logging_setup.py (console + rotating file logging)."""
+"""Tests for common/logging_setup.py (console + rotating file logging)."""
 
 import logging
 import os

@@ -298,7 +298,7 @@ def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
     platform entry (`mcp_name`) always wins so external config can't shadow it.
     `include_internal=False` (admin disabled the internal MCP in AI settings)
     omits the platform entry entirely — external entries are still written.
-    Callers pass `utils.mcp_servers.internal_mcp_enabled()`; the flag only
+    Callers pass `data.mcp_servers.internal_mcp_enabled()`; the flag only
     affects newly written configs, existing workspaces are never rewritten.
     Returns the config file path.
     """

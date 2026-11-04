@@ -156,6 +156,12 @@ MAPPING = {
     'kefu_sse_ticket': 'collab.kefu_sse_ticket',
     'kefu_guardrail': 'collab.kefu_guardrail',
     'menu_export': 'collab.menu_export',
+    # ---- batch 6 收口补录：utils/runtime/ 子包整包迁 ai/runtime/（设计 §4
+    # 映射清单此前遗漏，见 task-11 报告）----
+    'runtime': 'ai.runtime',
+    'runtime.base': 'ai.runtime.base',
+    'runtime.opencode_local': 'ai.runtime.opencode_local',
+    'runtime.stub': 'ai.runtime.stub',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

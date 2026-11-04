@@ -1,4 +1,4 @@
-"""utils.opencode_launch.child_env 的 UTF-8 编码环境测试。
+"""ai.opencode.opencode_launch.child_env 的 UTF-8 编码环境测试。
 
 背景：Windows 中文环境子进程默认 GBK/cp936。proxy.py 与
 opencode_global.restart_serve 拉起 `opencode serve` 前必须把执行环境编码

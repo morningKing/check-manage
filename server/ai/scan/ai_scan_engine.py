@@ -264,7 +264,7 @@ def _import_child_outputs_to_record(task, record_id, session_row, file_field):
 
 
 def _workspace_root():
-    # Unified with config.AI_WORKSPACE_ROOT (see utils.workspace); kept as a
+    # Unified with config.AI_WORKSPACE_ROOT (see projects.workspace); kept as a
     # function because tests monkeypatch it.
     return batch_workspace_root()
 
@@ -283,7 +283,7 @@ def _field_labels(collection):
     """fieldName -> label from the page config. Reuses operation_log helper.
 
     Note: get_field_label_map(fields) takes the fields list (verified against
-    utils/operation_log.py), so we resolve the page config fields first.
+    common/operation_log.py), so we resolve the page config fields first.
     """
     from common.operation_log import get_field_label_map
     return get_field_label_map(_page_config_fields(collection))
@@ -450,7 +450,7 @@ def run_task(task):
         _revert_claimed(task, [r['id'] for r in claimed])
         # remove any staging dirs already written for this task's claimed records
         # (both roots: tasks staged before the root unification live in the
-        # legacy tree — see utils.workspace.batch_roots)
+        # legacy tree — see projects.workspace.batch_roots)
         for _root in {_workspace_root(), legacy_batch_workspace_root()}:
             shutil.rmtree(Path(_root) / 'scan-staging' / task['id'],
                           ignore_errors=True)

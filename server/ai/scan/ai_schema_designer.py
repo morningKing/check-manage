@@ -5,7 +5,7 @@ LLM to draft a page name/description, a suggested collection slug + menu
 route, and a field list — then defensively normalizes the result before
 handing it back, since LLM output can't be trusted to be well-formed.
 
-Reuses the same LLM-calling machinery as ``utils/ai_query.py`` (AI 智能查询:
+Reuses the same LLM-calling machinery as ``ai/sessions/ai_query.py`` (AI 智能查询:
 natural language → MongoDB filter) rather than standing up a second HTTP
 client: same ``ai_settings`` config, same pooled ``requests.Session``, same
 "system prompt + strict JSON + strip markdown fences + json.loads" shape.

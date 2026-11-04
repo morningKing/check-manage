@@ -1,4 +1,4 @@
-"""Tests for utils.py_runner (user-triggered script execution)."""
+"""Tests for common.py_runner (user-triggered script execution)."""
 
 import os
 import sys

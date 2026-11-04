@@ -2,7 +2,7 @@
 
 覆盖：健康重置、连续失败阈值触发重启、重启成功/失败落状态、
 外部进程标记后不再尝试、手动重启进行中跳过、重启锁互斥。
-不依赖真实 OC 进程（打桩 utils.opencode_global 的健康与重启）。
+不依赖真实 OC 进程（打桩 ai.opencode.opencode_global 的健康与重启）。
 """
 import os
 import sys

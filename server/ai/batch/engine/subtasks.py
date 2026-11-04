@@ -25,7 +25,7 @@ class WorkerSubtasksMixin:
         """Map one OpenCode message's parts to persisted typed content: text +
         tool_use + subtask_use (matches interactive build_content + the
         AiContentPart schema). Drops reasoning/step markers. 委托给
-        utils.opencode_parts.map_part（chat_persist.py 共用同一份映射）；空文本
+        ai.opencode.opencode_parts.map_part（chat_persist.py 共用同一份映射）；空文本
         的过滤保留在这里——这是原有实现的分工，map_part 本身不过滤。`subtask`
         part 自 Task 5 起放行给 map_part：批任务路径每次都重新拉取完整消息列表
         （REST 快照式，见 `_persist_conversation`/`_collect_subtasks`），调用方

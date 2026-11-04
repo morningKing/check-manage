@@ -70,7 +70,7 @@ OPENCODE_BASE_URL = os.environ.get('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 BACKEND_LOG = os.path.join(os.path.dirname(__file__), 'proxy-backend.log')
 MCP_LOG = os.path.join(os.path.dirname(__file__), 'proxy-mcp.log')
 # serve 输出与平台重启端点/watchdog 统一落 server/oc-serve.log（append +
-# 轮转，见 utils.opencode_global.serve_stdio_file）——插件 console 输出只有
+# 轮转，见 ai.opencode.opencode_global.serve_stdio_file）——插件 console 输出只有
 # 这一个落点，/admin/logs 日志查看器也读它。旧的 proxy-opencode.log 停用
 # （'w' 截断模式，且与重启端点分叉，生产查日志要看两个文件）。
 OPENCODE_LOG = os.path.join(os.path.dirname(__file__), 'oc-serve.log')
@@ -806,7 +806,7 @@ def start_opencode():
                   f'{time.strftime("%Y-%m-%d %H:%M:%S")} =====\n')
         # 执行环境编码钉死 UTF-8（Windows 中文环境默认 GBK，会让 serve 拉起的
         # bash/git 工具输出乱码）+ 显式钉死 OPENCODE_GLOBAL_DIR（serve 必须读取
-        # 管理界面操作的同一全局目录）——见 utils/opencode_launch.serve_env。
+        # 管理界面操作的同一全局目录）——见 ai/opencode/opencode_launch.serve_env。
         return subprocess.Popen(
             target,
             shell=use_shell,
@@ -824,7 +824,7 @@ def record_serve_ownership(timeout=25):
     """发现平台刚拉起的 serve 的监听 PID 并写入 ownership 登记。
 
     登记之后，OpenCode 管理页的重启才被允许 kill 该进程（外部启动的 serve
-    永远不会被按端口误杀，见 utils/opencode_ownership）。best-effort：发现
+    永远不会被按端口误杀，见 ai/opencode/opencode_ownership）。best-effort：发现
     失败只影响下次重启的 ownership 判定（走 unknown 拒杀的安全侧路径），
     不阻断启动流程。"""
     try:

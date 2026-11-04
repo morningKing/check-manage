@@ -1,4 +1,4 @@
-"""Tests for utils.chat_persist."""
+"""Tests for ai.sessions.chat_persist."""
 import os
 import sys
 

@@ -158,10 +158,10 @@ def merge_version():
         # 合并成功后更新依赖声明并校验相关依赖
         if result.get('success'):
             from projects.dependencies import (
-                            batch_update_dependencies_after_merge,
-                            get_dependent_projects,
-                            validate_project_dependency,
-                        )
+                batch_update_dependencies_after_merge,
+                get_dependent_projects,
+                validate_project_dependency,
+            )
             batch_update_dependencies_after_merge(project_menu_id, version_id)
 
             # 校验依赖此项目的所有依赖声明
@@ -221,10 +221,10 @@ def merge_version_detailed():
         # 合并成功后更新依赖声明并校验相关依赖
         if result.get('success'):
             from projects.dependencies import (
-                            batch_update_dependencies_after_merge,
-                            get_dependent_projects,
-                            validate_project_dependency,
-                        )
+                batch_update_dependencies_after_merge,
+                get_dependent_projects,
+                validate_project_dependency,
+            )
             batch_update_dependencies_after_merge(project_menu_id, version_id)
 
             # 校验依赖此项目的所有依赖声明

@@ -106,7 +106,7 @@ def _user_has_permission(payload, permission_key):
     本 helper 给 require_permission 与 require_permission_sse 共用。两装饰
     器只在 token 提取方式上不同（header only / header or query），能力判定
     收敛到此唯一路径——逻辑漂移是安全事故常见来源。超管放行靠 DB 的
-    roles.is_superuser（经 utils.permissions.can_admin），不在 JWT role slug
+    roles.is_superuser（经 common.permissions.can_admin），不在 JWT role slug
     上做任何短路，保留与重构前完全一致的判定语义。
     """
     from common.permissions import can_admin
@@ -140,7 +140,7 @@ def require_permission_sse(permission_key):
     (browser <a download> / EventSource can't set Authorization header).
 
     能力判定与 require_permission 完全同源——都通过 _user_has_permission
-    走 utils.permissions.can_admin，两份实现一锁定就同步锁定，避免一处改
+    走 common.permissions.can_admin，两份实现一锁定就同步锁定，避免一处改
     了 header-only 装饰器忘了改 SSE 装饰器的关系人权限事故。
     """
     def wrapper(f):

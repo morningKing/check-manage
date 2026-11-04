@@ -1,4 +1,4 @@
-"""单测：utils/search_text.py 的 compute_search_text 拼接逻辑。"""
+"""单测：common/search_text.py 的 compute_search_text 拼接逻辑。"""
 from common.search_text import compute_search_text, DIRECT_SEARCHABLE_TYPES
 
 

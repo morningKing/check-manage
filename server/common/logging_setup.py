@@ -27,7 +27,7 @@ _DATEFMT = '%Y-%m-%d %H:%M:%S'
 
 
 def _default_log_file():
-    # logging_setup.py lives in server/utils/, so two dirnames up is server/.
+    # logging_setup.py lives in server/common/, so two dirnames up is server/.
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), 'ai-chat.log')
 
 
