@@ -47,8 +47,8 @@ from utils.workspace import (create_session_workspace, _rm_force,
                              batch_workspace_root, legacy_batch_workspace_root,
                              resolve_batch_data_path)
 from utils.workspace_changes import git_changes, record_session_files
-from utils.ai_message_meta import meta_from_info, public_meta
-from utils.session_history import render_history_block
+from ai.sessions.ai_message_meta import meta_from_info, public_meta
+from ai.sessions.session_history import render_history_block
 from common.notifier import create_notification
 
 logger = logging.getLogger(__name__)
@@ -354,7 +354,7 @@ def _prepare_workspace(user_id: str, session_id: str,
                         get_default_chat_model)
     from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
         INTERNAL_MCP_NAME as MCP_NAME
-    from utils.session_token import generate_token
+    from ai.sessions.session_token import generate_token
     from utils.workspace import write_opencode_config
     _mcp_name = MCP_NAME
     write_opencode_config(
@@ -1484,7 +1484,7 @@ class BatchWorker:
             prompt = self._with_input_hint(prompt, session_row)
             turn_label = prompt[:80]
             user_prompt_for_memory = prompt
-            from utils.memory import search_memory, render_memory_block
+            from ai.sessions.memory import search_memory, render_memory_block
             mem_block = render_memory_block(search_memory(user_id, prompt, limit=5))
             # 无人值守指令只进发给模型的 prompt（最前、最显眼的位置）：记忆检索
             # 与存档仍围绕用户原文 —— 指令是每条子任务都一样的样板，混进长期
@@ -1922,7 +1922,7 @@ class BatchWorker:
 
     def _fetch_action_checks(self, batch_id: str):
         """入口 A/B/策略（spec §8.2）：合并事实源在 gate_policy_repo。"""
-        from utils.gate_policy_repo import merged_action_checks
+        from ai.gate.gate_policy_repo import merged_action_checks
         return merged_action_checks(batch_id)
 
     def _register_action_expectations(self, sid: str, batch_id: str,
@@ -2185,7 +2185,7 @@ class BatchWorker:
         if not session_row.get('scan_task_id'):
             return
         try:
-            from utils.ai_scan_engine import on_child_finished
+            from ai.scan.ai_scan_engine import on_child_finished
             on_child_finished(session_row, final_msg, ok=ok)
         except Exception:
             traceback.print_exc()
@@ -2197,11 +2197,11 @@ class BatchWorker:
         if not user_id:
             return
         try:
-            from utils.ai_scan_engine import message_text
+            from ai.scan.ai_scan_engine import message_text
             assistant_text = message_text(final_msg)
             if not assistant_text:
                 return
-            from utils.memory import add_memory
+            from ai.sessions.memory import add_memory
             messages = [{'role': 'user', 'content': user_text},
                        {'role': 'assistant', 'content': assistant_text}]
             threading.Thread(target=add_memory, args=(user_id, messages), daemon=True).start()

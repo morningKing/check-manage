@@ -6,7 +6,7 @@ Flask stays the sole owner. Guarded by a shared MCP_INTERNAL_TOKEN.
 """
 from flask import Blueprint, request, jsonify
 from config import MCP_INTERNAL_TOKEN
-from utils.memory import search_memory, add_memory, delete_memory
+from ai.sessions.memory import search_memory, add_memory, delete_memory
 
 ai_memory_internal_bp = Blueprint('ai_memory_internal', __name__, url_prefix='/ai/memory/internal')
 

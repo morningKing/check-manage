@@ -86,7 +86,7 @@ def _worker(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_memory(monkeypatch):
-    import utils.memory as mem
+    from ai.sessions import memory as mem
     monkeypatch.setattr(mem, 'search_memory', lambda *a, **k: [])
     monkeypatch.setattr(mem, 'render_memory_block', lambda hits: '')
     monkeypatch.setattr(mem, 'add_memory', lambda *a, **k: None)

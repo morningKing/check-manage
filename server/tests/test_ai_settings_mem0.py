@@ -2,7 +2,7 @@ import sys, os
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.ai_query as aq
+from ai.sessions import ai_query as aq
 
 def _db(row):
     conn = MagicMock(); cur = MagicMock()

@@ -16,7 +16,7 @@ import re
 
 import requests
 
-from utils.ai_query import get_ai_settings, get_http_session
+from ai.sessions.ai_query import get_ai_settings, get_http_session
 
 # Control types safe for an AI-drafted first cut: no relation/reference/
 # quoteSelect (need an existing target collection the LLM can't know about),

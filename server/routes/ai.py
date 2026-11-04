@@ -10,9 +10,9 @@ PUT  /ai/settings — update AI configuration.
 from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
-from utils.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
+from ai.sessions.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
 from common.operation_log import log_operation
-from utils.memory import (
+from ai.sessions.memory import (
     reset_memory_singleton, list_memories, delete_memory, add_memory_text, get_memory,
 )
 from data.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError

@@ -58,24 +58,24 @@ from utils.workspace_changes import (git_changes, file_diff, expand_untracked_di
                                      read_file_preview, record_session_files,
                                      get_session_files)
 from utils.workspace_outputs import list_session_files
-from utils.mention_files import inline_file_mentions
-from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
-from utils.session_history import render_history_block
+from ai.sessions.mention_files import inline_file_mentions
+from ai.sessions.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
+from ai.sessions.session_history import render_history_block
 from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
     INTERNAL_MCP_NAME as MCP_NAME
 from utils import agent_ledger
-from utils.chat_persist import (
+from ai.sessions.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
     has_listener, live_listener_sids,
 )
-from utils.session_token import generate_token, revoke_token
+from ai.sessions.session_token import generate_token, revoke_token
 from utils.subtask_repo import get_subtask_messages
 from data.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
 from common.py_runner import run_python_in_workspace
 from ai.skills.skill_upload import extract_skill_zip, SkillUploadError
-from utils.memory import search_memory, render_memory_block
+from ai.sessions.memory import search_memory, render_memory_block
 from common.operation_log import log_operation
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,

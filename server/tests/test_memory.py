@@ -1,7 +1,7 @@
 import sys, os
 from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.memory as mem
+from ai.sessions import memory as mem
 
 def setup_function():
     mem.reset_memory_singleton()

@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.ai_message_meta import (
+from ai.sessions.ai_message_meta import (
     meta_from_info, aggregate_metas, public_meta, tool_duration_ms)
 
 

@@ -25,7 +25,7 @@ def setup(mock_conn, mock_cursor):
     fake_db = _make_mock_db(mock_conn)
     patches = [
         patch('db.get_db', fake_db),
-        patch('utils.prompt_template.get_db', fake_db),
+        patch('ai.sessions.prompt_template.get_db', fake_db),
         patch('db.pool', MagicMock()),
     ]
     for p in patches:

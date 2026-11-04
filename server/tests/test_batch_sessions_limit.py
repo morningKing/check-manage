@@ -179,7 +179,7 @@ def test_ui_list_exposes_max_sessions():
 # ---------------------------------------------------------------------------
 
 def test_settings_roundtrip_max_batch_sessions():
-    import utils.ai_query as aq
+    from ai.sessions import ai_query as aq
 
     row = (True, 'sk', 'https://x/v1', 'qwen-plus', 30, 1024, None,
            False, 'text-embedding-v3', 'p/m', 80)

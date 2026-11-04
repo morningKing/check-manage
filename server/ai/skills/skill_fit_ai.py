@@ -25,7 +25,7 @@ from collections import OrderedDict
 import requests
 import yaml
 
-from utils.ai_query import get_ai_settings, get_http_session
+from ai.sessions.ai_query import get_ai_settings, get_http_session
 from utils.agent_ledger import validate_pg_regex
 from ai.skills.skill_fit import match_steps
 from db import get_db as _default_get_db

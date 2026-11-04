@@ -1,4 +1,4 @@
-"""utils/ai_session_repo.py —— standalone /v1/ai-sessions 数据层（此前零测试）。
+"""ai/sessions/ai_session_repo.py —— standalone /v1/ai-sessions 数据层（此前零测试）。
 
 重点回归：
 - get_session_for_owner 的 output 门：仅 status='completed' 回 content；
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.ai_session_repo as repo
+from ai.sessions import ai_session_repo as repo
 
 
 def _mock_db(fetchone=None):
@@ -37,7 +37,7 @@ ROW = {'id': 's1', 'title': 't', 'status': 'running', 'agent': None,
 
 def test_create_inserts_pending_row_with_stashed_prompt():
     fake, cur, conn = _mock_db(fetchone=dict(ROW))
-    with patch('utils.ai_session_repo.get_db', fake):
+    with patch('ai.sessions.ai_session_repo.get_db', fake):
         repo.create_session('u1', prompt='做点什么', agent='a', model='m',
                             title='标题', api_key_id='k1', files=[{'name': 'a'}])
     sql, params = cur.execute.call_args.args
@@ -51,8 +51,8 @@ def test_create_inserts_pending_row_with_stashed_prompt():
 
 def test_get_owner_scopes_by_user_and_key():
     fake, cur, conn = _mock_db(fetchone=dict(ROW))
-    with patch('utils.ai_session_repo.get_db', fake), \
-         patch('utils.ai_session_repo.get_session_usage', lambda sid: {'total': 0}):
+    with patch('ai.sessions.ai_session_repo.get_db', fake), \
+         patch('ai.sessions.ai_session_repo.get_session_usage', lambda sid: {'total': 0}):
         repo.get_session_for_owner('s1', 'u1', 'k1')
     sql, params = cur.execute.call_args.args
     assert 's.user_id = %s' in sql and 's.api_key_id = %s' in sql
@@ -62,50 +62,50 @@ def test_get_owner_scopes_by_user_and_key():
 def test_get_output_gate_only_for_completed():
     """运行中不回 output（半截文本防泄漏门），失败回 error。"""
     fake, cur, _ = _mock_db(fetchone=dict(ROW, status='running'))
-    with patch('utils.ai_session_repo.get_db', fake), \
-         patch('utils.ai_session_repo.get_session_usage', lambda sid: {}):
+    with patch('ai.sessions.ai_session_repo.get_db', fake), \
+         patch('ai.sessions.ai_session_repo.get_session_usage', lambda sid: {}):
         out = repo.get_session_for_owner('s1', 'u1', 'k1')
     assert out['output'] is None
     assert out['status'] == 'running'
 
     fake, cur, _ = _mock_db(fetchone=dict(ROW, status='completed'))
-    with patch('utils.ai_session_repo.get_db', fake), \
-         patch('utils.ai_session_repo.get_session_usage', lambda sid: {}):
+    with patch('ai.sessions.ai_session_repo.get_db', fake), \
+         patch('ai.sessions.ai_session_repo.get_session_usage', lambda sid: {}):
         out = repo.get_session_for_owner('s1', 'u1', 'k1')
     assert out['output'] == '半截输出'
 
     fake, cur, _ = _mock_db(fetchone=None)
-    with patch('utils.ai_session_repo.get_db', fake):
+    with patch('ai.sessions.ai_session_repo.get_db', fake):
         assert repo.get_session_for_owner('nope', 'u1', 'k1') is None
 
 
 def test_get_files_echo_names_only():
     """files 只回显 name，不回显内部暂存路径。"""
     fake, cur, _ = _mock_db(fetchone=dict(ROW, status='completed'))
-    with patch('utils.ai_session_repo.get_db', fake), \
-         patch('utils.ai_session_repo.get_session_usage', lambda sid: {}):
+    with patch('ai.sessions.ai_session_repo.get_db', fake), \
+         patch('ai.sessions.ai_session_repo.get_session_usage', lambda sid: {}):
         out = repo.get_session_for_owner('s1', 'u1', 'k1')
     assert out['files'] == [{'name': 'a.txt'}]
 
 
 def test_cancel_rejects_terminal_sessions():
     fake, cur, _ = _mock_db(fetchone=('completed',))
-    with patch('utils.ai_session_repo.get_db', fake):
+    with patch('ai.sessions.ai_session_repo.get_db', fake):
         with pytest.raises(ValueError):
             repo.cancel_session('s1', 'u1', 'k1')
 
 
 def test_cancel_missing_returns_none():
     fake, cur, _ = _mock_db(fetchone=None)
-    with patch('utils.ai_session_repo.get_db', fake):
+    with patch('ai.sessions.ai_session_repo.get_db', fake):
         assert repo.cancel_session('s1', 'u1', 'k1') is None
 
 
 def test_cancel_running_sets_flag_and_returns_detail():
     fake, cur, conn = _mock_db(fetchone=('running',))
     detail = {'id': 's1', 'status': 'running', 'output': None}
-    with patch('utils.ai_session_repo.get_db', fake), \
-         patch('utils.ai_session_repo.get_session_usage', lambda sid: {}), \
+    with patch('ai.sessions.ai_session_repo.get_db', fake), \
+         patch('ai.sessions.ai_session_repo.get_session_usage', lambda sid: {}), \
          patch.object(repo, 'get_session_for_owner', lambda *a: detail):
         out = repo.cancel_session('s1', 'u1', 'k1')
     assert out == detail

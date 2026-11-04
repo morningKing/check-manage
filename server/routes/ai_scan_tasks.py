@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from auth import require_permission
-from utils import ai_scan_repo
+from ai.scan import ai_scan_repo as ai_scan_repo
 from common.operation_log import log_operation
 
 ai_scan_tasks_bp = Blueprint('ai_scan_tasks', __name__)
@@ -58,7 +58,7 @@ def run_now(task_id):
     t = ai_scan_repo.get_task(task_id)
     if not t:
         return jsonify({'error': '任务不存在'}), 404
-    from utils.ai_scan_engine import run_task
+    from ai.scan.ai_scan_engine import run_task
     try:
         run_task(t)
     except Exception:
@@ -76,7 +76,7 @@ def import_scan_outputs(task_id, sid):
     """手动触发：把子会话工作区 outputs/ 下的产物导入数据行
     （execution-audit Spec「AI 产出文件→数据行呈现」）。幂等：重复调用
     只会重复导入新出现的文件。"""
-    from utils.ai_scan_engine import _load_task, _import_child_outputs_to_record
+    from ai.scan.ai_scan_engine import _load_task, _import_child_outputs_to_record
     task = _load_task(task_id)
     if not task:
         return jsonify({'error': 'task not found'}), 404

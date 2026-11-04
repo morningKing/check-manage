@@ -33,7 +33,7 @@ import psycopg2
 import psycopg2.extras
 
 from db import get_db as _default_get_db
-from utils.ai_message_meta import (aggregate_metas, meta_from_info,
+from ai.sessions.ai_message_meta import (aggregate_metas, meta_from_info,
                                    public_meta, tool_duration_ms)
 
 MAX_ARGS_LEN = 8192

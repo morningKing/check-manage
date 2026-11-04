@@ -121,7 +121,7 @@ def handle(input: dict, ctx: ToolContext) -> dict:
 
     # 1) AI 起草 —— 服务端唯一实现(测试在此处打桩)
     try:
-        from utils.ai_schema_designer import draft_page_schema
+        from ai.scan.ai_schema_designer import draft_page_schema
     except ImportError as e:
         raise AiCreateDataPageError(
             f"服务端 ai_schema_designer 不可用(检查 server/ 目录与 requests 依赖): {e}")

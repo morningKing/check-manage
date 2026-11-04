@@ -122,7 +122,7 @@ def test_import_by_name_happy_path(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches._current_key', return_value=_key()), \
          patch('routes.open_api_batches.get_batch_detail',
                return_value=_detail([_child()])), \
-         patch('utils.session_file_import.import_recorded_files',
+         patch('ai.sessions.session_file_import.import_recorded_files',
                return_value=results) as imp:
         resp = client.post(f'{BASE}/b-1/import',
                            json={'name': 'a.pdf', 'paths': ['report.md']}, headers=HDR)
@@ -142,7 +142,7 @@ def test_import_by_seq_happy_path(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches._current_key', return_value=_key()), \
          patch('routes.open_api_batches.get_batch_detail',
                return_value=_detail(children)), \
-         patch('utils.session_file_import.import_recorded_files',
+         patch('ai.sessions.session_file_import.import_recorded_files',
                return_value=[]) as imp:
         resp = client.post(f'{BASE}/b-1/import',
                            json={'seq': 2, 'paths': ['x.py']}, headers=HDR)

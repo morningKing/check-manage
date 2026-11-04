@@ -19,7 +19,7 @@ from flask import Blueprint, g, jsonify, request
 from auth import api_key_required, require_bound_key
 from common.api_errors import (INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND, err,
                               register_error_handlers)
-from utils.memory import add_memory_text, delete_memory, get_memory, list_memories
+from ai.sessions.memory import add_memory_text, delete_memory, get_memory, list_memories
 from common.operation_log import log_api_operation
 
 open_api_memories_bp = Blueprint(

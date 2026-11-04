@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.memory import _build_config
+from ai.sessions.memory import _build_config
 from auth import create_token
 
 

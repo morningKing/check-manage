@@ -1,6 +1,6 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.ai_scan_engine import extract_json
+from ai.scan.ai_scan_engine import extract_json
 
 
 def test_extract_fenced_json():
@@ -17,7 +17,7 @@ def test_extract_none_returns_none():
     assert extract_json('没有 JSON 的纯文本') is None
 
 
-from utils.ai_scan_engine import message_text
+from ai.scan.ai_scan_engine import message_text
 
 
 def test_message_text_joins_parts():
@@ -32,7 +32,7 @@ def test_message_text_none():
 
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
-import utils.ai_scan_engine as se
+from ai.scan import ai_scan_engine as se
 
 
 def _patch_db():
@@ -57,8 +57,8 @@ def test_writeback_success_sets_mapped_columns_and_done():
     fake, cur = _patch_db()
     row = {'id': 'sess-1', 'scan_task_id': 't1', 'source_record_id': 'rec-1'}
     msg = {'content': [{'type': 'text', 'text': '```json\n{"结论":"通过"}\n```'}]}
-    with patch('utils.ai_scan_engine.get_db', fake), \
-         patch('utils.ai_scan_engine._load_task', lambda tid: TASK):
+    with patch('ai.scan.ai_scan_engine.get_db', fake), \
+         patch('ai.scan.ai_scan_engine._load_task', lambda tid: TASK):
         se.on_child_finished(row, msg, ok=True)
     upd = [c for c in cur.execute.call_args_list if 'UPDATE dynamic_data' in str(c.args[0])]
     assert upd, 'expected a dynamic_data UPDATE'
@@ -70,8 +70,8 @@ def test_writeback_missing_required_marks_failed():
     fake, cur = _patch_db()
     row = {'id': 'sess-1', 'scan_task_id': 't1', 'source_record_id': 'rec-1'}
     msg = {'content': [{'type': 'text', 'text': '没有 JSON'}]}
-    with patch('utils.ai_scan_engine.get_db', fake), \
-         patch('utils.ai_scan_engine._load_task', lambda tid: TASK):
+    with patch('ai.scan.ai_scan_engine.get_db', fake), \
+         patch('ai.scan.ai_scan_engine._load_task', lambda tid: TASK):
         se.on_child_finished(row, msg, ok=True)
     flat = [v for c in cur.execute.call_args_list for v in (c.args[1] if len(c.args) > 1 else ())]
     assert '审核失败' in flat
@@ -80,8 +80,8 @@ def test_writeback_missing_required_marks_failed():
 def test_writeback_child_failed_marks_failed():
     fake, cur = _patch_db()
     row = {'id': 'sess-1', 'scan_task_id': 't1', 'source_record_id': 'rec-1'}
-    with patch('utils.ai_scan_engine.get_db', fake), \
-         patch('utils.ai_scan_engine._load_task', lambda tid: TASK):
+    with patch('ai.scan.ai_scan_engine.get_db', fake), \
+         patch('ai.scan.ai_scan_engine._load_task', lambda tid: TASK):
         se.on_child_finished(row, None, ok=False)
     flat = [v for c in cur.execute.call_args_list for v in (c.args[1] if len(c.args) > 1 else ())]
     assert '审核失败' in flat

@@ -93,7 +93,7 @@ def test_issue_link_returns_token_path_expires(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}), \
          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 1}, None)), \
-         patch('utils.takeover_repo.create_takeover_token',
+         patch('ai.sessions.takeover_repo.create_takeover_token',
                return_value=('tk_abc', fake_exp)) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
                            json={'ttlHours': 48})
@@ -112,7 +112,7 @@ def test_revoke_scoped_to_triple(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches._current_key', return_value=_key()), \
          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}), \
          patch('routes.open_api_batches._resolve_child', return_value=({'id': 's1'}, None)), \
-         patch('utils.takeover_repo.revoke_takeover_token', return_value=False) as rk:
+         patch('ai.sessions.takeover_repo.revoke_takeover_token', return_value=False) as rk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link/revoke',
                            headers=HDR, json={'tokenId': 'tkt_x'})
     assert resp.status_code == 404
@@ -126,7 +126,7 @@ def test_revoke_success_returns_200(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches._current_key', return_value=_key()), \
          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}), \
          patch('routes.open_api_batches._resolve_child', return_value=({'id': 's1'}, None)), \
-         patch('utils.takeover_repo.revoke_takeover_token', return_value=True) as rk:
+         patch('ai.sessions.takeover_repo.revoke_takeover_token', return_value=True) as rk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link/revoke',
                            headers=HDR, json={'tokenId': 'tkt_ok'})
     assert resp.status_code == 200
@@ -144,7 +144,7 @@ def test_issue_link_passes_ttl_through_unclamped(client, mock_conn, mock_cursor)
          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}), \
          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 2}, None)), \
-         patch('utils.takeover_repo.create_takeover_token',
+         patch('ai.sessions.takeover_repo.create_takeover_token',
                return_value=('tk_big', fake_exp)) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
                            json={'ttlHours': 9999})
@@ -162,7 +162,7 @@ def test_issue_link_absent_ttl_passes_none(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}), \
          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 1}, None)), \
-         patch('utils.takeover_repo.create_takeover_token',
+         patch('ai.sessions.takeover_repo.create_takeover_token',
                return_value=('tk_none', fake_exp)) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR, json={})
     assert resp.status_code == 201

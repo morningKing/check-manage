@@ -18,7 +18,7 @@ def _make_db(mock_conn):
 def setup(mock_conn, mock_cursor):
     fake = _make_db(mock_conn)
     patches = [patch('db.get_db', fake),
-               patch('common.permissions.get_db', fake), patch('utils.ai_scan_repo.get_db', fake),
+               patch('common.permissions.get_db', fake), patch('ai.scan.ai_scan_repo.get_db', fake),
                patch('db.pool', MagicMock()), patch('common.operation_log.log_operation')]
     for p in patches:
         p.start()

@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-import utils.chat_persist as cp
+from ai.sessions import chat_persist as cp
 
 
 def test_listener_thread_logs_crash_and_cleans_registry(caplog):
@@ -17,7 +17,7 @@ def test_listener_thread_logs_crash_and_cleans_registry(caplog):
     fake_runtime = MagicMock()
     fake_runtime.subscribe_events.side_effect = RuntimeError('boom')
     with patch.object(cp, 'get_runtime', return_value=fake_runtime):
-        with caplog.at_level(logging.ERROR, logger='utils.chat_persist'):
+        with caplog.at_level(logging.ERROR, logger='ai.sessions.chat_persist'):
             cp._listener_thread('sess_crash', 'oc1', '/ws')
     assert any('persist listener crashed' in r.getMessage()
                and 'sess_crash' in r.getMessage() for r in caplog.records)
@@ -35,7 +35,7 @@ def test_persist_turn_logs_db_error(caplog):
         raise RuntimeError('db down')
 
     with patch.object(cp, 'get_db', boom):
-        with caplog.at_level(logging.WARNING, logger='utils.chat_persist'):
+        with caplog.at_level(logging.WARNING, logger='ai.sessions.chat_persist'):
             cp.persist_turn('sess_db', state)  # must not raise
     assert any('persist_turn DB error' in r.getMessage()
                and 'sess_db' in r.getMessage() for r in caplog.records)

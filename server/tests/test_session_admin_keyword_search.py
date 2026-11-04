@@ -13,7 +13,7 @@ from contextlib import contextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.session_admin_repo import _build_where, admin_list_sessions_v2
+from ai.sessions.session_admin_repo import _build_where, admin_list_sessions_v2
 
 
 def test_keyword_matches_message_content():
@@ -66,7 +66,7 @@ def test_admin_list_v2_query_carries_message_exists():
     def fake_db():
         yield conn
 
-    with patch('utils.session_admin_repo.get_db', fake_db):
+    with patch('ai.sessions.session_admin_repo.get_db', fake_db):
         admin_list_sessions_v2(keyword='风险', batch_id='batch-1')
 
     assert executed, 'expected two queries (count + page)'

@@ -280,7 +280,7 @@ try:
             except Exception as e3:
                 logging.warning('workspace retention failed: %s', e3)
             try:
-                from utils.artifact_store import purge_expired
+                from ai.sessions.artifact_store import purge_expired
                 logging.info('artifact retention: purged %s', purge_expired())
             except Exception as e3:
                 logging.warning('artifact retention failed: %s', e3)
@@ -760,11 +760,11 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     get_worker().start()
 
     # Start scheduled AI row-processor scheduler
-    from utils.ai_scan_scheduler import start_scan_scheduler
+    from ai.scan.ai_scan_scheduler import start_scan_scheduler
     start_scan_scheduler(app)
 
     # Start statusBadge timeout fallback scheduler
-    from utils.status_badge_timeout_scheduler import start_status_badge_timeout_scheduler
+    from ai.sessions.status_badge_timeout_scheduler import start_status_badge_timeout_scheduler
     start_status_badge_timeout_scheduler(app)
 
     # Start field-index build/drop worker (async CREATE/DROP INDEX CONCURRENTLY)

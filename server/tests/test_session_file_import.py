@@ -1,4 +1,4 @@
-"""utils/session_file_import.py 的端到端测试（真实 git + 真实 DB）。"""
+"""ai/sessions/session_file_import.py 的端到端测试（真实 git + 真实 DB）。"""
 import os
 import subprocess
 import sys
@@ -51,7 +51,7 @@ def _cleanup(uid, file_ids):
 def test_import_end_to_end(tmp_path, store_root):
     """记录 -> 导入 -> data_files 落盘落库 -> 幂等 -> 白名单/缺失分支。"""
     from utils.workspace_changes import git_changes, record_session_files
-    from utils.session_file_import import import_recorded_files
+    from ai.sessions.session_file_import import import_recorded_files
     uid, sid = _mk_session()
     created_ids = []
     try:
@@ -114,7 +114,7 @@ def test_import_end_to_end(tmp_path, store_root):
 def test_import_rejects_path_traversal(tmp_path, store_root):
     """白名单按记录里的相对路径匹配，`../` 之类逃不出去。"""
     from utils.workspace_changes import record_session_files
-    from utils.session_file_import import import_recorded_files
+    from ai.sessions.session_file_import import import_recorded_files
     uid, sid = _mk_session()
     try:
         record_session_files(sid, [{'path': 'a.py', 'status': 'added'}])

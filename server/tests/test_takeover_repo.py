@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import takeover_repo  # noqa: E402
+from ai.sessions import takeover_repo as takeover_repo  # noqa: E402
 
 
 @pytest.fixture

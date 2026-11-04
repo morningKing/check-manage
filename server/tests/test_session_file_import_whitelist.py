@@ -18,7 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.session_file_import import import_recorded_files
+from ai.sessions.session_file_import import import_recorded_files
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def test_import_DB_hit_uses_existing_data_file(workspace_with_files, monkeypatch
     def fake_data_file_meta(fid):
         return {'id': 'df-1', 'name': 'report.md', 'size': 3}
 
-    monkeypatch.setattr('utils.session_file_import.get_recorded_path', fake_get_recorded_path)
+    monkeypatch.setattr('ai.sessions.session_file_import.get_recorded_path', fake_get_recorded_path)
     # Ruling C: data_file_meta 懒导入，patch 源模块
     monkeypatch.setattr('routes.data_files.data_file_meta', fake_data_file_meta)
     results = import_recorded_files('s', workspace_with_files, ['outputs/report.md'])
@@ -47,14 +47,14 @@ def test_import_DB_hit_uses_existing_data_file(workspace_with_files, monkeypatch
 
 
 def test_import_DB_miss_without_extra_returns_NOT_RECORDED(workspace_with_files, monkeypatch):
-    monkeypatch.setattr('utils.session_file_import.get_recorded_path', lambda sid, p: None)
+    monkeypatch.setattr('ai.sessions.session_file_import.get_recorded_path', lambda sid, p: None)
     results = import_recorded_files('s', workspace_with_files, ['outputs/report.md'])
     assert results[0].get('code') == 'NOT_RECORDED'
 
 
 def test_import_DB_miss_with_extra_whitelist_passes(workspace_with_files, monkeypatch):
     """admin 端的核心扩展：DB 无但 live 在白名单 → 放行 + 真导入 + 回填。"""
-    monkeypatch.setattr('utils.session_file_import.get_recorded_path', lambda sid, p: None)
+    monkeypatch.setattr('ai.sessions.session_file_import.get_recorded_path', lambda sid, p: None)
     saved = {'meta': {'id': 'df-new', 'name': 'report.md', 'size': 3}, 'err': None}
 
     def fake_save_workspace_file(abs_path, rel_path, uploaded_by=None):
@@ -63,7 +63,7 @@ def test_import_DB_miss_with_extra_whitelist_passes(workspace_with_files, monkey
     set_calls = []
     # Ruling C: save_workspace_file 懒导入，patch 源模块
     monkeypatch.setattr('routes.data_files.save_workspace_file', fake_save_workspace_file)
-    monkeypatch.setattr('utils.session_file_import.set_data_file_id',
+    monkeypatch.setattr('ai.sessions.session_file_import.set_data_file_id',
                         lambda sid, p, fid: set_calls.append((sid, p, fid)))
     results = import_recorded_files(
         'sess-X', workspace_with_files, ['outputs/report.md'],
@@ -76,7 +76,7 @@ def test_import_DB_miss_with_extra_whitelist_passes(workspace_with_files, monkey
 
 
 def test_import_DB_miss_not_in_extra_returns_NOT_RECORDED(workspace_with_files, monkeypatch):
-    monkeypatch.setattr('utils.session_file_import.get_recorded_path', lambda sid, p: None)
+    monkeypatch.setattr('ai.sessions.session_file_import.get_recorded_path', lambda sid, p: None)
     results = import_recorded_files(
         's', workspace_with_files, ['outputs/other.md'],
         extra_whitelist={'outputs/report.md'},  # 不含 other
@@ -86,7 +86,7 @@ def test_import_DB_miss_not_in_extra_returns_NOT_RECORDED(workspace_with_files, 
 
 def test_import_default_no_change_to_owner_semantics(workspace_with_files, monkeypatch):
     """owner 端默认不传 extra：行为与旧实现一致。回归锚。"""
-    monkeypatch.setattr('utils.session_file_import.get_recorded_path', lambda sid, p: None)
+    monkeypatch.setattr('ai.sessions.session_file_import.get_recorded_path', lambda sid, p: None)
     results = import_recorded_files(
         's', workspace_with_files, ['outputs/report.md'],
         # 不传 extra_whitelist
@@ -236,9 +236,9 @@ def test_import_idempotent_when_no_pre_row(monkeypatch, tmp_path):
                 return {'id': fid, 'name': 'report.md', 'size': 14}
         return None
 
-    monkeypatch.setattr('utils.session_file_import.get_recorded_path',
+    monkeypatch.setattr('ai.sessions.session_file_import.get_recorded_path',
                        fake_get_recorded_path)
-    monkeypatch.setattr('utils.session_file_import.set_data_file_id',
+    monkeypatch.setattr('ai.sessions.session_file_import.set_data_file_id',
                        fake_set_data_file_id)
     monkeypatch.setattr('routes.data_files.save_workspace_file',
                        fake_save_workspace_file)

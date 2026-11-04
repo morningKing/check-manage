@@ -811,7 +811,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     step_output = None
     if new_status in ('succeeded', 'failed'):
         try:
-            from utils.ai_scan_engine import message_text
+            from ai.scan.ai_scan_engine import message_text
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -865,7 +865,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     # 产物收集（Phase D：workspace outputs → artifact store）
     if new_status == 'succeeded' and ws:
         try:
-            from utils import artifact_store
+            from ai.sessions import artifact_store as artifact_store
             # M9：带 owner 归属，否则创建者本人下载 403
             artifact_store.ingest_session_outputs(session_id, ws,
                                                   run_id=run_id,

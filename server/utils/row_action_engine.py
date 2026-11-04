@@ -19,10 +19,10 @@ from pathlib import Path
 from db import get_db
 from utils.row_action_condition import evaluate
 from utils.webhook_engine import fire_webhook_rule
-from utils.ai_scan_engine import (
+from ai.scan.ai_scan_engine import (
     claim_one, build_context_dir, assemble_prompt, _workspace_root, _revert_claimed,
 )
-from utils.ai_scan_repo import get_task
+from ai.scan.ai_scan_repo import get_task
 from utils.batch_repo import create_batch
 
 logger = logging.getLogger(__name__)

@@ -294,7 +294,7 @@ def extract_action_checks():
     task_text = (body.get('task_text') or '').strip()
     if not task_text:
         return jsonify({'error': 'task_text required'}), 400
-    from utils.action_check_extractor import extract_action_checks
+    from ai.gate.action_check_extractor import extract_action_checks
     try:
         checks = extract_action_checks(task_text,
                                        agent=body.get('agent'),
@@ -440,7 +440,7 @@ def update_config(batch_id):
     # 合并集，在 UPDATE 落列之后现查（gate_policy_id 已是最新值）——合并
     # 事实源在 gate_policy_repo.merged_action_checks，与 worker 派发共用。
     if 'action_checks' in body or 'gatePolicyId' in body:
-        from utils.gate_policy_repo import merged_action_checks
+        from ai.gate.gate_policy_repo import merged_action_checks
         agent_ledger.sync_batch_expectations(
             batch_id, merged_action_checks(batch_id))
     return jsonify(result)

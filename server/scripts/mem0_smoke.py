@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.ai_query import get_ai_settings
+from ai.sessions.ai_query import get_ai_settings
 
 CHROMA_PATH = os.path.join(os.path.expanduser('~'), '.check-manage', 'mem0_smoke')
 EMBED = sys.argv[sys.argv.index('--embed') + 1] if '--embed' in sys.argv else 'text-embedding-v3'

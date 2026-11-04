@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.ai_scan_engine import _import_child_outputs_to_record
+from ai.scan.ai_scan_engine import _import_child_outputs_to_record
 
 
 @pytest.fixture

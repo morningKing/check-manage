@@ -38,7 +38,7 @@ def test_list_scoped_to_owner(client, mock_conn, mock_cursor):
     _auth_passes(mock_cursor)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_scan_tasks._current_key', return_value=_key()), \
-         patch('utils.ai_scan_repo.list_tasks_for_owner', return_value=[_task()]) as lt:
+         patch('ai.scan.ai_scan_repo.list_tasks_for_owner', return_value=[_task()]) as lt:
         resp = client.get(BASE, headers=HDR)
     assert resp.status_code == 200
     body = resp.get_json()
@@ -54,7 +54,7 @@ def test_detail_not_found_is_404(client, mock_conn, mock_cursor):
     _auth_passes(mock_cursor)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_scan_tasks._current_key', return_value=_key()), \
-         patch('utils.ai_scan_repo.get_task_for_owner', return_value=None):
+         patch('ai.scan.ai_scan_repo.get_task_for_owner', return_value=None):
         resp = client.get(f'{BASE}/scan-999', headers=HDR)
     assert resp.status_code == 404
 
@@ -63,7 +63,7 @@ def test_detail_returns_contract_fields(client, mock_conn, mock_cursor):
     _auth_passes(mock_cursor)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_scan_tasks._current_key', return_value=_key()), \
-         patch('utils.ai_scan_repo.get_task_for_owner', return_value=_task()):
+         patch('ai.scan.ai_scan_repo.get_task_for_owner', return_value=_task()):
         resp = client.get(f'{BASE}/scan-1', headers=HDR)
     assert resp.status_code == 200
     assert resp.get_json()['collection'] == 'orders'
@@ -74,8 +74,8 @@ def test_run_now_not_found_is_404(client, mock_conn, mock_cursor):
     _auth_passes(mock_cursor)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_scan_tasks._current_key', return_value=_key()), \
-         patch('utils.ai_scan_repo.get_task_for_owner', return_value=None), \
-         patch('utils.ai_scan_engine.run_task') as rt:
+         patch('ai.scan.ai_scan_repo.get_task_for_owner', return_value=None), \
+         patch('ai.scan.ai_scan_engine.run_task') as rt:
         resp = client.post(f'{BASE}/scan-999/run-now', headers=HDR)
     assert resp.status_code == 404
     rt.assert_not_called()
@@ -87,8 +87,8 @@ def test_run_now_success_returns_claimed_count(client, mock_conn, mock_cursor):
     after = _task(lastScanCount=3, lastError=None)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_scan_tasks._current_key', return_value=_key()), \
-         patch('utils.ai_scan_repo.get_task_for_owner', side_effect=[before, after]), \
-         patch('utils.ai_scan_engine.run_task') as rt:
+         patch('ai.scan.ai_scan_repo.get_task_for_owner', side_effect=[before, after]), \
+         patch('ai.scan.ai_scan_engine.run_task') as rt:
         resp = client.post(f'{BASE}/scan-1/run-now', headers=HDR)
     assert resp.status_code == 200
     body = resp.get_json()
@@ -100,7 +100,7 @@ def test_run_now_engine_exception_is_500(client, mock_conn, mock_cursor):
     _auth_passes(mock_cursor)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_scan_tasks._current_key', return_value=_key()), \
-         patch('utils.ai_scan_repo.get_task_for_owner', return_value=_task()), \
-         patch('utils.ai_scan_engine.run_task', side_effect=RuntimeError('boom')):
+         patch('ai.scan.ai_scan_repo.get_task_for_owner', return_value=_task()), \
+         patch('ai.scan.ai_scan_engine.run_task', side_effect=RuntimeError('boom')):
         resp = client.post(f'{BASE}/scan-1/run-now', headers=HDR)
     assert resp.status_code == 500

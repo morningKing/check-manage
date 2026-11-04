@@ -9,7 +9,7 @@ import threading
 import logging
 
 from db import get_db
-from utils.ai_query import get_ai_settings
+from ai.sessions.ai_query import get_ai_settings
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +203,7 @@ def delete_memory(memory_id):
 def _turn_text(state):
     """从 listener 的累积 state 取助手纯文本。复用 chat_persist.build_content。"""
     try:
-        from utils.chat_persist import build_content
+        from ai.sessions.chat_persist import build_content
         parts = build_content(state) or []
         return '\n'.join(p.get('text', '') for p in parts if p.get('type') == 'text').strip()
     except Exception:

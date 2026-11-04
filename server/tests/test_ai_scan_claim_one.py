@@ -28,7 +28,7 @@ def _db(returning=('rec-1', {'a': 1})):
 
 
 def test_claim_one_returns_record_and_flips_status():
-    import utils.ai_scan_engine as eng
+    from ai.scan import ai_scan_engine as eng
     fake_get_db, cur = _db()
     with patch.object(eng, 'get_db', fake_get_db):
         rec = eng.claim_one(TASK, 'rec-1')
@@ -44,7 +44,7 @@ def test_claim_one_has_no_status_predicate_at_all():
     「已处理」的行再来一次。这里同时锁 SQL 文本和绑定参数两侧，防止谓词
     以硬编码字符串或「排除已处理」等其他形式偷偷混进来。
     """
-    import utils.ai_scan_engine as eng
+    from ai.scan import ai_scan_engine as eng
     fake_get_db, cur = _db()
     with patch.object(eng, 'get_db', fake_get_db):
         eng.claim_one(TASK, 'rec-1')
@@ -66,7 +66,7 @@ def test_claim_one_has_no_status_predicate_at_all():
 
 
 def test_claim_one_returns_none_when_no_row():
-    import utils.ai_scan_engine as eng
+    from ai.scan import ai_scan_engine as eng
     fake_get_db, _cur = _db(returning=None)
     with patch.object(eng, 'get_db', fake_get_db):
         assert eng.claim_one(TASK, 'gone') is None

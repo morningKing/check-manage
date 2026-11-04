@@ -1,5 +1,5 @@
 """
-Unit tests for utils/ai_schema_designer.py.
+Unit tests for ai/scan/ai_schema_designer.py.
 
 Mirrors test_ai_query.py's mock pattern (patch get_ai_settings/get_http_session
 at module level) since draft_page_schema() reuses the exact same HTTP-calling
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
 import requests
 
-import utils.ai_schema_designer as asd
+from ai.scan import ai_schema_designer as asd
 
 
 SETTINGS = {

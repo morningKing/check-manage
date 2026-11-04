@@ -516,7 +516,7 @@ def test_run_one_injects_and_records_memory(user_id, db_conn, monkeypatch, tmp_p
     import threading
     from utils.batch_engine import BatchWorker
     import utils.batch_engine as eng
-    import utils.memory as mem
+    from ai.sessions import memory as mem
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
 

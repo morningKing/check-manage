@@ -1,4 +1,4 @@
-"""Tests for utils/mention_files.py — @<path> file-mention parsing in chat messages.
+"""Tests for ai/sessions/mention_files.py — @<path> file-mention parsing in chat messages.
 
 Agent mentions (@<name>, validated separately against the agent list and sent
 structured as agentMentions) must NOT be reported here; only path-like tokens
@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.mention_files import find_file_mentions, inline_file_mentions
+from ai.sessions.mention_files import find_file_mentions, inline_file_mentions
 
 
 def test_basic_uploads_path():

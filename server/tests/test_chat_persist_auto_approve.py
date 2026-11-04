@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils import chat_persist
+from ai.sessions import chat_persist as chat_persist
 
 
 def _evt(req_id='req1', oc_sid='oc_parent', permission='external_directory'):

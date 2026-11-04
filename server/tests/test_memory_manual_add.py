@@ -16,7 +16,7 @@ def _h(uid='u1', role='developer'):
 
 # ---- add_memory_text unit ----
 def test_add_memory_text_default_infer_true():
-    import utils.memory as mem
+    from ai.sessions import memory as mem
     m = MagicMock()
     with patch.object(mem, 'get_memory', return_value=m), \
          patch.object(mem, '_on_mem_thread', side_effect=lambda fn: fn()):
@@ -27,7 +27,7 @@ def test_add_memory_text_default_infer_true():
 
 
 def test_add_memory_text_verbatim_infer_false():
-    import utils.memory as mem
+    from ai.sessions import memory as mem
     m = MagicMock()
     with patch.object(mem, 'get_memory', return_value=m), \
          patch.object(mem, '_on_mem_thread', side_effect=lambda fn: fn()):
@@ -37,7 +37,7 @@ def test_add_memory_text_verbatim_infer_false():
 
 
 def test_add_memory_text_no_memory_returns_false():
-    import utils.memory as mem
+    from ai.sessions import memory as mem
     with patch.object(mem, 'get_memory', return_value=None):
         assert mem.add_memory_text('u1', 'x') is False
 

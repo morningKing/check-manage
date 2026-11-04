@@ -1,5 +1,5 @@
 """
-Unit tests for the LLM call in utils/ai_query.py.
+Unit tests for the LLM call in ai/sessions/ai_query.py.
 
 Covers the connection-pool refactor (A): a shared requests.Session is reused
 across calls, and HTTP/connection errors map to the same RuntimeError contract
@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import requests
-import utils.ai_query as aq
+from ai.sessions import ai_query as aq
 
 
 FIELDS = [{'fieldName': 'status', 'label': '状态', 'controlType': 'text'}]

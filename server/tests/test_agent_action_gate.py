@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from db import get_db                                    # noqa: E402
 from utils import agent_ledger                           # noqa: E402
-from utils import action_check_extractor                 # noqa: E402
+from ai.gate import action_check_extractor as action_check_extractor                 # noqa: E402
 
 # migrations 目录下文件名以数字开头,不能直接 import;走 app.py boot 同款动态加载。
 import importlib.util                                    # noqa: E402
@@ -738,7 +738,7 @@ def test_wait_subtasks_drained_times_out(gate_fixture, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _patch_llm(monkeypatch, content):
-    import utils.action_check_extractor as ex
+    from ai.gate import action_check_extractor as ex
     class _Resp:
         status_code = 200
         def json(self):
@@ -1040,7 +1040,7 @@ def test_interactive_ledger_records_mapped_parts_from_apply_event(gate_fixture):
     'tool' 形状 → 交互路径账本恒 0 行、工具型门禁恒 failed。本用例走真实
     累积路径（new_state → apply_event → finalize）锁死生产形状。"""
     f = gate_fixture
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     agent_ledger.register_session_expectations(f['sid'], [
         {'name': '执行对账脚本', 'tool': 'bash',
          'args_pattern': 'scripts/reconcile\\.py'},

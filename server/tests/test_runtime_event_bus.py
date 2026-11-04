@@ -138,7 +138,7 @@ def stub_delegate(monkeypatch):
 def test_delegate_discovers_subtask(stub_delegate):
     """S5 探针：stub 总线的委派形状必须能被 apply_event 发现为子代理作用域。
     失败 = S5 走降级预案（spec §5 已预声明）。"""
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     oc = stub_delegate.create_session(directory='/ws/d')
     state = new_state()
     gen = stub_delegate.get_client().subscribe_events(directory='/ws/d')

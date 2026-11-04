@@ -13,7 +13,7 @@
 from flask import Blueprint, g, jsonify
 
 from auth import api_key_required, require_bound_key
-from utils import ai_scan_repo
+from ai.scan import ai_scan_repo as ai_scan_repo
 from common.api_errors import INTERNAL_ERROR, NOT_FOUND, err, register_error_handlers
 from common.operation_log import log_api_operation
 
@@ -72,7 +72,7 @@ def run_now(task_id):
     if not t:
         return err('任务不存在', NOT_FOUND, 404)
 
-    from utils.ai_scan_engine import run_task
+    from ai.scan.ai_scan_engine import run_task
     try:
         run_task(t)
     except Exception:

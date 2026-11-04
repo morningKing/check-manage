@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.prompt_template import DuplicateTemplateName
+from ai.sessions.prompt_template import DuplicateTemplateName
 
 BASE = '/v1/prompt-templates'
 HDR = {'X-API-Key': 'cm_x'}

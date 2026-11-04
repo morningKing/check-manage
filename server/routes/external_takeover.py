@@ -6,7 +6,8 @@ import logging
 from flask import Blueprint, jsonify, request, g
 
 from db import get_db
-from utils import batch_repo, takeover_repo
+from utils import batch_repo
+from ai.sessions import takeover_repo as takeover_repo
 from common.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)

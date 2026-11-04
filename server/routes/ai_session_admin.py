@@ -18,7 +18,7 @@ from flask import Blueprint, g as flask_g, jsonify, request
 from db import get_db
 from auth import require_permission, require_permission_sse
 from common.operation_log import log_operation
-from utils.session_admin_repo import (
+from ai.sessions.session_admin_repo import (
     admin_get_session_detail,
     admin_get_session_messages,
     admin_list_sessions_v2,
@@ -167,7 +167,7 @@ def analyze_session(session_id):
     from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, get_default_chat_model
     from ai.opencode.opencode_client import OpenCodeClient
     from utils.workspace import create_session_workspace, write_opencode_config
-    from utils.session_token import generate_token
+    from ai.sessions.session_token import generate_token
     from data.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
         INTERNAL_MCP_NAME as MCP_NAME
 
@@ -239,7 +239,7 @@ def analyze_session(session_id):
         """Converge a failed trigger: no orphan session row / workspace /
         listener / diagnosis row (Spec §22 P0-8)."""
         try:
-            from utils.chat_persist import stop_listener
+            from ai.sessions.chat_persist import stop_listener
             stop_listener(analysis_sid)
         except Exception:
             pass
@@ -380,7 +380,7 @@ def analyze_session(session_id):
         ])
 
     # 9. Listener BEFORE dispatch (same ordering rationale as before).
-    from utils.chat_persist import ensure_listener
+    from ai.sessions.chat_persist import ensure_listener
     ensure_listener(analysis_sid, oc_sid, workspace_path)
 
     # 10. Send — explicitly pass the analysis model (OpenCode does NOT pick up
@@ -420,7 +420,7 @@ def analyze_session(session_id):
 def list_session_analyses(sid):
     """该会话的轨迹分析历史（execution-audit：分析与原会话关联入口）。
     每行含 analysis_session_id，可直开分析会话。"""
-    from utils.session_admin_repo import admin_get_session_detail
+    from ai.sessions.session_admin_repo import admin_get_session_detail
     if not admin_get_session_detail(sid):
         return jsonify({'error': '会话不存在'}), 404
     with get_db() as conn:
@@ -530,7 +530,7 @@ def _attempt_block(sid: str, attempt_id: str | None = None) -> dict:
 def execution_audit_overview(sid):
     """One-stop payload for the admin audit drawer: attempts + manifests +
     events + the deterministic diagnosis report (built on demand)."""
-    from utils.session_admin_repo import admin_get_session_detail
+    from ai.sessions.session_admin_repo import admin_get_session_detail
     if not admin_get_session_detail(sid):
         return jsonify({'error': '会话不存在'}), 404
     return jsonify(_attempt_block(sid))
@@ -540,7 +540,7 @@ def execution_audit_overview(sid):
 @require_permission('admin.ai_chat_admin')
 def execution_audit_events(sid):
     from utils import execution_audit
-    from utils.session_admin_repo import admin_get_session_detail
+    from ai.sessions.session_admin_repo import admin_get_session_detail
     if not admin_get_session_detail(sid):
         return jsonify({'error': '会话不存在'}), 404
     attempt_id = (request.args.get('attemptId') or '').strip() or None
@@ -557,7 +557,7 @@ def execution_audit_prompt(sid):
     """Effective-prompt snapshot. Hashes/augmentations always; plaintext only
     when EXECUTION_AUDIT_PROMPT_PLAINTEXT is on (redaction_status='plaintext')."""
     from utils import execution_audit
-    from utils.session_admin_repo import admin_get_session_detail
+    from ai.sessions.session_admin_repo import admin_get_session_detail
     if not admin_get_session_detail(sid):
         return jsonify({'error': '会话不存在'}), 404
     attempt_id = (request.args.get('attemptId') or '').strip()

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from db import get_db
 from utils.batch_repo import create_batch
-from utils.ai_scan_repo import mark_run
+from ai.scan.ai_scan_repo import mark_run
 from utils.workspace import batch_workspace_root, legacy_batch_workspace_root
 
 

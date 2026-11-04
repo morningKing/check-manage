@@ -347,7 +347,7 @@ def test_import_400_when_paths_missing_or_empty(client, admin_headers):
 def test_import_400_when_too_many_paths(client, admin_headers):
     """超过 MAX_IMPORT_PATHS（100）→ 400 TOO_MANY。"""
     from unittest.mock import patch
-    from utils.session_file_import import MAX_IMPORT_PATHS
+    from ai.sessions.session_file_import import MAX_IMPORT_PATHS
     sess = _fake_sess(workspace='ws-fake')
     paths = [f'p{i}.txt' for i in range(MAX_IMPORT_PATHS + 1)]
     with patch('routes.ai_batch_admin.admin_get_child_session', return_value=sess):

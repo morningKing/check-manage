@@ -497,7 +497,7 @@ def import_files(batch_id):
     """把子会话工作区里被记录过的文件按需导入系统 data_files，返回文件 id。
     body: {'name' 或 'seq'（二选一定位子会话）, 'paths': [...]}。幂等——
     已导入过的路径返回原 id。uploaded_by 为 None（API key 来源）。"""
-    from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
+    from ai.sessions.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -728,7 +728,7 @@ def session_messages(batch_id, child_id):
 @require_bound_key
 def create_takeover_link(batch_id, child_id):
     """签发人工接管链接（spec D1）：短时令牌，仅存哈希，可吊销。"""
-    from utils import takeover_repo
+    from ai.sessions import takeover_repo as takeover_repo
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -757,7 +757,7 @@ def create_takeover_link(batch_id, child_id):
 @require_bound_key
 def revoke_takeover_link(batch_id, child_id):
     """吊销接管令牌：三元组全匹配才生效（他人/他批令牌一律 404）。"""
-    from utils import takeover_repo
+    from ai.sessions import takeover_repo as takeover_repo
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
@@ -1021,7 +1021,7 @@ def update_config(batch_id):
         # 事实源（gate_policy_repo.merged_action_checks）——在 UPDATE 落列
         # 之后现查（action_checks/gate_policy_id 已是最新值）。用裸 actionChecks
         # 会把引用策略的批的策略侧规则从期望行里挤掉（口径分裂）。
-        from utils.gate_policy_repo import merged_action_checks
+        from ai.gate.gate_policy_repo import merged_action_checks
         agent_ledger.sync_batch_expectations(batch_id, merged_action_checks(batch_id))
     log_api_operation('update', 'ai_chat_batch', batch_id, result['batch'].get('name'),
                       f'通过 API Key 修改批任务「{result["batch"].get("name")}」配置')
@@ -1037,7 +1037,7 @@ def ai_query():
     不执行查询本身，只返回 filter。调用方可用返回的 filter 调用
     GET /v1/collections/<collection>?q=<filter> 获取实际数据。
     """
-    from utils.ai_query import nl_to_mongo_filter
+    from ai.sessions.ai_query import nl_to_mongo_filter
     from data.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
     body = request.get_json(force=True)
     collection = (body.get('collection') or '').strip()

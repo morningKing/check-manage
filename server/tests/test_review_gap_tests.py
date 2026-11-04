@@ -532,7 +532,7 @@ def test_scheduler_loop_retry_thread_takeover(monkeypatch):
 def test_m9_artifact_dedup_scoped_by_owner(db_conn, user_id, monkeypatch,
                                            tmp_path):
     import config as cfg
-    from utils import artifact_store
+    from ai.sessions import artifact_store as artifact_store
     monkeypatch.setattr(cfg, 'AI_WORKSPACE_ROOT', str(tmp_path))
     f = tmp_path / 'out.txt'
     f.write_text('same content', encoding='utf-8')
@@ -989,12 +989,12 @@ def test_cursor_expired_returns_410(db_conn, user_id, gap_internal_client):
 def test_scan_scheduler_requires_lease(db_conn, monkeypatch):
     """缺口补齐 V3：scan scheduler tick 纳入 DB 租约——抢不到租约则本轮
     不执行任何扫描任务（多进程单实例）；租约可用则正常执行。"""
-    from utils import ai_scan_scheduler as sched
+    from ai.scan import ai_scan_scheduler as sched
     ran = []
-    import utils.ai_scan_repo as _repo
+    from ai.scan import ai_scan_repo as _repo
     monkeypatch.setattr(_repo, 'list_tasks', lambda: [
         {'id': 't1', 'enabled': True}])
-    import utils.ai_scan_engine as _engine
+    from ai.scan import ai_scan_engine as _engine
     monkeypatch.setattr(_engine, 'run_task', lambda task: ran.append(task['id']))
 
     class _FakeLock:
@@ -1046,7 +1046,7 @@ def test_v1_effect_writers_end_to_end(db_conn, user_id, monkeypatch, tmp_path):
     test_internal_commands_endpoint 家族；scan_writeback 的登记见
     ai_scan_engine（on_child_finished 回写成功路径）。"""
     import config as cfg
-    from utils import artifact_store
+    from ai.sessions import artifact_store as artifact_store
     bid, sids = _seed_batch(db_conn, user_id, 1)
     sid = sids[0]
     monkeypatch.setattr(cfg, 'AI_WORKSPACE_ROOT', str(tmp_path))
@@ -1064,7 +1064,7 @@ def test_v1_effect_writers_end_to_end(db_conn, user_id, monkeypatch, tmp_path):
                 "WHERE session_id=%s AND effect_type='artifact'", (sid,))
             assert cur.fetchone()[0] >= 1          # artifact effect 已登记
     # file_import：登记 session_files 记录 → 导入 → effect committed
-    from utils.session_file_import import import_recorded_files
+    from ai.sessions.session_file_import import import_recorded_files
     src = tmp_path / 'doc.txt'
     src.write_text('导入内容', encoding='utf-8')
     with db_conn.cursor() as cur:
@@ -1320,7 +1320,7 @@ def test_scan_output_import_records_file_import_effect(db_conn, user_id,
     committed——幂等键 = session_id:文件相对路径。"""
     from unittest.mock import patch
 
-    from utils.ai_scan_engine import _import_child_outputs_to_record
+    from ai.scan.ai_scan_engine import _import_child_outputs_to_record
 
     coll = f'gap_eff_{uuid.uuid4().hex[:8]}'
     rid, sid, bid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
@@ -1672,9 +1672,9 @@ def test_all_schedulers_use_lease():
     import pathlib
     repo_root = pathlib.Path(__file__).resolve().parents[2]
     schedulers = [
-        'server/utils/ai_scan_scheduler.py',
+        'server/ai/scan/ai_scan_scheduler.py',
         'server/utils/backup.py',
-        'server/utils/status_badge_timeout_scheduler.py',
+        'server/ai/sessions/status_badge_timeout_scheduler.py',
         'server/data/field_index_scheduler.py',
         'server/data/etl_scheduler.py',
     ]

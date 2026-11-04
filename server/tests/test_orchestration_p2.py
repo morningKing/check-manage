@@ -481,7 +481,7 @@ def test_approval_timeout_expires(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_artifact_put_dedup_and_auth(user_id, tmp_path):
-    from utils import artifact_store
+    from ai.sessions import artifact_store as artifact_store
     f1 = tmp_path / 'out.csv'
     f1.write_text('a,b\n1,2')
     a1 = artifact_store.put_file(str(f1), owner_user_id=user_id, name='out.csv',
@@ -494,7 +494,7 @@ def test_artifact_put_dedup_and_auth(user_id, tmp_path):
 
 
 def test_ingest_session_outputs(user_id, tmp_path):
-    from utils import artifact_store
+    from ai.sessions import artifact_store as artifact_store
     ws = tmp_path / 'ws'
     (ws / 'outputs').mkdir(parents=True)
     (ws / 'outputs' / 'result.md').write_text('# 结果')

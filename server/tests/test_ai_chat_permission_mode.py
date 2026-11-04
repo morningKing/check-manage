@@ -82,8 +82,8 @@ def setup(mock_conn, mock_cursor, tmp_path):
         patch('db.get_db', fake_db),
         patch('db.pool', MagicMock()),
         patch('routes.ai_chat.get_db', fake_db),
-        patch('utils.session_token.get_db', fake_db),
-        patch('utils.chat_persist.get_db', fake_db),
+        patch('ai.sessions.session_token.get_db', fake_db),
+        patch('ai.sessions.chat_persist.get_db', fake_db),
         patch('routes.ai_chat.OpenCodeClient', return_value=fake_client),
         patch('routes.ai_chat.get_runtime',
               lambda: _RuntimeStub(fake_client)),
@@ -96,7 +96,7 @@ def setup(mock_conn, mock_cursor, tmp_path):
     # Isolate the global persist-listener registry: a prior send test may leave
     # a listener registered for 'sess_x', which would make has_listener() True
     # and skip the SSE proxy's fallback persist under test here.
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     chat_persist._listeners.clear()
 
     from app import app

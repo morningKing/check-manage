@@ -1,7 +1,7 @@
 import sys, os
 from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-import utils.session_history as session_history
+from ai.sessions import session_history as session_history
 
 
 def test_render_history_block_excludes_current_and_formats():

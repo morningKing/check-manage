@@ -7,7 +7,7 @@ from flask import Blueprint, g as flask_g, jsonify, send_file
 from auth import login_required
 from db import get_db
 
-from utils import artifact_store
+from ai.sessions import artifact_store as artifact_store
 
 artifacts_bp = Blueprint('artifacts', __name__, url_prefix='/v1/artifacts')
 

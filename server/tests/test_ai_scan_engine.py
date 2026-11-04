@@ -154,7 +154,7 @@ def test_run_one_invokes_scan_hook_on_success(monkeypatch):
     monkeypatch.setattr(w, '_await_finished', lambda *a, **k: ('preview', {'role': 'assistant', 'content': [{'type': 'text', 'text': 'ok'}]}))
     monkeypatch.setattr(w, '_persist_conversation', lambda *a, **kw: None)
     monkeypatch.setattr(w, '_mark_done', lambda *a, **k: None)
-    import utils.ai_scan_engine as se
+    from ai.scan import ai_scan_engine as se
     monkeypatch.setattr(se, 'on_child_finished', lambda row, msg, ok: calls.update(row=row, ok=ok))
     w._run_one({'id': 's1', 'user_id': 'u', 'batch_id': 'b', 'batch_input_file': 'd',
                 'scan_task_id': 'task-1', 'source_record_id': 'rec-1'})
@@ -162,7 +162,7 @@ def test_run_one_invokes_scan_hook_on_success(monkeypatch):
 
 
 def test_assemble_prompt_appends_contract():
-    from utils.ai_scan_engine import assemble_prompt
+    from ai.scan.ai_scan_engine import assemble_prompt
     task = {'promptTemplate': '用方案审核skill审核。',
             'fieldMapping': [{'jsonKey': '结论', 'column': '审核结论', 'required': True},
                              {'jsonKey': '意见', 'column': '审核意见', 'required': False}]}
@@ -174,7 +174,7 @@ def test_assemble_prompt_appends_contract():
 
 
 def test_build_context_dir_writes_record_md(tmp_path, monkeypatch):
-    import utils.ai_scan_engine as se
+    from ai.scan import ai_scan_engine as se
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     # no file fields → no attachments; record.md rendered from data
     monkeypatch.setattr(se, '_field_labels',
@@ -198,13 +198,13 @@ def test_build_context_dir_writes_record_md(tmp_path, monkeypatch):
 
 
 def test_claim_builds_pending_predicate_and_running_update():
-    import utils.ai_scan_engine as se
+    from ai.scan import ai_scan_engine as se
     fake, cur = _mock_db()
     cur.fetchall = MagicMock(return_value=[('rec-1', {'name': 'A'})])
     task = {'id': 't1', 'collection': 'orders', 'branchId': 'main',
             'statusField': '审核状态', 'pendingValue': '未审核', 'runningValue': '处理中',
             'extraFilter': {}, 'maxRecordsPerScan': 5}
-    with patch('utils.ai_scan_engine.get_db', fake):
+    with patch('ai.scan.ai_scan_engine.get_db', fake):
         claimed = se.claim_records(task)
     sql = str(cur.execute.call_args_list[-1].args[0])
     assert 'FOR UPDATE SKIP LOCKED' in sql and 'UPDATE dynamic_data' in sql
@@ -212,7 +212,7 @@ def test_claim_builds_pending_predicate_and_running_update():
 
 
 def test_run_task_creates_batch_for_claimed(monkeypatch):
-    import utils.ai_scan_engine as se
+    from ai.scan import ai_scan_engine as se
     monkeypatch.setattr(se, 'claim_records', lambda task: [{'id': 'rec-1', 'data': {}}])
     monkeypatch.setattr(se, 'build_context_dir', lambda task, rec: f"scan-staging/{task['id']}/{rec['id']}")
     captured = {}
@@ -226,7 +226,7 @@ def test_run_task_creates_batch_for_claimed(monkeypatch):
 
 
 def test_run_task_reverts_all_claimed_on_failure(monkeypatch):
-    import utils.ai_scan_engine as se
+    from ai.scan import ai_scan_engine as se
     claimed = [{'id': 'rec-1', 'data': {}}, {'id': 'rec-2', 'data': {}}, {'id': 'rec-3', 'data': {}}]
     monkeypatch.setattr(se, 'claim_records', lambda task: claimed)
     # build_context_dir fails on the 3rd record
@@ -250,7 +250,7 @@ def test_run_task_reverts_all_claimed_on_failure(monkeypatch):
 
 
 def test_run_task_zero_claimed_no_batch(monkeypatch):
-    import utils.ai_scan_engine as se
+    from ai.scan import ai_scan_engine as se
     monkeypatch.setattr(se, 'claim_records', lambda task: [])
     called = {'batch': False}
     monkeypatch.setattr(se, 'create_batch', lambda *a, **k: called.update(batch=True))
@@ -261,7 +261,7 @@ def test_run_task_zero_claimed_no_batch(monkeypatch):
 
 
 def test_is_due_logic():
-    from utils.ai_scan_scheduler import _is_due
+    from ai.scan.ai_scan_scheduler import _is_due
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
     assert _is_due({'lastRunAt': None, 'scheduleIntervalMinutes': 15}, now) is True

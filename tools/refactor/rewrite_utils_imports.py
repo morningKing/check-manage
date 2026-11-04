@@ -80,6 +80,27 @@ MAPPING = {
     'skillopt': 'ai.skills.skillopt',
     'skill_candidate_eval': 'ai.skills.skill_candidate_eval',
     'skill_upload': 'ai.skills.skill_upload',
+    # ---- batch 3: ai/sessions/ + ai/gate/ + ai/scan/ ----
+    'chat_persist': 'ai.sessions.chat_persist',
+    'ai_session_repo': 'ai.sessions.ai_session_repo',
+    'session_admin_repo': 'ai.sessions.session_admin_repo',
+    'session_history': 'ai.sessions.session_history',
+    'session_file_import': 'ai.sessions.session_file_import',
+    'session_token': 'ai.sessions.session_token',
+    'ai_message_meta': 'ai.sessions.ai_message_meta',
+    'ai_query': 'ai.sessions.ai_query',
+    'prompt_template': 'ai.sessions.prompt_template',
+    'memory': 'ai.sessions.memory',
+    'takeover_repo': 'ai.sessions.takeover_repo',
+    'mention_files': 'ai.sessions.mention_files',
+    'artifact_store': 'ai.sessions.artifact_store',
+    'status_badge_timeout_scheduler': 'ai.sessions.status_badge_timeout_scheduler',
+    'gate_policy_repo': 'ai.gate.gate_policy_repo',
+    'action_check_extractor': 'ai.gate.action_check_extractor',
+    'ai_scan_engine': 'ai.scan.ai_scan_engine',
+    'ai_scan_repo': 'ai.scan.ai_scan_repo',
+    'ai_scan_scheduler': 'ai.scan.ai_scan_scheduler',
+    'ai_schema_designer': 'ai.scan.ai_schema_designer',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

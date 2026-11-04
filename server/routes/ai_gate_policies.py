@@ -7,7 +7,7 @@ log_operation 留痕一致）。checks 全量过 validate_checks，非法 400 �
 from flask import Blueprint, g, jsonify, request
 
 from auth import login_required, require_permission   # 与 ai_approvals 同款鉴权
-from utils import gate_policy_repo
+from ai.gate import gate_policy_repo as gate_policy_repo
 from common.operation_log import log_operation
 
 ai_gate_policies_bp = Blueprint('ai_gate_policies', __name__,

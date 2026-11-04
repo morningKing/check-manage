@@ -13,7 +13,7 @@ import time
 
 from db import get_db
 from utils.runtime import get_runtime
-from utils.ai_message_meta import (
+from ai.sessions.ai_message_meta import (
     meta_from_info, aggregate_metas, public_meta)
 from common.notifier import create_notification
 from config import AI_CHAT_NOTIFY_MIN_SECONDS
@@ -739,7 +739,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                          sig, sid, len(state.get('part_order', [])))
             if sig == 'idle':
                 try:
-                    from utils.memory import extract_from_turn
+                    from ai.sessions.memory import extract_from_turn
                     extract_from_turn(sid, state)
                 except Exception as e:
                     logger.warning('memory extract_from_turn failed session=%s: %s', sid, e)

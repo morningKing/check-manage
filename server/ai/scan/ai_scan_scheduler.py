@@ -40,8 +40,8 @@ def _tick():
             return
     except Exception:
         pass  # 租约基建不可用 → 退化为单实例内 APScheduler 互斥，不阻断扫描
-    from utils.ai_scan_repo import list_tasks
-    from utils.ai_scan_engine import run_task
+    from ai.scan.ai_scan_repo import list_tasks
+    from ai.scan.ai_scan_engine import run_task
     now = datetime.now(timezone.utc)
     for task in list_tasks():
         if not task.get('enabled', True) or not _is_due(task, now):
@@ -72,7 +72,7 @@ def start_scan_scheduler(app):
                        'disabled in this process')
         return
     try:
-        from utils.ai_scan_engine import sweep_orphans
+        from ai.scan.ai_scan_engine import sweep_orphans
         sweep_orphans()
     except Exception:
         traceback.print_exc()

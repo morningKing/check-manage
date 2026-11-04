@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.ai_scan_engine import sweep_orphans
+from ai.scan.ai_scan_engine import sweep_orphans
 
 
 def _mock_db():
@@ -34,7 +34,7 @@ TASK = ('task-1', 'orders', 'main', '审核状态', '处理中', '待处理')
 def test_no_tasks_no_updates():
     fake, cur, conn = _mock_db()
     cur.fetchall.return_value = []
-    with patch('utils.ai_scan_engine.get_db', fake):
+    with patch('ai.scan.ai_scan_engine.get_db', fake):
         sweep_orphans()
     updates = [c for c in cur.execute.call_args_list
                if 'UPDATE dynamic_data' in str(c.args[0])]
@@ -44,7 +44,7 @@ def test_no_tasks_no_updates():
 def test_resets_running_rows_without_live_children():
     fake, cur, conn = _mock_db()
     cur.fetchall.return_value = [TASK]
-    with patch('utils.ai_scan_engine.get_db', fake):
+    with patch('ai.scan.ai_scan_engine.get_db', fake):
         sweep_orphans()
     updates = [c for c in cur.execute.call_args_list
                if 'UPDATE dynamic_data' in str(c.args[0])]
@@ -63,7 +63,7 @@ def test_pending_value_none_defaults_to_empty_string():
     fake, cur, conn = _mock_db()
     task = ('task-2', 'orders', 'main', '状态', '处理中', None)
     cur.fetchall.return_value = [task]
-    with patch('utils.ai_scan_engine.get_db', fake):
+    with patch('ai.scan.ai_scan_engine.get_db', fake):
         sweep_orphans()
     upd = [c for c in cur.execute.call_args_list
            if 'UPDATE dynamic_data' in str(c.args[0])][0]
@@ -75,6 +75,6 @@ def test_each_task_commits_independently():
     """单任务失败不吞掉其余任务的清扫。"""
     fake, cur, conn = _mock_db()
     cur.fetchall.return_value = [TASK, ('task-3', 'ops', 'main', 'st', 'r', 'p')]
-    with patch('utils.ai_scan_engine.get_db', fake):
+    with patch('ai.scan.ai_scan_engine.get_db', fake):
         sweep_orphans()
     assert conn.commit.call_count == 2

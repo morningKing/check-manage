@@ -26,8 +26,8 @@ class TestStatusBadgeTimeoutTick:
 
     def test_timed_out_record_gets_written_to_timeout_value(self, mock_conn, mock_cursor):
         """非终态、超过 timeoutSec 未变化的记录应被写成 timeoutValue"""
-        from utils import status_badge_timeout_scheduler as mod
-        with patch('utils.status_badge_timeout_scheduler.get_db', _make_mock_db(mock_conn)):
+        from ai.sessions import status_badge_timeout_scheduler as mod
+        with patch('ai.sessions.status_badge_timeout_scheduler.get_db', _make_mock_db(mock_conn)):
             old_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
             mock_cursor.fetchall.side_effect = [
                 [{
@@ -63,8 +63,8 @@ class TestStatusBadgeTimeoutTick:
 
     def test_terminal_record_is_skipped(self, mock_conn, mock_cursor):
         """已经是终态的记录不应被扫描到（SQL 里 NOT (... = ANY(terminal_values)) 条件）"""
-        from utils import status_badge_timeout_scheduler as mod
-        with patch('utils.status_badge_timeout_scheduler.get_db', _make_mock_db(mock_conn)):
+        from ai.sessions import status_badge_timeout_scheduler as mod
+        with patch('ai.sessions.status_badge_timeout_scheduler.get_db', _make_mock_db(mock_conn)):
             mock_cursor.fetchall.side_effect = [
                 [{
                     'id': 'page-demo',
@@ -89,8 +89,8 @@ class TestStatusBadgeTimeoutTick:
 
     def test_field_without_timeout_sec_is_skipped(self, mock_conn, mock_cursor):
         """没配置 timeoutSec 的 statusBadge 字段完全不参与扫描（不产生任何扫描 SELECT/UPDATE）"""
-        from utils import status_badge_timeout_scheduler as mod
-        with patch('utils.status_badge_timeout_scheduler.get_db', _make_mock_db(mock_conn)):
+        from ai.sessions import status_badge_timeout_scheduler as mod
+        with patch('ai.sessions.status_badge_timeout_scheduler.get_db', _make_mock_db(mock_conn)):
             mock_cursor.fetchall.return_value = [{
                 'id': 'page-demo',
                 'fields': [{

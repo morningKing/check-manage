@@ -13,7 +13,7 @@ from flask import Blueprint, g, jsonify, request
 from auth import api_key_required, require_bound_key
 from common.api_errors import CONFLICT, INVALID_ARGUMENT, NOT_FOUND, err, register_error_handlers
 from common.operation_log import log_api_operation
-from utils.prompt_template import (
+from ai.sessions.prompt_template import (
     DuplicateTemplateName,
     create_template,
     delete_template,

@@ -21,7 +21,7 @@ from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
                               admin_soft_delete_child, reexecute_child,
                               reset_failed_to_pending)
 from common.operation_log import log_operation
-from utils.session_file_import import MAX_IMPORT_PATHS, import_recorded_files
+from ai.sessions.session_file_import import MAX_IMPORT_PATHS, import_recorded_files
 from utils.subtask_repo import get_subtask_messages
 from utils.workspace import WorkspacePathError, safe_resolve
 from utils.workspace_changes import file_diff, git_changes, read_file_preview

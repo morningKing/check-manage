@@ -11,7 +11,7 @@ ai_chat_subtask_messages）单独持久化，这里只映射成一个轻量占�
 拉取），`status` 由调用方通过 `subtask_status` 传入当前已知状态（map_part 本身
 不做数据库查询，保持纯函数）。
 """
-from utils.ai_message_meta import tool_duration_ms
+from ai.sessions.ai_message_meta import tool_duration_ms
 
 
 def map_part(part: dict, *, subtask_status: dict | None = None,

@@ -39,12 +39,12 @@ def _fake_db(fetchones=None):
 
 
 def _patch_draft(monkeypatch, draft=DRAFT, error=None):
-    from utils.ai_schema_designer import draft_page_schema as _real  # noqa: F401
+    from ai.scan.ai_schema_designer import draft_page_schema as _real  # noqa: F401
     def _fake(description):
         if error:
             raise RuntimeError(error)
         return dict(draft)
-    monkeypatch.setattr('utils.ai_schema_designer.draft_page_schema', _fake)
+    monkeypatch.setattr('ai.scan.ai_schema_designer.draft_page_schema', _fake)
 
 
 def test_admin_creates_page_and_menu(monkeypatch):

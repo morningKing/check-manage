@@ -54,7 +54,7 @@ def test_analyze_success(client, admin_headers, mock_conn):
          patch('routes.ai_session_admin.get_db', _fake_db(mock_conn)), \
          patch('utils.workspace.create_session_workspace', return_value='/tmp/ws2'), \
          patch('utils.workspace.write_opencode_config') as write_cfg, \
-         patch('utils.session_token.generate_token', return_value='tok123'), \
+         patch('ai.sessions.session_token.generate_token', return_value='tok123'), \
          patch('config.get_default_chat_model', return_value={'provider': 'p', 'model': 'm'}), \
          patch('ai.skills.global_skills.inject_global_skills'), \
          patch('ai.skills.global_skills.inject_single_skill', return_value='/tmp/skill-src'), \
@@ -65,7 +65,7 @@ def test_analyze_success(client, admin_headers, mock_conn):
          patch('utils.execution_audit.scan_workspace_manifests', return_value=[]), \
          patch('utils.execution_audit.sha256_file', return_value='h'), \
          patch('ai.opencode.opencode_client.OpenCodeClient', return_value=oc_client), \
-         patch('utils.chat_persist.ensure_listener') as ensure_listener:
+         patch('ai.sessions.chat_persist.ensure_listener') as ensure_listener:
         resp = client.post('/ai/chat/admin/sessions/v2/sess_target/analyze',
                            headers=admin_headers)
 

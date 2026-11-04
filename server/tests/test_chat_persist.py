@@ -10,7 +10,7 @@ def _ev(etype, props):
 
 
 def test_apply_event_accumulates_text_tool_and_detects_idle():
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     # assistant message announced -> records turn_msg_id
     assert apply_event(s, _ev('message.updated',
@@ -33,8 +33,8 @@ def test_apply_event_accumulates_text_tool_and_detects_idle():
 
 
 def test_apply_event_captures_meta_and_tool_duration():
-    from utils.chat_persist import new_state, apply_event, build_content
-    from utils.ai_message_meta import aggregate_metas, public_meta
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.ai_message_meta import aggregate_metas, public_meta
     s = new_state()
     # message.updated carrying time/tokens/cost (final completed snapshot)
     apply_event(s, _ev('message.updated',
@@ -55,7 +55,7 @@ def test_apply_event_captures_meta_and_tool_duration():
 
 
 def test_apply_event_ignores_other_session():
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'OTHER'}}), 'oc')
@@ -63,7 +63,7 @@ def test_apply_event_ignores_other_session():
 
 
 def test_build_content_drops_empty_text():
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
@@ -89,7 +89,7 @@ def _fake_db(sink):
 
 
 def test_persist_turn_upserts_with_turn_msg_id(monkeypatch):
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     sink = []
     monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
     state = chat_persist.new_state()
@@ -105,7 +105,7 @@ def test_persist_turn_upserts_with_turn_msg_id(monkeypatch):
 
 
 def test_persist_turn_noop_on_empty_content(monkeypatch):
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     sink = []
     monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
     chat_persist.persist_turn('sess1', chat_persist.new_state())  # no parts
@@ -113,7 +113,7 @@ def test_persist_turn_noop_on_empty_content(monkeypatch):
 
 
 def test_persist_turn_falls_back_to_generated_id(monkeypatch):
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     sink = []
     monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
     state = chat_persist.new_state()  # turn_msg_id stays None
@@ -131,7 +131,7 @@ def test_run_listener_persists_then_exits_on_idle(monkeypatch):
     """The listener persists the turn on idle and then RETURNS, releasing the
     OpenCode /event subscription (one listener per turn). A second turn fed into
     the same iterator is left unconsumed — proving the early exit."""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     saved = []
     monkeypatch.setattr(chat_persist, 'persist_turn',
                         lambda sid, state: saved.append((sid, chat_persist.build_content(state))))
@@ -153,7 +153,7 @@ def test_run_listener_persists_then_exits_on_idle(monkeypatch):
 def test_run_listener_persists_incrementally_while_streaming(monkeypatch):
     """Mid-turn (before idle) the listener upserts the partial answer once the
     debounce elapses, so switching sessions mid-stream recovers tool calls."""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     saved = []
     monkeypatch.setattr(chat_persist, 'persist_turn',
                         lambda sid, state: saved.append(chat_persist.build_content(state)))
@@ -179,7 +179,7 @@ def test_run_listener_persists_incrementally_while_streaming(monkeypatch):
 
 
 def test_ensure_listener_dedups_per_session(monkeypatch):
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     started = []
     block = _threading.Event()
 
@@ -201,7 +201,7 @@ def test_ensure_listener_dedups_per_session(monkeypatch):
 
 def test_apply_event_ignores_unrelated_session_still_works():
     """回归防护：新逻辑必须不影响"真正无关的会话被忽略"这个既有行为。"""
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'totally-unrelated'}}), 'oc')
@@ -214,7 +214,7 @@ def test_apply_event_subtask_part_appears_in_parent_content():
     content 里必须真的有一条 subtask_use——这是 Task 6 渲染唯一的数据来源，
     只在 state['subtasks'] 里记追踪状态而不放进父级 content 就是白做。
     子代理的真实 sessionID 来自配套的 tool:'task' part。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -237,7 +237,7 @@ def test_apply_event_subtask_part_appears_in_parent_content():
 
 
 def test_apply_event_discovers_subtask_with_depth_and_parent():
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -258,7 +258,7 @@ def test_apply_event_discovers_subtask_with_depth_and_parent():
 def test_apply_event_routes_child_events_into_subtask_scope():
     """子代理自己的 sessionID 上的事件，一旦它已被发现，要路由进它自己的
     累加器，而不是被当成"无关会话"丢弃。"""
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -281,7 +281,7 @@ def test_apply_event_routes_child_events_into_subtask_scope():
 
 
 def test_apply_event_subtask_idle_marks_completed():
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -304,7 +304,7 @@ def test_apply_event_parent_stub_reflects_child_status_after_it_finishes():
     占位气泡里的 status 必须跟着变成最新值，而不是停在发现时刻的 'running'。
     这就是"占位存原始 part、状态现查现填"这个设计要解决的问题，用一条测试
     钉死它。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -327,7 +327,7 @@ def test_apply_event_parent_stub_reflects_child_status_after_it_finishes():
 def test_apply_event_subtask_error_marks_failed_immediately():
     """子代理自己的轮次报错时立刻标 failed，不等 idle——透出原因，跟批任务
     那条 _TurnFailed 是同一个道理。"""
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -353,7 +353,7 @@ def test_apply_event_subtask_error_marks_failed_immediately():
 def test_apply_event_nested_subtask_depth_increments():
     """子代理自己委托孙代——depth 从子代理的 depth 累加，不是恒为 1；孙代的
     占位 part 出现在**子代理自己**的 content 里（不是顶层的）。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -389,7 +389,7 @@ def test_apply_event_nested_subtask_depth_increments():
 def test_apply_event_depth_limit_stops_at_five():
     """超过 5 层不再追踪新的子代理——用一条深度已经是 5 的子代理去委托第 6 层，
     第 6 层不应该出现在 state['subtasks'] 里。"""
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -417,7 +417,7 @@ def test_persist_subtasks_writes_assistant_meta_for_perf():
     段」的数据前提——info.time.created/completed → meta.durationMs。"""
     import uuid
     from db import get_db
-    from utils.chat_persist import new_state, apply_event, persist_subtasks
+    from ai.sessions.chat_persist import new_state, apply_event, persist_subtasks
 
     uid = 'u-cp-meta-' + uuid.uuid4().hex[:6]
     sid = 's-cp-meta-' + uuid.uuid4().hex[:6]
@@ -475,7 +475,7 @@ def test_persist_subtasks_writes_rows_and_messages():
     ai_chat_subtasks / ai_chat_subtask_messages，而不是只停留在内存。"""
     import uuid
     from db import get_db
-    from utils.chat_persist import new_state, apply_event, persist_subtasks
+    from ai.sessions.chat_persist import new_state, apply_event, persist_subtasks
 
     uid = 'u-cp-sub-' + uuid.uuid4().hex[:6]
     sid = 's-cp-sub-' + uuid.uuid4().hex[:6]
@@ -544,7 +544,7 @@ def test_persist_subtasks_writes_rows_and_messages():
 def test_apply_event_task_tool_without_subtask_part_discovers_child():
     """自然语言委托：只有 tool:'task' part（没有配套 subtask part）也要能发现
     子会话，agent/description/prompt 从工具输入取。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -570,7 +570,7 @@ def test_apply_event_task_tool_without_subtask_part_discovers_child():
 
 def test_apply_event_reasoning_part_persisted():
     """模型的 reasoning part 要进持久化内容（空文本过滤），否则刷新后思考过程消失。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -593,7 +593,7 @@ def test_apply_event_merges_adjacent_reasoning_parts():
     """OpenCode 有时把一段连续推理拆成很多个短小的 reasoning part（各自独立 id，
     每个只有一两个 token），不是复用同一个 id 增量续写——相邻的应该合并成一条，
     否则前端会渲成一长串「思考完成」气泡。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -612,7 +612,7 @@ def test_apply_event_merges_adjacent_reasoning_parts():
 
 def test_apply_event_reasoning_parts_separated_by_text_stay_separate():
     """中间隔了别的 part 类型才算另一段独立的思考，不跨类型合并。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -635,7 +635,7 @@ def test_apply_event_reasoning_parts_separated_by_text_stay_separate():
 def test_apply_event_subtask_and_tool_part_dedupe_placeholder():
     """/command 路径 subtask part 与 tool:'task' part 并存时，父级内容里只能有
     一个占位，且用 subtask part 的元数据（更准确）。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -679,7 +679,7 @@ def test_persist_subtasks_writes_prompt_user_message():
     """委托 prompt 要作为子代理自己的 user 消息落库，且在 assistant 内容之前。"""
     import uuid
     from db import get_db
-    from utils.chat_persist import new_state, apply_event, persist_subtasks
+    from ai.sessions.chat_persist import new_state, apply_event, persist_subtasks
 
     uid = 'u-cp-pr-' + uuid.uuid4().hex[:6]
     sid = 's-cp-pr-' + uuid.uuid4().hex[:6]
@@ -744,7 +744,7 @@ def test_backfill_recovers_missed_first_message_and_subtask():
     """监听器订阅前就已发出的首条 assistant 消息（含 tool:'task' part）会
     丢失；idle 时的 REST 兜底要能把 reasoning/tool part、子代理发现与子
     会话内容全部补回来。"""
-    from utils.chat_persist import new_state, apply_event, build_content, backfill_from_rest
+    from ai.sessions.chat_persist import new_state, apply_event, build_content, backfill_from_rest
 
     s = new_state()
     # SSE 只赶上了第二条 assistant 消息（真实竞态的典型形态）
@@ -797,7 +797,7 @@ def test_backfill_recovers_missed_first_message_and_subtask():
     sub = s['subtasks']['ses_child_bf']
     assert sub['prompt'] == 'count the lines'
     assert sub['status'] == 'completed'
-    from utils.chat_persist import _flatten_scope, _status_snapshot
+    from ai.sessions.chat_persist import _flatten_scope, _status_snapshot
     child_content = _flatten_scope(sub, _status_snapshot(s))
     assert child_content == [{'type': 'text', 'text': 'child says hi'}]
 
@@ -827,7 +827,7 @@ def _patch_notifier(monkeypatch, chat_persist):
 
 def test_notify_long_turn_creates_notification(monkeypatch):
     """耗时超过阈值的交互会话 idle -> 给所有者发 aiChatTurnDone 通知，跳转回聊天页。"""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     monkeypatch.setattr(chat_persist, 'get_db',
                         _fake_db_session_row(('user-1', '我的会话', None)))
     calls = _patch_notifier(monkeypatch, chat_persist)
@@ -846,7 +846,7 @@ def test_notify_long_turn_creates_notification(monkeypatch):
 
 def test_notify_short_turn_skipped(monkeypatch):
     """耗时低于阈值 -> 不通知（且不查库）。"""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     queried = []
     @contextlib.contextmanager
     def _cm():
@@ -866,7 +866,7 @@ def test_notify_short_turn_skipped(monkeypatch):
 
 def test_notify_batch_child_skipped(monkeypatch):
     """批任务子会话（batch_id 非空）-> 不通知（批任务另有其进度界面）。"""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     monkeypatch.setattr(chat_persist, 'get_db',
                         _fake_db_session_row(('user-1', '子任务', 'batch_xyz')))
     calls = _patch_notifier(monkeypatch, chat_persist)
@@ -876,7 +876,7 @@ def test_notify_batch_child_skipped(monkeypatch):
 
 def test_notify_analysis_session_skipped(monkeypatch):
     """后台轨迹分析会话（标题以「轨迹分析:」开头）-> 不通知。"""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     monkeypatch.setattr(chat_persist, 'get_db',
                         _fake_db_session_row(('user-1', '轨迹分析: sess_xyz', None)))
     calls = _patch_notifier(monkeypatch, chat_persist)
@@ -886,7 +886,7 @@ def test_notify_analysis_session_skipped(monkeypatch):
 
 def test_notify_missing_owner_skipped(monkeypatch):
     """会话无 user_id 或查不到 -> 不通知、不抛错。"""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     monkeypatch.setattr(chat_persist, 'get_db',
                         _fake_db_session_row(None))
     calls = _patch_notifier(monkeypatch, chat_persist)
@@ -897,7 +897,7 @@ def test_notify_missing_owner_skipped(monkeypatch):
 def test_backfill_ignores_messages_before_last_user_message():
     """兜底只回放本轮（最后一条 user 消息之后）的 assistant 消息，避免把
     上一轮内容并进当前轮。"""
-    from utils.chat_persist import new_state, backfill_from_rest, build_content
+    from ai.sessions.chat_persist import new_state, backfill_from_rest, build_content
 
     s = new_state()
     client = _FakeClient({
@@ -921,7 +921,7 @@ def test_backfill_ignores_messages_before_last_user_message():
 
 def test_backfill_noop_when_everything_captured():
     """SSE 全部捕获时兜底不产生重复内容。"""
-    from utils.chat_persist import new_state, apply_event, build_content, backfill_from_rest
+    from ai.sessions.chat_persist import new_state, apply_event, build_content, backfill_from_rest
 
     s = new_state()
     apply_event(s, _ev('message.updated',
@@ -945,7 +945,7 @@ def test_backfill_noop_when_everything_captured():
 
 def test_run_listener_idle_runs_backfill_and_persists_subtasks(monkeypatch):
     """idle 分支：先 REST 兜底，再 persist_turn + persist_subtasks。"""
-    from utils import chat_persist
+    from ai.sessions import chat_persist as chat_persist
     calls = []
     monkeypatch.setattr(chat_persist, 'backfill_from_rest',
                         lambda state, client, oc, directory='': calls.append('backfill') or False)
@@ -967,7 +967,7 @@ def test_apply_event_session_error_marks_turn_error():
     """session.error（回合失败，properties: {sessionID?, error}）要能被接住：
     记进 scope['error'] 并返回 'error' 信号 —— 否则出错回合的内容一个字
     都不落库，监听线程干等到读超时。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
@@ -989,7 +989,7 @@ def test_apply_event_session_error_marks_turn_error():
 def test_apply_event_error_only_turn_yields_error_part():
     """出错的一轮往往没有任何文本 part —— 只有 error part 时也必须持久化
     （persist_turn 对空内容是 no-op，所以 error part 是唯一的留痕）。"""
-    from utils.chat_persist import new_state, apply_event, build_content
+    from ai.sessions.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc',
@@ -1002,7 +1002,7 @@ def test_apply_event_error_only_turn_yields_error_part():
 
 
 def test_apply_event_session_error_without_error_field_ignored():
-    from utils.chat_persist import new_state, apply_event
+    from ai.sessions.chat_persist import new_state, apply_event
     s = new_state()
     assert apply_event(s, _ev('session.error', {'sessionID': 'oc'}), 'oc') is None
 
@@ -1010,7 +1010,7 @@ def test_apply_event_session_error_without_error_field_ignored():
 def test_run_listener_error_signal_persists_and_exits(monkeypatch):
     """session.error 到达时监听器要走 idle 同款的收尾（持久化 + 退出），
     不再做记忆提取/完成通知（那是成功路径的事）。"""
-    import utils.chat_persist as chat_persist
+    from ai.sessions import chat_persist as chat_persist
     calls = []
     monkeypatch.setattr(chat_persist, 'backfill_from_rest',
                         lambda *a, **k: calls.append('backfill') or False)
@@ -1035,7 +1035,7 @@ def test_run_listener_superseded_owner_skips_persist(monkeypatch):
     （否则 clear/delete 删掉的消息会被删前已入队的最后一个事件复活）。
     owner_thread 指向一个未注册的线程 → 每次 persist 都被跳过。"""
     import threading as _th
-    import utils.chat_persist as chat_persist
+    from ai.sessions import chat_persist as chat_persist
     calls = []
     monkeypatch.setattr(chat_persist, 'backfill_from_rest',
                         lambda *a, **k: calls.append('backfill'))
