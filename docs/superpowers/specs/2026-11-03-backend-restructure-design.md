@@ -186,6 +186,14 @@ kefu_event_bus、kefu_sse_ticket、kefu_guardrail、menu_export → 同名移入
 - `utils/__init__.py`（0 行）随 utils/ 目录整体消失。
 - 每个新包（含子包）建空 `__init__.py`。
 
+### 4.12 补遗（2026-11-05 增补）：utils/runtime/ 子目录
+
+批次 6 收口时发现盘点遗漏的 `utils/runtime/` 子目录（4 文件 423 行，Runtime
+Adapter 抽象层，ai-harness-p2 spec §8：`__init__.py`/`base.py`/`opencode_local.py`/
+`stub.py`，5 个生产 + 4 个测试 import）→ 整体迁入 **`ai/runtime/`**，消费方
+（ai/batch/engine/facade、ai/orchestration/engine/runs、ai/sessions/chat_persist、
+routes/ai_chat、相关测试）import 同步改写。总计 117 文件（非正文所称 113）。
+
 ## 5. 巨文件拆分方案
 
 统一模式：**「包 + 聚合导出」**——拆出的子模块收进一个包，包的 `__init__.py`
