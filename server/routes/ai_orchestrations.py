@@ -7,7 +7,8 @@ from flask import Blueprint, g as flask_g, jsonify, request
 
 from auth import login_required, require_permission
 
-from utils import orchestration_defs, orchestration_engine
+from ai.orchestration import orchestration_defs as orchestration_defs
+from ai.orchestration import engine as orchestration_engine
 
 ai_orchestrations_bp = Blueprint('ai_orchestrations', __name__,
                                  url_prefix='/ai/orchestrations')
@@ -137,7 +138,7 @@ def suspend_step(run_id):
         return jsonify({'error': 'step has no child session'}), 409
     from ai.batch.repo import pause_batch
     pause_batch(run['requested_by'], step.get('batch_id'))         if step.get('batch_id') else None
-    from utils import approval_repo
+    from ai.orchestration import approval_repo as approval_repo
     aid = approval_repo.create_approval(
         run_id=run_id, step_id=step_id, risk_level='high',
         effect_summary=f'人工挂起: {step.get("name") or step["node_id"]}')

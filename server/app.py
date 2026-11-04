@@ -788,7 +788,7 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     start_delivery_loop()
 
     # P2：编排调度器（持 scheduler 租约：DAG 推进 + 审批超时）
-    from utils.orchestration_engine import start_scheduler
+    from ai.orchestration.engine import start_scheduler
     start_scheduler()
 
 # F12（ai-harness-p0 spec §9）：审计 retention 任务此前注册了两次（SkillOpt

@@ -8,7 +8,7 @@ from flask import Blueprint, g as flask_g, jsonify, request
 from auth import login_required, require_permission
 from common.operation_log import log_operation
 
-from utils import approval_repo
+from ai.orchestration import approval_repo as approval_repo
 
 ai_approvals_bp = Blueprint('ai_approvals', __name__,
                             url_prefix='/v1/ai-approvals')

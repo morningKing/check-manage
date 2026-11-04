@@ -115,7 +115,7 @@ def inbox():
     # P2 Phase B（ai-harness-p2 spec §3）：AI 审批请求投影到同一收件箱——
     # 既有项统一补 kind='workflow'（前端判别用），AI 审批项 kind='ai_approval'。
     try:
-        from utils import approval_repo
+        from ai.orchestration import approval_repo as approval_repo
         items.extend(approval_repo.get_pending_for_inbox(
             {'username': user.get('username'), 'role': role}, limit=20))
     except Exception:

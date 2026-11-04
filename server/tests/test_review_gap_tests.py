@@ -135,7 +135,8 @@ def test_h4_concurrent_advance_dispatches_once(db_conn, user_id, monkeypatch,
     from unittest.mock import MagicMock
     from ai.batch.engine import BatchWorker
     from ai.batch import engine as eng
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
 
     root = tmp_path
     monkeypatch.setattr('ai.batch.engine.lifecycle._workspace_root', lambda: str(root))
@@ -329,7 +330,8 @@ def test_h4_failed_step_not_redispatched(db_conn, user_id, monkeypatch):
     """base（IN ('blocked','failed')）上必失败、修复后通过：DB 中已 failed
     且无会话的 step 不会被 _launch_agent_step 复位 attempt_count 并新建会话
     （blocked 快照 → 并发转 failed 的竞态通道）。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     d = defs.publish_definition(
         f'h4-narrow-{uuid.uuid4().hex[:6]}', description=None,
         owner_user_id=user_id,
@@ -504,7 +506,7 @@ def test_outbox_loop_retry_thread_takeover(monkeypatch):
 
 
 def test_scheduler_loop_retry_thread_takeover(monkeypatch):
-    from utils import orchestration_engine as eng2
+    from ai.orchestration import engine as eng2
     from ai.batch import execution_lease as execution_lease
     calls = {'acquire': 0}
 
@@ -851,8 +853,8 @@ def test_settle_skips_event_for_deleted_batch(db_conn, user_id, monkeypatch):
 
 def test_single_step_mode_limits_launch(db_conn, user_id):
     """P3 单步调试：single_step 模式下 _advance_run 只派发 1 个 agent step。"""
-    from utils.orchestration_defs import publish_definition
-    from utils import orchestration_engine as oe
+    from ai.orchestration.orchestration_defs import publish_definition
+    from ai.orchestration import engine as oe
     d = publish_definition('sst-linear', description=None,
         nodes=[
             {'id': 's1', 'kind': 'agent', 'name': 'step-1', 'prompt_template': 'p1'},
@@ -873,8 +875,8 @@ def test_single_step_mode_limits_launch(db_conn, user_id):
 
 def test_auto_mode_launches_all(db_conn, user_id):
     """P3 对照：auto 模式下派发全部 runnable step。"""
-    from utils.orchestration_defs import publish_definition
-    from utils import orchestration_engine as oe
+    from ai.orchestration.orchestration_defs import publish_definition
+    from ai.orchestration import engine as oe
     d = publish_definition('auto-linear', description=None,
         nodes=[
             {'id': 'a1', 'kind': 'agent', 'name': 'step-1', 'prompt_template': 'p1'},
@@ -1436,7 +1438,8 @@ def test_step_timeout_marks_failed(db_conn, user_id):
     """P2-A5：running step 超过节点 timeout_sec 后由调度标 failed + 写
     step.timeout 事件，run 不再永久 running。timeout_sec 必须 正整数
     （0/负数/字符串在校验层拒绝）。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     # 校验把关：timeout_sec 必须是正整数
     with pytest.raises(ValueError):
         defs.validate_definition(
@@ -1495,7 +1498,8 @@ def test_step_timeout_marks_failed(db_conn, user_id):
 def test_join_any_success_policy(db_conn, user_id):
     """P2-A6：join_policy='any_success'——菱形 DAG 一侧条件不命中被 skip
     不阻塞 join：a succeeded 后 join 正常通过、run completed。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     d = defs.publish_definition(
         f'gap-joinany-{uuid.uuid4().hex[:6]}', description=None,
         owner_user_id=user_id,
@@ -1544,7 +1548,8 @@ def test_join_any_success_policy(db_conn, user_id):
 def test_join_default_policy_still_skips_on_dead_dep(db_conn, user_id):
     """P2-A6 回归护栏：默认 all_success join 的失败/skip 传播语义不变——
     依赖终态且无一成功 → join skipped（run 不卡死，H6 行为保留）。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     d = defs.publish_definition(
         f'gap-joinall-{uuid.uuid4().hex[:6]}', description=None,
         owner_user_id=user_id,
@@ -1580,7 +1585,7 @@ def test_join_default_policy_still_skips_on_dead_dep(db_conn, user_id):
 def test_publish_version_increments(db_conn, user_id):
     """P2-A3：同 id 重复发布递增 version，旧版本保留可取、缺省取最新；
     未传 id 仍自动生成（既有调用不受影响）。"""
-    from utils import orchestration_defs as defs
+    from ai.orchestration import orchestration_defs as defs
     did = f'gap-ver-{uuid.uuid4().hex[:8]}'
     v1 = defs.publish_definition('gap-ver-def', description=None,
                                  owner_user_id=user_id, def_id=did,
@@ -1609,7 +1614,7 @@ def test_publish_preserves_all_fields(db_conn, user_id):
     """P2-A3：skills/input_refs/runtime/budget/timeout_sec/join_policy
     不再被归一化白名单丢弃（引擎从 step.node_def 读这些字段驱动
     超时/join 语义）。join_policy 枚举校验同时把关。"""
-    from utils import orchestration_defs as defs
+    from ai.orchestration import orchestration_defs as defs
     d = defs.publish_definition(
         f'gap-fields-{uuid.uuid4().hex[:8]}', description=None,
         owner_user_id=user_id,
@@ -1699,7 +1704,7 @@ def test_workspace_ttl_cleanup(db_conn, user_id, tmp_path, monkeypatch):
     """P2-B4：终态子会话 workspace 过 TTL 后被回收（目录删除 + 清列）；
     未过 TTL 的终态会话不动。"""
     import config as cfg
-    import utils.orchestration_engine as orch
+    from ai.orchestration import engine as orch
     monkeypatch.setattr(cfg, 'AI_SESSION_TTL_HOURS', 1)  # TTL=1h
 
     ws_stale = tmp_path / 'ws-stale'
@@ -2252,7 +2257,8 @@ def test_step_timeout_aborts_child_session(db_conn, user_id, monkeypatch):
     按子会话 opencode_session_id best-effort abort（此前子会话滞留 running
     直到对账器接管），step.timeout 事件 payload 补 sessionId。"""
     from unittest.mock import MagicMock
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     d = defs.publish_definition(
         f'gap-tabort-{uuid.uuid4().hex[:6]}', description=None,
         owner_user_id=user_id,
@@ -2619,8 +2625,8 @@ def test_compensate_effect_skips_unknown_and_bad_ref(db_conn, user_id):
 def test_orchestration_step_action_checks(db_conn, user_id):
     """P3 门禁支持编排：定义节点声明 action_checks → 子会话创建时期望登记
     → 终态核对生效。"""
-    from utils.orchestration_defs import publish_definition
-    from utils import orchestration_engine as oe
+    from ai.orchestration.orchestration_defs import publish_definition
+    from ai.orchestration import engine as oe
     from ai.batch.ledger import check_session_gate
 
     d = publish_definition('gate-test', description=None,

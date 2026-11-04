@@ -535,7 +535,7 @@ class WorkerRunnerMixin:
             # P2：编排子会话终态 → 通知编排引擎推进 DAG（best-effort）。
             if session_row.get('orchestration_run_id'):
                 try:
-                    from utils import orchestration_engine
+                    from ai.orchestration import engine as orchestration_engine
                     orchestration_engine.on_child_terminal(
                         session_row['orchestration_run_id'],
                         session_row.get('orchestration_step_id') or sid, sid)

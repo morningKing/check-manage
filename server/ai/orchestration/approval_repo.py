@@ -87,7 +87,7 @@ def decide(approval_id: str, decision: str, decided_by: str, *,
             r = cur.fetchone()
             step_kind = r[0] if r else None
         conn.commit()
-    from utils import orchestration_engine
+    from ai.orchestration import engine as orchestration_engine
     from ai.batch import batch_events as batch_events
     if decision == 'approved' and step_kind == 'agent':
         # 策略拦截放行：step 回 blocked，下轮 advance 正常派发
@@ -178,7 +178,7 @@ def expire_overdue() -> int:
                          'escalation': 'treated_as_reject'})
         except Exception:
             pass  # 升级事件 best-effort，不影响超时裁决本身
-        from utils import orchestration_engine
+        from ai.orchestration import engine as orchestration_engine
         orchestration_engine._advance_run(run_id)
     return len(rows)
 

@@ -10,8 +10,8 @@ import json
 from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required
-from utils import orchestration_defs
-from utils import orchestration_engine
+from ai.orchestration import orchestration_defs as orchestration_defs
+from ai.orchestration import engine as orchestration_engine
 from common.api_errors import NOT_FOUND, err, register_error_handlers
 from common.operation_log import log_api_operation
 

@@ -128,6 +128,10 @@ MAPPING = {
     'batch_repo': 'ai.batch.repo',
     'agent_ledger': 'ai.batch.ledger',
     'perf_analysis': 'ai.batch.perf',
+    # ---- batch 5a: ai/orchestration/ ----
+    'orchestration_defs': 'ai.orchestration.orchestration_defs',
+    'approval_repo': 'ai.orchestration.approval_repo',
+    'orchestration_engine': 'ai.orchestration.engine',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

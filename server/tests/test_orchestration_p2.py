@@ -118,7 +118,7 @@ def _clear_other_pending(db_conn, keep_run_id=None):
 # ---------------------------------------------------------------------------
 
 def test_definition_validation_rejects_bad_graphs():
-    from utils import orchestration_defs as defs
+    from ai.orchestration import orchestration_defs as defs
     with pytest.raises(ValueError):  # 环
         defs.validate_definition(
             [{'id': 'a', 'kind': 'agent', 'prompt_template': 'x'},
@@ -146,7 +146,7 @@ def test_definition_validation_rejects_bad_graphs():
 
 
 def test_publish_and_get_latest(db_conn, user_id):
-    from utils import orchestration_defs as defs
+    from ai.orchestration import orchestration_defs as defs
     out = defs.publish_definition(
         f'p2-def-{uuid.uuid4().hex[:6]}', description=None,
         nodes=[{'id': 'solo', 'kind': 'agent', 'prompt_template': '做 {{input.task}}'}],
@@ -163,7 +163,8 @@ def test_publish_and_get_latest(db_conn, user_id):
 # ---------------------------------------------------------------------------
 
 def test_linear_dag_end_to_end(db_conn, user_id, monkeypatch, tmp_path):
-    from utils import orchestration_defs as defs, orchestration_engine as eng
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng
     from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     from ai.batch import engine as batch_engine_mod
@@ -230,14 +231,14 @@ def test_linear_dag_end_to_end(db_conn, user_id, monkeypatch, tmp_path):
 def _seed_def(db_conn, name, nodes, edges, user_id):
     """edges 直接进 publish_definition 走同一套校验（绕过校验的改库写法
     会让 join 语义等约束形同虚设）。"""
-    from utils import orchestration_defs as defs
+    from ai.orchestration import orchestration_defs as defs
     d = defs.publish_definition(name, description=None, nodes=nodes,
                                 edges=edges, owner_user_id=user_id)
     return d['id']
 
 
 def test_conditional_branch(db_conn, user_id):
-    from utils import orchestration_engine as eng
+    from ai.orchestration import engine as eng
     did = _seed_def(
         db_conn, f'p2-cond-{uuid.uuid4().hex[:6]}',
         nodes=[
@@ -266,7 +267,7 @@ def test_conditional_branch(db_conn, user_id):
 
 
 def test_parallel_fanout_join(db_conn, user_id):
-    from utils import orchestration_engine as eng
+    from ai.orchestration import engine as eng
     did = _seed_def(
         db_conn, f'p2-join-{uuid.uuid4().hex[:6]}',
         nodes=[
@@ -325,7 +326,8 @@ def _approval_def(db_conn, user_id):
 
 
 def test_approval_flow_approve(db_conn, user_id):
-    from utils import orchestration_engine as eng, approval_repo
+    from ai.orchestration import engine as eng
+    from ai.orchestration import approval_repo as approval_repo
     did = _approval_def(db_conn, user_id)
     run = eng.create_run(did, user_id)
     with db_conn.cursor() as cur:
@@ -360,7 +362,8 @@ def test_approval_flow_approve(db_conn, user_id):
 
 
 def test_approval_reject_fails_run(db_conn, user_id):
-    from utils import orchestration_engine as eng, approval_repo
+    from ai.orchestration import engine as eng
+    from ai.orchestration import approval_repo as approval_repo
     did = _approval_def(db_conn, user_id)
     run = eng.create_run(did, user_id)
     with db_conn.cursor() as cur:
@@ -386,8 +389,9 @@ def test_policy_interception_blocks_then_releases(db_conn, user_id,
     """缺口补齐（P2 §7.1 策略拦截最小集）：节点声明 approval_policy 的
     agent step 派发前进入 waiting_approval + 建审批请求；approve 后回
     blocked 重新派发（不直接 succeeded）。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
-    from utils import approval_repo
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
+    from ai.orchestration import approval_repo as approval_repo
     from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     d = defs.publish_definition(
@@ -458,7 +462,8 @@ def test_policy_interception_blocks_then_releases(db_conn, user_id,
 
 
 def test_approval_timeout_expires(db_conn, user_id):
-    from utils import orchestration_engine as eng, approval_repo
+    from ai.orchestration import engine as eng
+    from ai.orchestration import approval_repo as approval_repo
     did = _approval_def(db_conn, user_id)
     run = eng.create_run(did, user_id)
     with db_conn.cursor() as cur:
@@ -545,7 +550,7 @@ def test_opencode_local_wraps_client(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _mk_contract_def(user_id, contract, tag):
-    from utils import orchestration_defs as defs
+    from ai.orchestration import orchestration_defs as defs
     return defs.publish_definition(
         f'contract-{tag}-{uuid.uuid4().hex[:6]}', description=None,
         owner_user_id=user_id,
@@ -557,7 +562,8 @@ def _mk_contract_def(user_id, contract, tag):
 def test_output_contract_db_record(db_conn, user_id, monkeypatch):
     """contract type=db_record：dynamic_data 命中 ≥ min_count → 通过（确定性，
     不依赖模型行为）；经 batch_engine 的编排子会话全链路核对。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     collection = f'contract-db-{uuid.uuid4().hex[:6]}'
@@ -607,7 +613,8 @@ def test_output_contract_db_record(db_conn, user_id, monkeypatch):
 
 def test_output_contract_db_record_insufficient_fails(db_conn, user_id, monkeypatch):
     """db_record 命中 0/1 → contract 不过 → step failed（而非静默 succeeded）。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     collection = f'contract-db0-{uuid.uuid4().hex[:6]}'
@@ -649,7 +656,8 @@ def test_output_contract_db_record_insufficient_fails(db_conn, user_id, monkeypa
 
 def test_output_contract_json_schema_rejects_invalid(db_conn, user_id, monkeypatch):
     """contract type=json_schema：最终输出非合法 JSON / 不过 schema → failed。"""
-    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from ai.orchestration import orchestration_defs as defs
+    from ai.orchestration import engine as eng2
     from ai.batch.engine import BatchWorker
     from unittest.mock import MagicMock
     schema = {'type': 'object', 'required': ['total']}
