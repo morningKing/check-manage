@@ -147,6 +147,9 @@ def test_stall_verdict_aborts_opencode_turn(monkeypatch):
         monkeypatch, lambda: [frozen],
         list_questions=lambda: [], list_permissions=lambda: [])
     worker.STALL_TIMEOUT_SEC = 0.15
+    # content=[] 是思考盲区形态（走 THINKING 阈值），测试意图是判死后的
+    # abort 行为链路——两层阈值一起压小，快速走到判死。
+    worker.THINKING_STALL_TIMEOUT_SEC = 0.15
     aborted = []
     monkeypatch.setattr(eng.opencode_client, 'abort_session',
                         staticmethod(lambda oc, directory='': aborted.append(oc)),
@@ -185,6 +188,7 @@ def test_run_one_stall_failed_appends_event_and_error_tail(
         list_questions=lambda: [{'id': 'q1', 'sessionID': 'oc-diag'}],
         list_permissions=lambda: [])
     worker.STALL_TIMEOUT_SEC = 0.15
+    worker.THINKING_STALL_TIMEOUT_SEC = 0.15   # 盲区形态两层阈值一起压小
     monkeypatch.setattr(eng, '_prepare_workspace',
                         lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:
@@ -227,6 +231,7 @@ def test_run_one_stall_auto_retry_appends_event_without_error_tail(
         monkeypatch, lambda: [frozen],
         list_questions=lambda: [], list_permissions=lambda: [])
     worker.STALL_TIMEOUT_SEC = 0.15
+    worker.THINKING_STALL_TIMEOUT_SEC = 0.15   # 盲区形态两层阈值一起压小
     monkeypatch.setattr(eng, '_prepare_workspace',
                         lambda *a, **kw: str(tmp_path))
     with db_conn.cursor() as cur:

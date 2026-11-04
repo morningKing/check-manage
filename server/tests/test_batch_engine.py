@@ -1193,13 +1193,18 @@ def test_await_finished_no_stall_while_tool_running(monkeypatch):
 
 
 def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
-    """A genuinely frozen turn (no text, no tool in flight) still trips the stall."""
+    """A genuinely frozen turn (no text, no tool in flight) still trips the stall.
+
+    纯冻结（REST 看不到任何 part）与「思考盲区」在轮询视角不可区分，走的是
+    更长的 THINKING_STALL_TIMEOUT_SEC 阈值——这里把它设为仅略大于 STALL，
+    验证彻底冻结最终仍会被判死（语义保留，只是阈值分层）。"""
     import utils.batch_engine as eng
     from unittest.mock import MagicMock
     from utils.batch_engine import _SessionTimeout
     import pytest as _pytest
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.6
     w.POLL_INTERVAL_SEC = 0.02
     w.SESSION_TIMEOUT_SEC = 5
     idle = {'role': 'assistant', 'finished': False, 'finish': None,
@@ -1211,6 +1216,177 @@ def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
         w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'stalled (no progress)'
     assert '没有任何新进展' in str(ei.value)
+
+
+def test_await_finished_pardons_pure_thinking_freeze(monkeypatch):
+    """思考盲区赦免（2026-11-04 生产误报）：OpenCode 对 reasoning 不做流式
+    落盘（实测 11429 字符思考 67.9s 期间 REST 零增量），单次思考超过
+    STALL_TIMEOUT_SEC 的活回合会被误判 stalled 并 abort。纯思考形态（无任何
+    落盘 part、无 finish）的冻结必须走 THINKING_STALL_TIMEOUT_SEC 而不是
+    STALL_TIMEOUT_SEC——思考 1.6s（> STALL 0.5s、< THINKING 3s）后落盘完成，
+    应判完成而不是误杀。"""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.5
+    w.THINKING_STALL_TIMEOUT_SEC = 3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    thinking = {'role': 'assistant', 'finished': False, 'finish': None,
+                'running_tool': False, 'content': []}   # 思考中：REST 全空
+    landed = {'role': 'assistant', 'finished': True, 'finish': 'stop',
+              'running_tool': False,
+              'content': [{'type': 'reasoning', 'text': 'x' * 200},
+                          {'type': 'text', 'text': 'done'}]}
+    seq = [[thinking]] * 80 + [[landed]]   # ~1.6s 盲区冻结 > STALL 0.5s
+    calls = {'i': 0}
+    fake = MagicMock()
+    def lm(oc, directory=''):
+        i = min(calls['i'], len(seq) - 1)
+        calls['i'] += 1
+        return seq[i]
+    fake.list_messages.side_effect = lm
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    preview, msg = w._await_finished('oc', 'sid-test')
+    assert msg['finished'] is True          # completed, NOT stalled
+
+
+def test_await_finished_stalls_blindspot_at_thinking_threshold(monkeypatch):
+    """思考盲区也有上限：纯冻结超过 THINKING_STALL_TIMEOUT_SEC 仍判死（provider
+    真死与思考盲区不可区分，只能拉长不能免除），且诊断快照带 emptyParts=True
+    供事后归因「思考盲区误杀 vs 真死」。"""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    from utils.batch_engine import _SessionTimeout
+    import pytest as _pytest
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.8
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    idle = {'role': 'assistant', 'finished': False, 'finish': None,
+            'running_tool': False, 'content': []}
+    fake = MagicMock()
+    fake.list_messages.return_value = [idle]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc', 'sid-test')
+    assert ei.value.reason == 'stalled (no progress)'
+    assert ei.value.seconds >= 0.8 or int(ei.value.seconds) == 0
+    assert ei.value.diagnosis.get('emptyParts') is True
+
+
+def test_await_finished_text_freeze_uses_plain_stall(monkeypatch):
+    """分流保护：已有非空 text part 且 step 不在进行中的冻结（真实卡死形态）
+    仍按 STALL_TIMEOUT_SEC 判死，不被思考盲区阈值拖长。"""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    from utils.batch_engine import _SessionTimeout
+    import pytest as _pytest
+    import time as _time
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.4
+    w.THINKING_STALL_TIMEOUT_SEC = 30
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    frozen = {'role': 'assistant', 'finished': False, 'finish': None,
+              'running_tool': False,
+              'content': [{'type': 'text', 'text': 'partial output'}]}
+    fake = MagicMock()
+    fake.list_messages.return_value = [frozen]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    t0 = _time.monotonic()
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc', 'sid-test')
+    elapsed = _time.monotonic() - t0
+    assert ei.value.reason == 'stalled (no progress)'
+    assert elapsed < 5      # 远小于 THINKING 30s——用的是 STALL 阈值
+    assert ei.value.diagnosis.get('emptyParts') is False
+
+
+def test_await_finished_step_active_pardons_midstep_thinking(monkeypatch):
+    """step 进行中（step-start 已落盘、step-finish 未落）：消息里已有旧 step 的
+    text part，但当前 step 的思考在盲区里——step_active 信号（新版 OC 落盘
+    step-start/step-finish 标记）必须让这种冻结也走 THINKING 阈值。"""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.5
+    w.THINKING_STALL_TIMEOUT_SEC = 3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    midstep = {'role': 'assistant', 'finished': False, 'finish': None,
+               'running_tool': False, 'step_active': True,
+               'content': [{'type': 'text', 'text': 'step1 said something'},
+                           {'type': 'tool_use', 'name': 'read', 'status': 'completed',
+                            'output_len': 10}]}
+    done = {'role': 'assistant', 'finished': True, 'finish': 'stop',
+            'running_tool': False, 'step_active': False,
+            'content': [{'type': 'text', 'text': 'done'}]}
+    seq = [[midstep]] * 80 + [[done]]   # ~1.6s 冻结 > STALL 0.5s
+    calls = {'i': 0}
+    fake = MagicMock()
+    def lm(oc, directory=''):
+        i = min(calls['i'], len(seq) - 1)
+        calls['i'] += 1
+        return seq[i]
+    fake.list_messages.side_effect = lm
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    preview, msg = w._await_finished('oc', 'sid-test')
+    assert msg['finished'] is True
+
+
+def test_list_messages_counts_open_steps(monkeypatch):
+    """facade 必须透出 step_active：OpenCode 在 step 开始瞬间落盘 step-start
+    part（实测与 reasoning 同毫秒创建、而 reasoning 文本在思考结束时才可见），
+    「未配对的 step-start」是 step 进行中的唯一 REST 可见信号。"""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    client = MagicMock()
+
+    def raw(parts):
+        return [{'info': {'id': 'm1', 'role': 'assistant', 'time': {}},
+                 'parts': parts}]
+
+    # step 开始：step-start 落盘、step-finish 没有 → step_active=True
+    client.get_messages.return_value = raw([
+        {'type': 'step-start'},
+        {'type': 'reasoning', 'text': ''},       # 思考中文本尚未可见
+    ])
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0]['step_active'] is True
+
+    # step 结束：step-finish 落盘 → step_active=False
+    client.get_messages.return_value = raw([
+        {'type': 'step-start'},
+        {'type': 'reasoning', 'text': 'thought through'},
+        {'type': 'text', 'text': 'answer'},
+        {'type': 'step-finish'},
+    ])
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0]['step_active'] is False
+
+    # 旧版 OpenCode：没有 step 标记 → step_active=False（回退 content 判定）
+    client.get_messages.return_value = raw([
+        {'type': 'reasoning', 'text': 'old behavior'},
+    ])
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0]['step_active'] is False
+
+
+def test_progress_signature_counts_step_markers():
+    """step-start 落盘 / step-finish 落盘都必须算进展（重置冻结计时）——
+    思考多回合（思考→工具→再思考）时每个 step 边界都刷新看门狗时钟。"""
+    from utils.batch_engine import BatchWorker
+    sig = BatchWorker._progress_signature
+    idle = [{'role': 'assistant', 'content': [], 'step_active': False}]
+    started = [{'role': 'assistant', 'content': [], 'step_active': True}]
+    finished_step = [{'role': 'assistant',
+                      'content': [{'type': 'text', 'text': 'hi'}],
+                      'step_active': False}]
+    assert sig(idle) != sig(started)           # step-start 落盘 = 进展
+    assert sig(started) != sig(finished_step)  # step-finish 落盘 = 进展
 
 
 def test_dispatch_tick_survives_claim_error():
