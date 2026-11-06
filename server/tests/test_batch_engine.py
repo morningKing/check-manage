@@ -509,6 +509,44 @@ def test_run_one_happy_path_marks_completed(user_id, db_conn, monkeypatch, tmp_p
 # Test 2b: mem0 injection into the prompt + extraction after completion
 # ---------------------------------------------------------------------------
 
+def test_run_one_boot_timing_log_segments(user_id, db_conn, monkeypatch, tmp_path,
+                                          caplog):
+    """启动耗时观测（batch boot 系列）：claim 打排队时长，_run_one 逐段计时
+    （ctx/prompt_build/prepare_workspace/…/user_persist/send），send 后打
+    summary 汇总——「批创建→系统提示词上屏」的每一步耗时可从日志直接对齐
+    （生产慢启动取证入口：grep "batch boot" ai_chat.log）。"""
+    import logging
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    fake_oc = MagicMock()
+    fake_oc.create_session.return_value = 'oc-boot-1'
+    fake_oc.send_message.return_value = {'id': 'msg-1'}
+    fake_oc.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'done!'}]}]
+    fake_oc.get_messages.return_value = []
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+
+    with caplog.at_level(logging.INFO, logger='utils.batch_engine'):
+        w = BatchWorker()
+        claimed = w._claim_pending_sessions(limit=1)
+        w._run_one(claimed[0])
+    lines = [r.message for r in caplog.records
+             if 'batch boot' in (r.message or '')]
+    joined = '\n'.join(lines)
+    assert 'step=queue waited=' in joined          # claim：排队时长
+    for step in ('step=ctx', 'step=prompt_build', 'step=prepare_workspace',
+                 'step=skills', 'step=agent_check', 'step=create_session',
+                 'step=audit', 'step=user_persist', 'step=send'):
+        assert step in joined, f'missing boot segment log: {step}'
+    assert 'summary total=' in joined               # 汇总行
+    assert 'prepare_workspace=' in joined           # 分解字段
+    assert 'oc=oc-boot-1' in joined
+
+
 def test_run_one_injects_and_records_memory(user_id, db_conn, monkeypatch, tmp_path):
     """记忆注入：发给 OpenCode 的 prompt 应包含 render_memory_block 的输出；
     记忆抽取：成功完成后应异步调用 add_memory(user_id, [user, assistant])，

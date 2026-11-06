@@ -1318,6 +1318,22 @@ class BatchWorker:
                      'ttl': str(execution_lease_ttl())},
                 )
                 rows = [dict(r) for r in cur.fetchall()]
+                # 启动耗时观测（batch boot 系列）：claim 时刻 - 会话创建时刻
+                # = 排队时长（并发槽满/预算封锁时子会话静默 pending，这是
+                # 「批创建后页面长时间无动静」的第一嫌疑，先把它显形）。
+                for r in rows:
+                    _created = r.get('created_at')
+                    if _created is not None:
+                        try:
+                            from datetime import datetime, timezone
+                            _waited = (datetime.now(timezone.utc)
+                                       - _created).total_seconds()
+                            logger.info(
+                                'batch boot sid=%s step=queue waited=%ds '
+                                'seq=%s batch=%s', r['id'], int(_waited),
+                                r.get('batch_seq'), r.get('batch_id'))
+                        except Exception:
+                            pass
                 # P0 ownership（spec §4.1/§5.1）：claim 即开 turn——先关掉该
                 # 会话残留的 active turn（崩溃遗留），再插入本轮 turn 并绑到
                 # active_turn_id。部分唯一索引 uniq_ai_chat_turns_active 保证
@@ -1454,6 +1470,19 @@ class BatchWorker:
         fencing_token = session_row.get('fencing_token')
         turn_id = session_row.get('turn_id')
         turn_start = time.monotonic()  # 用于子任务完成通知的耗时
+        # 启动耗时观测（batch boot 系列）：逐段计时直到 prompt 发出——
+        # 「批创建→系统提示词上屏」的每一步耗时可直接从 ai_chat.log 对齐。
+        # _mark(名称) 打本段耗时；send 后的 summary 汇总（>5s 升 WARN）。
+        _boot_steps: list = []
+        _boot_last = time.monotonic()
+
+        def _boot_mark(name: str):
+            nonlocal _boot_last
+            _now = time.monotonic()
+            _ms = int((_now - _boot_last) * 1000)
+            _boot_last = _now
+            _boot_steps.append((name, _ms))
+            logger.info('batch boot sid=%s step=%s ms=%d', sid, name, _ms)
         # standalone 会话（无批任务）不登记期望；统一初始化供门禁判定读取。
         gate_reg = {'applicable': 0, 'registered': 0, 'error': None}
         if batch_id is None:
@@ -1496,6 +1525,7 @@ class BatchWorker:
             # P0 门禁 fail-closed：登记结果（生效条数/登记条数/异常）留到
             # 终态核对时判定——登记不可证实的子任务不得 completed。
             gate_reg = self._register_action_expectations(sid, batch_id, session_row)
+        _boot_mark('ctx')
 
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
@@ -1536,6 +1566,7 @@ class BatchWorker:
                 prompt = reuse_directive + prompt
 
         ws = None
+        _boot_mark('prompt_build')
         try:
             if is_continue:
                 # Reuse existing workspace — don't re-prepare
@@ -1561,11 +1592,13 @@ class BatchWorker:
                 # 工作区路径先落库（agent 校验 fail-fast 等会话前失败也能被
                 # retry-failed 的工作区清空覆盖）
                 self._set_workspace_path(sid, ws)
+                _boot_mark('prepare_workspace')
                 # Provision project-level agents/skills BEFORE the session starts —
                 # OpenCode binds the agent at prompt time, so the repo must be in
                 # .opencode/ first. Degrades gracefully: a clone failure doesn't fail
                 # the child (global agents/skills still work); we just post a notice.
                 prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
+                _boot_mark('provision')
                 if prov_warn:
                     self._persist_provision_notice(sid, prov_warn)
                 # Inject global skills (symlink/copy from central storage).
@@ -1580,10 +1613,12 @@ class BatchWorker:
                             header=None)
                 except Exception:
                     pass  # best-effort: don't fail the child
+                _boot_mark('skills')
                 # Fail FAST on an unusable agent. OpenCode silently produces nothing
                 # for an unknown / subagent-as-primary agent, which would otherwise
                 # hang until STALL_TIMEOUT (the "批任务一直待运行 with custom agent" bug).
                 agent_err = self._check_agent(agent, ws)
+                _boot_mark('agent_check')
                 if agent_err:
                     self._mark_failed(sid, batch_id, error=agent_err,
                                       generation=generation,
@@ -1595,6 +1630,7 @@ class BatchWorker:
                     return
                 oc_session_id = opencode_client.create_session(directory=ws)
                 self._set_opencode_id(sid, oc_session_id, ws)
+                _boot_mark('create_session')
 
             # Execution audit (execution-audit Spec §9.3): one attempt per
             # child run, covering retry/continue/reexecute — the batch/session
@@ -1639,10 +1675,12 @@ class BatchWorker:
                 # attempt 关联进本轮 turn（审计用，非锁）
                 if turn_id:
                     execution_audit.attach_attempt_to_turn(turn_id, audit_attempt_id)
+            _boot_mark('audit')
 
             # Persist the prompt up front so opening this child mid-run shows the
             # question immediately.
             self._persist_user_prompt(sid, prompt, generation=generation)
+            _boot_mark('user_persist')   # ← 此刻系统提示词已可在页面上看到
             # continue 模式先拍基线：旧 assistant 消息（上一轮完成/中断的）在
             # 新回合产生首条消息之前仍是"最新一条"，不跳过的话 _await_finished
             # 第一轮轮询就会拿旧消息的终态/错误立刻判定本轮完成或失败。
@@ -1651,6 +1689,7 @@ class BatchWorker:
             try:
                 opencode_client.send_message(oc_session_id, prompt, directory=ws,
                                              agent=agent, model=model)
+                _boot_mark('send')
                 if audit_attempt_id:
                     execution_audit.record_event(
                         audit_attempt_id, 'dispatch.ok', session_id=sid,
@@ -1680,6 +1719,17 @@ class BatchWorker:
                                                       model, generation=generation)
                 baseline_ids = None  # 全新 session，没有旧消息需要跳过
                 logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
+            # 启动链路汇总（batch boot 系列）：claim 后到 prompt 发出的总耗时
+            # 与逐段分解。>5s 升 WARN——正常链路亚秒级（dev 实测 0.85s），
+            # 慢启动一眼定位到段。
+            _boot_total_ms = int((time.monotonic() - turn_start) * 1000)
+            _boot_parts = ' '.join(f'{_n}={_ms}ms' for _n, _ms in _boot_steps)
+            _boot_line = (f'batch boot sid={sid} summary total={_boot_total_ms}ms '
+                          f'oc={oc_session_id} {_boot_parts}')
+            if _boot_total_ms > 5000:
+                logger.warning(_boot_line + ' (slow)')
+            else:
+                logger.info(_boot_line)
             # F3：dispatch 期间执行权若已易主（心跳置位），这里静默放手——
             # 提示词可能已被新 owner 接管重发，不再做任何落账/写回。
             if lease_lost is not None and lease_lost.is_set():
