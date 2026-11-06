@@ -108,6 +108,9 @@ def _stall_worker(monkeypatch, fake_extra=None):
     worker = eng.BatchWorker()
     worker.SESSION_TIMEOUT_SEC = 0     # 无硬上限，纯靠 STALL 触发
     worker.STALL_TIMEOUT_SEC = 0.15
+    # _idle_msg 的 content=[] 是思考盲区形态（走 THINKING 阈值）；这些用例
+    # 测的是判死后的重试链路，两层阈值一起压小，快速走到判死。
+    worker.THINKING_STALL_TIMEOUT_SEC = 0.15
     worker.POLL_INTERVAL_SEC = 0.02
     worker.QUESTION_CHECK_INTERVAL = 999
     return worker

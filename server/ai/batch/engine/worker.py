@@ -51,6 +51,14 @@ class WorkerLifecycleMixin:
     # _progress_signature / the active_tool reset in _await_finished), so a
     # working turn never trips this; only a genuinely dead one does.
     STALL_TIMEOUT_SEC = 180
+    # 思考盲区阈值（2026-11-04 生产误报）：OpenCode 对 reasoning 不做流式
+    # 落盘——实测 11429 字符的思考 part 存活 67.9s 期间 REST 全接口零增量
+    # （part/message/session 的 updated 全部冻结在思考结束时刻）。单次思考
+    # 超过 STALL_TIMEOUT_SEC 的活回合会被误判 stalled 并 abort。判定为
+    # 「思考盲区」（step 进行中，或最后一条消息无任何实质 part 且未终结，
+    # 见 _thinking_blindspot）的冻结改用本阈值——盲区与 provider 真死在
+    # 轮询视角不可区分，只能拉长不能免除。0 = 禁用分层（一律 STALL 阈值）。
+    THINKING_STALL_TIMEOUT_SEC = int(os.getenv('AI_BATCH_THINKING_STALL_SEC', '600'))
     # Tool-stuck watchdog: a tool call whose (name, status, output) signature
     # stays frozen this long is hung — question 挂起、MCP 服务无响应、bash 死循环
     # 都会被它接住（running tool 会让上面的 STALL 永远不触发，没有这道闸一个
@@ -58,6 +66,10 @@ class WorkerLifecycleMixin:
     # 此限：只要子代理自己的消息还在推进，看门狗就一直顺延 —— 见
     # _subagent_progressing。0 = 关闭（不建议）。
     TOOL_STALL_TIMEOUT_SEC = int(os.getenv('AI_BATCH_TOOL_STALL_SEC', '900'))
+    # 子代理作保探针（_children_progressing）的连续失败预算：读子代理消息
+    # 连续失败超过这个次数就不再作保（顺延会退化成永活，看门狗失效）；
+    # 瞬时抖动（≤ 此值）仍按「查不到 ≠ 死了」豁免。
+    CHILD_PROBE_ERROR_BUDGET = 3
     # 自动重试预算（批任务无人值守的"失败不终局"）：可重试类失败（停滞/
     # 工具卡死/网络异常）把子任务重新排队，预算用尽才落 failed。0 = 关闭。
     MAX_AUTO_RETRY = int(os.getenv('AI_BATCH_MAX_AUTO_RETRY', '2'))
@@ -525,6 +537,22 @@ class WorkerLifecycleMixin:
                      'ttl': str(execution_lease_ttl())},
                 )
                 rows = [dict(r) for r in cur.fetchall()]
+                # 启动耗时观测（batch boot 系列）：claim 时刻 - 会话创建时刻
+                # = 排队时长（并发槽满/预算封锁时子会话静默 pending，这是
+                # 「批创建后页面长时间无动静」的第一嫌疑，先把它显形）。
+                for r in rows:
+                    _created = r.get('created_at')
+                    if _created is not None:
+                        try:
+                            from datetime import datetime, timezone
+                            _waited = (datetime.now(timezone.utc)
+                                       - _created).total_seconds()
+                            logger.info(
+                                'batch boot sid=%s step=queue waited=%ds '
+                                'seq=%s batch=%s', r['id'], int(_waited),
+                                r.get('batch_seq'), r.get('batch_id'))
+                        except Exception:
+                            pass
                 # P0 ownership（spec §4.1/§5.1）：claim 即开 turn——先关掉该
                 # 会话残留的 active turn（崩溃遗留），再插入本轮 turn 并绑到
                 # active_turn_id。部分唯一索引 uniq_ai_chat_turns_active 保证
@@ -633,7 +661,8 @@ class WorkerLifecycleMixin:
         以及一切白名单之外的未知失败（保守不重试）。
         """
         if isinstance(exc, _SessionTimeout):
-            return exc.reason in ('stalled (no progress)', 'tool stuck')
+            return exc.reason in ('stalled (no progress)', 'tool stuck',
+                                  'poll unreachable')
         if isinstance(exc, _TurnFailed):
             return exc.name in BatchWorker.RETRYABLE_TURN_FAILED
         if isinstance(exc, requests.exceptions.RequestException):
@@ -1107,6 +1136,14 @@ class BatchWorker(WorkerLifecycleMixin, WorkerRunnerMixin, WorkerGatesMixin,
     """组合类（预检裁定）：WorkerLifecycleMixin 为本体（__init__/start/stop/
     租约监管/监听/派发），单会话执行与完成保证、动作门禁、子任务持久化、
     终态转移由其余四个 mixin 组成——方法集与拆分前 BatchWorker 一致。"""
+
+
+# 包内交叉引用（_thinking_blindspot 调用期解析 BatchWorker）：runner.py 由本
+# 模块顶部导入（WorkerRunnerMixin），其导入期不能反向导入本模块（会撞半
+# 初始化）；调用期本模块必已加载完成，故这里把组合类回填进 runner 命名
+# 空间——镜像 facade.py 尾部导入的既有形态。
+from . import runner as _runner_mod  # noqa: E402
+_runner_mod.BatchWorker = BatchWorker
 
 
 __all__ = [

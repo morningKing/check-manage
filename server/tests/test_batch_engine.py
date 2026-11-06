@@ -515,6 +515,48 @@ def test_run_one_happy_path_marks_completed(user_id, db_conn, monkeypatch, tmp_p
 # Test 2b: mem0 injection into the prompt + extraction after completion
 # ---------------------------------------------------------------------------
 
+def test_run_one_boot_timing_log_segments(user_id, db_conn, monkeypatch, tmp_path,
+                                          caplog):
+    """启动耗时观测（batch boot 系列）：claim 打排队时长，_run_one 逐段计时
+    （ctx/prompt_build/prepare_workspace/…/user_persist/send），send 后打
+    summary 汇总——「批创建→系统提示词上屏」的每一步耗时可从日志直接对齐
+    （生产慢启动取证入口：grep "batch boot" ai_chat.log）。"""
+    import logging
+    from ai.batch.engine import BatchWorker
+    from ai.batch import engine as eng
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    fake_oc = MagicMock()
+    fake_oc.create_session.return_value = 'oc-boot-1'
+    fake_oc.send_message.return_value = {'id': 'msg-1'}
+    fake_oc.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'done!'}]}]
+    fake_oc.get_messages.return_value = []
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client',
+                        eng.runner.opencode_client)
+    monkeypatch.setattr('ai.batch.engine.runner._prepare_workspace',
+                        lambda *a, **kw: str(tmp_path))
+
+    with caplog.at_level(logging.INFO, logger='ai.batch.engine.worker'), \
+            caplog.at_level(logging.INFO, logger='ai.batch.engine.runner'):
+        w = BatchWorker()
+        claimed = w._claim_pending_sessions(limit=1)
+        w._run_one(claimed[0])
+    lines = [r.message for r in caplog.records
+             if 'batch boot' in (r.message or '')]
+    joined = '\n'.join(lines)
+    assert 'step=queue waited=' in joined          # claim：排队时长
+    for step in ('step=ctx', 'step=prompt_build', 'step=prepare_workspace',
+                 'step=skills', 'step=agent_check', 'step=create_session',
+                 'step=audit', 'step=user_persist', 'step=send'):
+        assert step in joined, f'missing boot segment log: {step}'
+    assert 'summary total=' in joined               # 汇总行
+    assert 'prepare_workspace=' in joined           # 分解字段
+    assert 'oc=oc-boot-1' in joined
+
+
 def test_run_one_injects_and_records_memory(user_id, db_conn, monkeypatch, tmp_path):
     """记忆注入：发给 OpenCode 的 prompt 应包含 render_memory_block 的输出；
     记忆抽取：成功完成后应异步调用 add_memory(user_id, [user, assistant])，
@@ -1069,6 +1111,7 @@ def test_await_finished_no_session_cap_but_stall_still_guards(monkeypatch):
     w = eng.BatchWorker()
     w.SESSION_TIMEOUT_SEC = 0      # no hard cap
     w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.3   # content=[] 是盲区形态，两层一起压小
     w.POLL_INTERVAL_SEC = 0.02
     idle = {'role': 'assistant', 'finished': False, 'finish': None,
             'running_tool': False, 'content': []}
@@ -1206,13 +1249,18 @@ def test_await_finished_no_stall_while_tool_running(monkeypatch):
 
 
 def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
-    """A genuinely frozen turn (no text, no tool in flight) still trips the stall."""
+    """A genuinely frozen turn (no text, no tool in flight) still trips the stall.
+
+    纯冻结（REST 看不到任何 part）与「思考盲区」在轮询视角不可区分，走的是
+    更长的 THINKING_STALL_TIMEOUT_SEC 阈值——这里把它设为仅略大于 STALL，
+    验证彻底冻结最终仍会被判死（语义保留，只是阈值分层）。"""
     from ai.batch import engine as eng
     from unittest.mock import MagicMock
     from ai.batch.engine import _SessionTimeout
     import pytest as _pytest
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.6
     w.POLL_INTERVAL_SEC = 0.02
     w.SESSION_TIMEOUT_SEC = 5
     idle = {'role': 'assistant', 'finished': False, 'finish': None,
@@ -1224,6 +1272,385 @@ def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
         w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'stalled (no progress)'
     assert '没有任何新进展' in str(ei.value)
+
+
+def test_await_finished_pardons_pure_thinking_freeze(monkeypatch):
+    """思考盲区赦免（2026-11-04 生产误报）：OpenCode 对 reasoning 不做流式
+    落盘（实测 11429 字符思考 67.9s 期间 REST 零增量），单次思考超过
+    STALL_TIMEOUT_SEC 的活回合会被误判 stalled 并 abort。纯思考形态（无任何
+    落盘 part、无 finish）的冻结必须走 THINKING_STALL_TIMEOUT_SEC 而不是
+    STALL_TIMEOUT_SEC——思考 1.6s（> STALL 0.5s、< THINKING 3s）后落盘完成，
+    应判完成而不是误杀。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.5
+    w.THINKING_STALL_TIMEOUT_SEC = 3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    thinking = {'role': 'assistant', 'finished': False, 'finish': None,
+                'running_tool': False, 'content': []}   # 思考中：REST 全空
+    landed = {'role': 'assistant', 'finished': True, 'finish': 'stop',
+              'running_tool': False,
+              'content': [{'type': 'reasoning', 'text': 'x' * 200},
+                          {'type': 'text', 'text': 'done'}]}
+    seq = [[thinking]] * 80 + [[landed]]   # ~1.6s 盲区冻结 > STALL 0.5s
+    calls = {'i': 0}
+    fake = MagicMock()
+    def lm(oc, directory=''):
+        i = min(calls['i'], len(seq) - 1)
+        calls['i'] += 1
+        return seq[i]
+    fake.list_messages.side_effect = lm
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    preview, msg = w._await_finished('oc', 'sid-test')
+    assert msg['finished'] is True          # completed, NOT stalled
+
+
+def test_await_finished_stalls_blindspot_at_thinking_threshold(monkeypatch):
+    """思考盲区也有上限：纯冻结超过 THINKING_STALL_TIMEOUT_SEC 仍判死（provider
+    真死与思考盲区不可区分，只能拉长不能免除），且诊断快照带 emptyParts=True
+    供事后归因「思考盲区误杀 vs 真死」。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    from ai.batch.engine import _SessionTimeout
+    import pytest as _pytest
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.8
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    idle = {'role': 'assistant', 'finished': False, 'finish': None,
+            'running_tool': False, 'content': []}
+    fake = MagicMock()
+    fake.list_messages.return_value = [idle]
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc', 'sid-test')
+    assert ei.value.reason == 'stalled (no progress)'
+    assert ei.value.seconds >= 0.8 or int(ei.value.seconds) == 0
+    assert ei.value.diagnosis.get('emptyParts') is True
+
+
+def test_await_finished_text_freeze_uses_plain_stall(monkeypatch):
+    """分流保护：已有非空 text part 且 step 不在进行中的冻结（真实卡死形态）
+    仍按 STALL_TIMEOUT_SEC 判死，不被思考盲区阈值拖长。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    from ai.batch.engine import _SessionTimeout
+    import pytest as _pytest
+    import time as _time
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.4
+    w.THINKING_STALL_TIMEOUT_SEC = 30
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    frozen = {'role': 'assistant', 'finished': False, 'finish': None,
+              'running_tool': False,
+              'content': [{'type': 'text', 'text': 'partial output'}]}
+    fake = MagicMock()
+    fake.list_messages.return_value = [frozen]
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    t0 = _time.monotonic()
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc', 'sid-test')
+    elapsed = _time.monotonic() - t0
+    assert ei.value.reason == 'stalled (no progress)'
+    assert elapsed < 5      # 远小于 THINKING 30s——用的是 STALL 阈值
+    assert ei.value.diagnosis.get('emptyParts') is False
+
+
+def test_await_finished_step_active_pardons_midstep_thinking(monkeypatch):
+    """step 进行中（step-start 已落盘、step-finish 未落）：消息里已有旧 step 的
+    text part，但当前 step 的思考在盲区里——step_active 信号（新版 OC 落盘
+    step-start/step-finish 标记）必须让这种冻结也走 THINKING 阈值。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.5
+    w.THINKING_STALL_TIMEOUT_SEC = 3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    midstep = {'role': 'assistant', 'finished': False, 'finish': None,
+               'running_tool': False, 'step_active': True,
+               'content': [{'type': 'text', 'text': 'step1 said something'},
+                           {'type': 'tool_use', 'name': 'read', 'status': 'completed',
+                            'output_len': 10}]}
+    done = {'role': 'assistant', 'finished': True, 'finish': 'stop',
+            'running_tool': False, 'step_active': False,
+            'content': [{'type': 'text', 'text': 'done'}]}
+    seq = [[midstep]] * 80 + [[done]]   # ~1.6s 冻结 > STALL 0.5s
+    calls = {'i': 0}
+    fake = MagicMock()
+    def lm(oc, directory=''):
+        i = min(calls['i'], len(seq) - 1)
+        calls['i'] += 1
+        return seq[i]
+    fake.list_messages.side_effect = lm
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+    preview, msg = w._await_finished('oc', 'sid-test')
+    assert msg['finished'] is True
+
+
+def test_list_messages_counts_open_steps(monkeypatch):
+    """facade 必须透出 step_active：OpenCode 在 step 开始瞬间落盘 step-start
+    part（实测与 reasoning 同毫秒创建、而 reasoning 文本在思考结束时才可见），
+    「未配对的 step-start」是 step 进行中的唯一 REST 可见信号。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    client = MagicMock()
+
+    def raw(parts):
+        return [{'info': {'id': 'm1', 'role': 'assistant', 'time': {}},
+                 'parts': parts}]
+
+    # step 开始：step-start 落盘、step-finish 没有 → step_active=True
+    client.get_messages.return_value = raw([
+        {'type': 'step-start'},
+        {'type': 'reasoning', 'text': ''},       # 思考中文本尚未可见
+    ])
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0]['step_active'] is True
+
+    # step 结束：step-finish 落盘 → step_active=False
+    client.get_messages.return_value = raw([
+        {'type': 'step-start'},
+        {'type': 'reasoning', 'text': 'thought through'},
+        {'type': 'text', 'text': 'answer'},
+        {'type': 'step-finish'},
+    ])
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0]['step_active'] is False
+
+    # 旧版 OpenCode：没有 step 标记 → step_active=False（回退 content 判定）
+    client.get_messages.return_value = raw([
+        {'type': 'reasoning', 'text': 'old behavior'},
+    ])
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0]['step_active'] is False
+
+
+def test_progress_signature_counts_step_markers():
+    """step-start 落盘 / step-finish 落盘都必须算进展（重置冻结计时）——
+    思考多回合（思考→工具→再思考）时每个 step 边界都刷新看门狗时钟。"""
+    from ai.batch.engine import BatchWorker
+    sig = BatchWorker._progress_signature
+    idle = [{'role': 'assistant', 'content': [], 'step_active': False}]
+    started = [{'role': 'assistant', 'content': [], 'step_active': True}]
+    finished_step = [{'role': 'assistant',
+                      'content': [{'type': 'text', 'text': 'hi'}],
+                      'step_active': False}]
+    assert sig(idle) != sig(started)           # step-start 落盘 = 进展
+    assert sig(started) != sig(finished_step)  # step-finish 落盘 = 进展
+
+
+# ---------------------------------------------------------------------------
+# 轮询通道故障（遗留形状②③）：REST 读不到 ≠ 会话无进展
+# ---------------------------------------------------------------------------
+
+def test_list_messages_flags_rest_failure(monkeypatch):
+    """facade 必须区分「读不到」（REST 异常 / 空列表）与「读到了但没内容」：
+    前者带 poll_error 标志（供轮询循环走通道故障分支），后者是等待首条
+    assistant 的正常形态。此前两者都降级成同一种合成消息 → 签名恒等冻结
+    → 网络故障被伪装成「会话无进展」误判 stalled。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+
+    import requests as _requests
+    client.get_messages.side_effect = _requests.ConnectionError('proxy down')
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0].get('poll_error') == 'rest'
+
+    client.get_messages.side_effect = None
+    client.get_messages.return_value = []      # 目录错位 / 会话不存在
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0].get('poll_error') == 'empty'
+
+    # 有 user 无 assistant（回合刚派发、模型还没回）：正常等待，不是通道故障
+    client.get_messages.return_value = [
+        {'info': {'id': 'u1', 'role': 'user', 'time': {}},
+         'parts': [{'type': 'text', 'text': 'go'}]}]
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert not out[0].get('poll_error')
+
+
+def test_await_finished_rest_outage_reports_unreachable_not_stalled(monkeypatch):
+    """REST 持续断连（代理抖动/OC 重启）：此前被降级成固定合成消息 → 签名
+    冻结 180s → 误报「会话无进展」并 abort。新语义：报「无法读取 AI 会话
+    状态」（poll unreachable），不是 stalled；且该失败可自动重试。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    from ai.batch.engine import _SessionTimeout
+    import pytest as _pytest
+    import requests as _requests
+
+    client = MagicMock()
+    client.get_messages.side_effect = _requests.ConnectionError('proxy down')
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc', 'sid-test')
+    assert ei.value.reason == 'poll unreachable'
+    assert '无法读取' in str(ei.value)
+    assert '没有任何新进展' not in str(ei.value)   # 不是 stalled 误报
+    # 通道故障是平台侧问题，值得重试（对齐网络异常白名单）
+    assert w._is_retryable(ei.value) is True
+
+
+def test_await_finished_empty_message_list_reports_unreachable(monkeypatch):
+    """目录错位/会话不存在：send 之后消息列表恒空（连 user 消息都没有）——
+    同样是「读不到有效数据」，报 poll unreachable 而非等 600s 盲区超时。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    from ai.batch.engine import _SessionTimeout
+    import pytest as _pytest
+
+    client = MagicMock()
+    client.get_messages.return_value = []
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc', 'sid-test')
+    assert ei.value.reason == 'poll unreachable'
+
+
+def test_await_finished_transient_rest_blip_does_not_kill(monkeypatch):
+    """REST 瞬时抖动（一两次失败后恢复）：轮询循环重试，回合照常收口——
+    通道故障只在持续超过阈值时才报错，瞬时错误不误杀。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    import requests as _requests
+
+    ok = [{'info': {'id': 'm1', 'role': 'assistant', 'finish': 'stop',
+                    'time': {'completed': {'seconds': 1}}},
+           'parts': [{'type': 'text', 'text': 'done'}]}]
+    client = MagicMock()
+    # 头两次失败、之后恒恢复成功（函数式 side_effect 防列表耗尽）
+    attempts = {'n': 0}
+
+    def flaky(*a, **k):
+        attempts['n'] += 1
+        if attempts['n'] <= 2:
+            raise _requests.ConnectionError('blip')
+        return ok
+    client.get_messages.side_effect = flaky
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 10
+    w.FINISH_CONFIRM_POLLS = 2
+    preview, msg = w._await_finished('oc', 'sid-test')
+    assert msg['finished'] is True
+
+
+# ---------------------------------------------------------------------------
+# 遗留形状④：stall 判死前的子代理作保（全消息范围）
+# ---------------------------------------------------------------------------
+
+def test_await_finished_stall_pardons_alive_subagent_in_older_message(monkeypatch):
+    """新消息插队后，旧消息里仍在跑的 task 委派会漏出 _running_task_children
+    （它只看最后一条）——父签名冻结走 STALL 分支，但子代理自己的消息还在
+    推进：判死前必须查子代理作保（对齐 tool-stuck 分支语义），顺延不杀。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.4
+    w.THINKING_STALL_TIMEOUT_SEC = 0.4
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 3
+
+    delegating = {'role': 'assistant', 'finished': False, 'finish': 'tool-calls',
+                  'running_tool': True, 'id': 'm-old', 'step_active': False,
+                  'content': [{'type': 'tool_use', 'name': 'task',
+                               'status': 'running', 'output_len': 0,
+                               'child_sid': 'child-x'}]}
+    # 插队的新消息：有旧文本 part（非盲区形态）、自身冻结 → 会走 STALL 分支
+    interleaved = {'role': 'assistant', 'finished': False, 'finish': None,
+                   'running_tool': False, 'id': 'm-new', 'step_active': False,
+                   'content': [{'type': 'text', 'text': 'interim note'}]}
+    parent_frozen = [delegating, interleaved]
+
+    child_grow = [{'i': 0}]
+    calls = {'n': 0}
+    fake = MagicMock()
+
+    def lm(oc, directory=''):
+        return parent_frozen
+
+    def gm(oc, directory=''):
+        # 子代理消息持续增长 → 活着
+        if oc == 'child-x':
+            calls['n'] += 1
+            return [{'info': {'id': f'c{calls["n"]}', 'role': 'assistant',
+                              'time': {}},
+                     'parts': [{'type': 'text', 'text': 'x' * calls['n']}]}]
+        return []
+    fake.list_messages.side_effect = lm
+    fake.get_messages.side_effect = gm
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+
+    import time as _time
+    t0 = _time.monotonic()
+    raised = None
+    try:
+        w._await_finished('oc', 'sid-test')
+    except eng._SessionTimeout as e:
+        raised = e
+    elapsed = _time.monotonic() - t0
+    # 子代理活着（签名持续变化）→ STALL 0.4s 不该杀；跑满 SESSION 上限 10s
+    # 前截断会太慢，这里只验证「远超 STALL 阈值仍存活/或以其他方式结束」
+    assert raised is None or raised.reason != 'stalled (no progress)'
+
+
+def test_await_finished_stall_kills_when_subagent_also_frozen(monkeypatch):
+    """作保反例：子代理自己的签名也冻结（真死）→ 不顺延，照常判死。"""
+    from ai.batch import engine as eng
+    from unittest.mock import MagicMock
+    import pytest as _pytest
+
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.THINKING_STALL_TIMEOUT_SEC = 0.3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 5
+
+    delegating = {'role': 'assistant', 'finished': False, 'finish': 'tool-calls',
+                  'running_tool': True, 'id': 'm-old', 'step_active': False,
+                  'content': [{'type': 'tool_use', 'name': 'task',
+                               'status': 'running', 'output_len': 0,
+                               'child_sid': 'child-x'}]}
+    interleaved = {'role': 'assistant', 'finished': False, 'finish': None,
+                   'running_tool': False, 'id': 'm-new', 'step_active': False,
+                   'content': [{'type': 'text', 'text': 'interim note'}]}
+    fake = MagicMock()
+    fake.list_messages.side_effect = lambda oc, directory='': [delegating,
+                                                               interleaved]
+    # 子代理消息恒定不变 → 冻结真死
+    child_frozen = [{'info': {'id': 'c1', 'role': 'assistant', 'time': {}},
+                     'parts': [{'type': 'text', 'text': 'stuck'}]}]
+    fake.get_messages.side_effect = (
+        lambda oc, directory='': child_frozen if oc == 'child-x' else [])
+    monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake)
+
+    with _pytest.raises(eng._SessionTimeout) as ei:
+        w._await_finished('oc', 'sid-test')
+    assert ei.value.reason == 'stalled (no progress)'
 
 
 def test_dispatch_tick_survives_claim_error():

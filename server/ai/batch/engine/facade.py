@@ -83,13 +83,21 @@ class _OpenCodeFacade:
         `session.idle` if it fired in the gap (the source of children hanging in
         'running' until the 30-min timeout under concurrency).
 
-        A transient REST error is reported as "not finished" so the poll loop
-        retries; a persistent failure still hits SESSION_TIMEOUT_SEC -> failed.
+        A transient REST error is reported as a poll_error marker so the poll
+        loop retries without mistaking it for "no progress"; a persistent
+        failure is surfaced as `poll unreachable` by _await_finished (REST
+        不可达 ≠ 会话无进展——此前两者同形，网络故障会被伪装成 stalled).
         """
         try:
             raw = self._client().get_messages(oc_session_id, directory=directory) or []
         except requests.RequestException:
-            return [{'role': 'assistant', 'finished': False, 'content': []}]
+            return [{'role': 'assistant', 'finished': False, 'content': [],
+                     'poll_error': 'rest'}]
+        if not raw:
+            # 消息列表完全为空（连 user 消息都没有——send 之后正常必有）：
+            # 目录错位 / 会话不存在，同样是「读不到有效数据」而非「无进展」。
+            return [{'role': 'assistant', 'finished': False, 'content': [],
+                     'poll_error': 'empty'}]
 
         out: list = []
         for m in raw:
@@ -100,8 +108,18 @@ class _OpenCodeFacade:
             content: list = []
             running_tool = False
             resolved_tool_seen = False
+            open_steps = 0
             for p in parts:
                 t = p.get('type')
+                if t == 'step-start':
+                    # step 开始瞬间就落盘（实测与 reasoning part 同毫秒创建，
+                    # 而 reasoning 文本直到思考结束才可见）——「未配对的
+                    # step-start」是 step 进行中唯一的 REST 可见信号。
+                    open_steps += 1
+                    continue
+                if t == 'step-finish':
+                    open_steps = max(0, open_steps - 1)
+                    continue
                 if t == 'text' and p.get('text'):
                     content.append({'type': 'text', 'text': p.get('text', '')})
                 elif t == 'reasoning' and p.get('text'):
@@ -150,10 +168,11 @@ class _OpenCodeFacade:
             # 存在的旧消息，见 _snapshot_assistant_ids）。
             out.append({'role': 'assistant', 'finished': finished, 'content': content,
                         'finish': finish, 'running_tool': running_tool,
-                        'error': info.get('error'), 'id': info.get('id')})
+                        'error': info.get('error'), 'id': info.get('id'),
+                        'step_active': open_steps > 0})
         return out or [{'role': 'assistant', 'finished': False, 'content': [],
                         'finish': None, 'running_tool': False, 'error': None,
-                        'id': None}]
+                        'id': None, 'step_active': False}]
 
     def get_messages(self, oc_session_id: str, directory: str = '') -> list:
         """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by

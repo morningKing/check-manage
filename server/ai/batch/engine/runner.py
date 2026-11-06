@@ -103,6 +103,19 @@ class WorkerRunnerMixin:
         fencing_token = session_row.get('fencing_token')
         turn_id = session_row.get('turn_id')
         turn_start = time.monotonic()  # 用于子任务完成通知的耗时
+        # 启动耗时观测（batch boot 系列）：逐段计时直到 prompt 发出——
+        # 「批创建→系统提示词上屏」的每一步耗时可直接从 ai_chat.log 对齐。
+        # _mark(名称) 打本段耗时；send 后的 summary 汇总（>5s 升 WARN）。
+        _boot_steps: list = []
+        _boot_last = time.monotonic()
+
+        def _boot_mark(name: str):
+            nonlocal _boot_last
+            _now = time.monotonic()
+            _ms = int((_now - _boot_last) * 1000)
+            _boot_last = _now
+            _boot_steps.append((name, _ms))
+            logger.info('batch boot sid=%s step=%s ms=%d', sid, name, _ms)
         # standalone 会话（无批任务）不登记期望；统一初始化供门禁判定读取。
         gate_reg = {'applicable': 0, 'registered': 0, 'error': None}
         if batch_id is None:
@@ -145,6 +158,7 @@ class WorkerRunnerMixin:
             # P0 门禁 fail-closed：登记结果（生效条数/登记条数/异常）留到
             # 终态核对时判定——登记不可证实的子任务不得 completed。
             gate_reg = self._register_action_expectations(sid, batch_id, session_row)
+        _boot_mark('ctx')
 
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
@@ -185,6 +199,7 @@ class WorkerRunnerMixin:
                 prompt = reuse_directive + prompt
 
         ws = None
+        _boot_mark('prompt_build')
         try:
             if is_continue:
                 # Reuse existing workspace — don't re-prepare
@@ -210,11 +225,13 @@ class WorkerRunnerMixin:
                 # 工作区路径先落库（agent 校验 fail-fast 等会话前失败也能被
                 # retry-failed 的工作区清空覆盖）
                 self._set_workspace_path(sid, ws)
+                _boot_mark('prepare_workspace')
                 # Provision project-level agents/skills BEFORE the session starts —
                 # OpenCode binds the agent at prompt time, so the repo must be in
                 # .opencode/ first. Degrades gracefully: a clone failure doesn't fail
                 # the child (global agents/skills still work); we just post a notice.
                 prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
+                _boot_mark('provision')
                 if prov_warn:
                     self._persist_provision_notice(sid, prov_warn)
                 # Inject global skills (symlink/copy from central storage).
@@ -229,10 +246,12 @@ class WorkerRunnerMixin:
                             header=None)
                 except Exception:
                     pass  # best-effort: don't fail the child
+                _boot_mark('skills')
                 # Fail FAST on an unusable agent. OpenCode silently produces nothing
                 # for an unknown / subagent-as-primary agent, which would otherwise
                 # hang until STALL_TIMEOUT (the "批任务一直待运行 with custom agent" bug).
                 agent_err = self._check_agent(agent, ws)
+                _boot_mark('agent_check')
                 if agent_err:
                     self._mark_failed(sid, batch_id, error=agent_err,
                                       generation=generation,
@@ -244,6 +263,7 @@ class WorkerRunnerMixin:
                     return
                 oc_session_id = opencode_client.create_session(directory=ws)
                 self._set_opencode_id(sid, oc_session_id, ws)
+                _boot_mark('create_session')
 
             # Execution audit (execution-audit Spec §9.3): one attempt per
             # child run, covering retry/continue/reexecute — the batch/session
@@ -288,10 +308,12 @@ class WorkerRunnerMixin:
                 # attempt 关联进本轮 turn（审计用，非锁）
                 if turn_id:
                     execution_audit.attach_attempt_to_turn(turn_id, audit_attempt_id)
+            _boot_mark('audit')
 
             # Persist the prompt up front so opening this child mid-run shows the
             # question immediately.
             self._persist_user_prompt(sid, prompt, generation=generation)
+            _boot_mark('user_persist')   # ← 此刻系统提示词已可在页面上看到
             # continue 模式先拍基线：旧 assistant 消息（上一轮完成/中断的）在
             # 新回合产生首条消息之前仍是"最新一条"，不跳过的话 _await_finished
             # 第一轮轮询就会拿旧消息的终态/错误立刻判定本轮完成或失败。
@@ -300,6 +322,7 @@ class WorkerRunnerMixin:
             try:
                 opencode_client.send_message(oc_session_id, prompt, directory=ws,
                                              agent=agent, model=model)
+                _boot_mark('send')
                 if audit_attempt_id:
                     execution_audit.record_event(
                         audit_attempt_id, 'dispatch.ok', session_id=sid,
@@ -329,6 +352,17 @@ class WorkerRunnerMixin:
                                                       model, generation=generation)
                 baseline_ids = None  # 全新 session，没有旧消息需要跳过
                 logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
+            # 启动链路汇总（batch boot 系列）：claim 后到 prompt 发出的总耗时
+            # 与逐段分解。>5s 升 WARN——正常链路亚秒级（dev 实测 0.85s），
+            # 慢启动一眼定位到段。
+            _boot_total_ms = int((time.monotonic() - turn_start) * 1000)
+            _boot_parts = ' '.join(f'{_n}={_ms}ms' for _n, _ms in _boot_steps)
+            _boot_line = (f'batch boot sid={sid} summary total={_boot_total_ms}ms '
+                          f'oc={oc_session_id} {_boot_parts}')
+            if _boot_total_ms > 5000:
+                logger.warning(_boot_line + ' (slow)')
+            else:
+                logger.info(_boot_line)
             # F3：dispatch 期间执行权若已易主（心跳置位），这里静默放手——
             # 提示词可能已被新 owner 接管重发，不再做任何落账/写回。
             if lease_lost is not None and lease_lost.is_set():
@@ -840,6 +874,7 @@ class WorkerRunnerMixin:
         last_progress_at = time.time()
         last_persist_at = 0.0
         last_q_check = 0.0
+        poll_failed_since: float | None = None
         tool_stall_start: float | None = None
         child_sigs: dict = {}
         first = True
@@ -862,6 +897,29 @@ class WorkerRunnerMixin:
             msgs = opencode_client.list_messages(oc_session_id,
                                                  directory=directory) or []
             now = time.time()
+            # 通道故障（REST 异常 / 消息列表恒空，见 facade poll_error）：
+            # 读不到 ≠ 会话无进展——跳过一切基于快照的判定（finish/看门狗），
+            # 持续超过 STALL 阈值才报 poll unreachable（网络故障不再被伪装成
+            # stalled「无进展」误报，语义可分）。
+            poll_err = msgs[0].get('poll_error') if msgs else None
+            if poll_err:
+                if poll_failed_since is None:
+                    poll_failed_since = now
+                elif now - poll_failed_since > self.STALL_TIMEOUT_SEC:
+                    # 判死必须真死（对齐 stalled 路径）：best-effort abort——
+                    # 目录错位/REST 恢复窗口内可能成功；不可达时为 no-op。
+                    try:
+                        opencode_client.abort_session(oc_session_id,
+                                                      directory=directory)
+                    except Exception:
+                        traceback.print_exc()
+                    raise _SessionTimeout(
+                        int(now - poll_failed_since),
+                        reason='poll unreachable',
+                        diagnosis={'pollError': poll_err})
+                time.sleep(self.POLL_INTERVAL_SEC)
+                continue
+            poll_failed_since = None
             if now - last_q_check >= self.QUESTION_CHECK_INTERVAL:
                 last_q_check = now
                 # 子代理会话的询问一并扫：它阻塞的是父回合的 task 工具，而
@@ -879,12 +937,14 @@ class WorkerRunnerMixin:
                 last_persist_at = time.time()
             active_tool = False
             finished_now = False
+            turn_last = None      # 本轮自己的最后一条 assistant（盲区判定用）
             for m in reversed(msgs):
                 if m.get('role') == 'assistant':
                     if baseline_ids and m.get('id') in baseline_ids:
                         continue  # message from before this (continued) turn
                     last_preview = self._preview_from(m)
                     last_message = m
+                    turn_last = m
                     # OpenCode 明说这一轮挂了 —— 立刻带着原因失败，不要等 STALL。
                     # 放在 finished 判断之前：出错的消息有时也会带上终态 finish，
                     # 那种情况下当成"成功"会更糟（子任务标 completed、输出为空）。
@@ -950,21 +1010,42 @@ class WorkerRunnerMixin:
                                 msgs, baseline_ids, last_sig,
                                 directory, oc_session_id))
             elif now - last_progress_at > self.STALL_TIMEOUT_SEC:
-                # 判死必须真死：不 abort 的话原回合在 OpenCode 里继续跑、
-                # 继续输出甚至完成——与任务行 failed 状态分裂（生产实测
-                # 「报 181 秒无进展但会话还在继续输出」，2026-11-03）。对齐
-                # tool-stuck 路径的 abort（先停掉别空转烧 token）；若判定后
-                # 走自动重试，continue_prompt 发进被 abort 的会话继续，同
-                # tool-stuck 的既有语义。
-                try:
-                    opencode_client.abort_session(oc_session_id, directory=directory)
-                except Exception:
-                    traceback.print_exc()
-                raise _SessionTimeout(
-                    int(now - last_progress_at),
-                    reason='stalled (no progress)',
-                    diagnosis=self._stall_diagnosis(
-                        msgs, baseline_ids, last_sig, directory, oc_session_id))
+                # 思考盲区分层（2026-11-04 生产误报）：OpenCode 不流式落盘
+                # reasoning，单次思考 >STALL 的活回合在轮询视角与真死不可
+                # 区分。盲区形态（step 进行中 / 无任何实质 part）改用更长的
+                # THINKING 阈值；其余冻结（已有输出后卡死）维持 STALL 秒杀。
+                frozen = now - last_progress_at
+                blindspot = self._thinking_blindspot(turn_last)
+                limit = (self.THINKING_STALL_TIMEOUT_SEC
+                         if blindspot and self.THINKING_STALL_TIMEOUT_SEC > 0
+                         else self.STALL_TIMEOUT_SEC)
+                if frozen > limit:
+                    # 子代理作保（对齐 tool-stuck 分支语义，范围扩到全消息）：
+                    # 新消息插队后旧消息里仍在跑的 task 委派不在最后一条上，
+                    # 父签名冻结走不到 active_tool 豁免——但子代理自己的消息
+                    # 还在推进时这不是死回合，顺延等待。
+                    if self._children_progressing(
+                            self._any_running_task_children(msgs, baseline_ids),
+                            directory, child_sigs):
+                        last_progress_at = now
+                    else:
+                        # 判死必须真死：不 abort 的话原回合在 OpenCode 里继续跑、
+                        # 继续输出甚至完成——与任务行 failed 状态分裂（生产实测
+                        # 「报 181 秒无进展但会话还在继续输出」，2026-11-03）。对齐
+                        # tool-stuck 路径的 abort（先停掉别空转烧 token）；若判定后
+                        # 走自动重试，continue_prompt 发进被 abort 的会话继续，同
+                        # tool-stuck 的既有语义。
+                        try:
+                            opencode_client.abort_session(oc_session_id,
+                                                          directory=directory)
+                        except Exception:
+                            traceback.print_exc()
+                        raise _SessionTimeout(
+                            int(frozen),
+                            reason='stalled (no progress)',
+                            diagnosis=self._stall_diagnosis(
+                                msgs, baseline_ids, last_sig, directory,
+                                oc_session_id))
             time.sleep(self.POLL_INTERVAL_SEC)
         # 硬上限到点时若稳定窗已有 ≥1 次确认（回合实际已完结、只差确认轮询），
         # 按完成收口而不是超时——稳定窗不应把最后一刻完成的回合误判成超时失败。
@@ -1039,25 +1120,62 @@ class WorkerRunnerMixin:
         return last_preview, last_message
 
     @staticmethod
+    def _has_substantive_part(msg: dict) -> bool:
+        """消息里是否有 REST 可见的实质内容（非空 text/reasoning 或工具
+        part）——思考盲区判定的底座：OpenCode 思考期间这些全都不存在。"""
+        content = msg.get('content') or []
+        return any(
+            ((p.get('type') in ('text', 'reasoning') and p.get('text'))
+             or p.get('type') == 'tool_use')
+            for p in content if isinstance(p, dict))
+
+    @staticmethod
+    def _thinking_blindspot(turn_last: dict | None) -> bool:
+        """本轮是否处于「思考盲区」：OpenCode 只在 step 结束时一次性落盘
+        reasoning 文本（实测 68s 的思考期间 part/message/session 的 REST
+        视角全部零增量），思考进行中的回合与 provider 真死在轮询视角不可
+        区分——只能识别形态、拉长阈值，不能免除判死。
+
+        形态二选一：
+        1. step 进行中（step-start 已落盘、step-finish 未落）——新版 OC
+           信号，消息里即便已有旧 step 的 text/tool part 也算；
+        2. 最后一条消息无任何实质 part（无非空 text/reasoning、无
+           tool_use）且未终结未报错——涵盖回合刚派发还没首条消息、以及
+           旧版 OC（无 step 标记）纯思考的兜底。"""
+        if turn_last is None:
+            return True     # 首条 assistant 还没落：模型在思考/网关在排队
+        if turn_last.get('error') or turn_last.get('finished'):
+            return False
+        if turn_last.get('step_active'):
+            return True
+        return not BatchWorker._has_substantive_part(turn_last)
+
+    @staticmethod
     def _progress_signature(msgs: list) -> tuple:
         """A cheap proxy for forward progress: (#assistant messages, total text
-        length, tool activity). Changes whenever the model emits a new message,
-        more text, OR a tool advances (new tool call / status change / growing
-        output) — so a delegating subagent (a long-running `task` tool) counts as
-        progress instead of looking 'stalled'."""
+        length, tool activity, open steps). Changes whenever the model emits a
+        new message, more text, OR a tool advances (new tool call / status
+        change / growing output) — so a delegating subagent (a long-running
+        `task` tool) counts as progress instead of looking 'stalled'.
+        step 标记同样算进展：step-start 在 step 开始瞬间落盘、step-finish 在
+        结束时落盘（reasoning 文本只在 step 结束时一次性可见），多回合
+        「思考→工具→再思考」的每个 step 边界都会刷新冻结计时。"""
         count = 0
         total_text = 0
         tool_sig: list = []
+        open_steps = 0
         for m in msgs:
             if m.get('role') == 'assistant':
                 count += 1
+                if m.get('step_active'):
+                    open_steps += 1
                 for p in (m.get('content') or []):
                     if p.get('type') in ('text', 'reasoning'):
                         total_text += len(p.get('text') or '')
                     elif p.get('type') == 'tool_use':
                         tool_sig.append((p.get('name'), p.get('status'),
                                          p.get('output_len') or 0))
-        return (count, total_text, tuple(tool_sig))
+        return (count, total_text, tuple(tool_sig), open_steps)
 
     def _stall_diagnosis(self, msgs: list, baseline_ids: set | None,
                          last_sig, directory: str,
@@ -1080,6 +1198,7 @@ class WorkerRunnerMixin:
                 d['lastMsgId'] = m.get('id')
                 d['finish'] = m.get('finish')
                 d['runningTool'] = bool(m.get('running_tool'))
+                d['stepActive'] = bool(m.get('step_active'))
                 err = m.get('error')
                 if err:
                     d['msgError'] = (err.get('name')
@@ -1088,6 +1207,9 @@ class WorkerRunnerMixin:
                          if isinstance(p, dict) and p.get('type') == 'tool_use']
                 d['toolParts'] = [{'name': p.get('name'), 'status': p.get('status')}
                                   for p in parts[-5:]]   # 最近 5 个，防长尾
+                # 思考盲区标志（2026-11-04）：事后区分「盲区误杀（真在思考）」
+                # 与「有输出后真死」——前者 emptyParts/stepActive 为真。
+                d['emptyParts'] = not self._has_substantive_part(m)
                 break
             if last_sig is not None:
                 d['sig'] = str(last_sig)
@@ -1207,18 +1329,37 @@ class WorkerRunnerMixin:
                     and p.get('child_sid')]
         return []
 
-    def _subagent_progressing(self, msgs: list, baseline_ids: set | None,
-                              directory: str, state: dict) -> bool:
-        """冻结窗口内，在跑的 task 工具背后的子代理是否仍有产出。
+    @staticmethod
+    def _any_running_task_children(msgs: list, baseline_ids: set | None) -> list:
+        """全轮非基线消息范围的在跑 task 子代理（stall 作保用）。
+
+        _running_task_children 只看最后一条 assistant——新消息插队（模型在
+        委派未返回时又产出一条消息）后，旧消息里仍在跑的委派会被漏掉，stall
+        分支拿不到作保候选而误杀活着的子代理。"""
+        out: list = []
+        for m in msgs:
+            if m.get('role') != 'assistant':
+                continue
+            if baseline_ids and m.get('id') in baseline_ids:
+                continue
+            out += [p.get('child_sid') for p in (m.get('content') or [])
+                    if p.get('type') == 'tool_use' and p.get('name') == 'task'
+                    and p.get('status') in (None, '', 'pending', 'running')
+                    and p.get('child_sid')]
+        return out
+
+    def _children_progressing(self, children: list, directory: str,
+                              state: dict) -> bool:
+        """给定子代理会话 id 列表，逐个比对其**自己的**消息签名判断存活。
 
         父会话的消息签名在子代理工作期间是不变的（子代理的输出要等工具返回
-        才进父级消息），所以用子代理**自己的**消息列表签名判断存活：签名变了
-        = 活着 → 看门狗顺延；没有任何在跑的 task 工具 → False（让卡死的普通
-        工具调用被杀）。查不到子代理消息时按"无法判断"处理（宁可多等一个
-        窗口），绝不因辅助检查的抖动误杀长跑子代理。
+        才进父级消息），所以用子代理自己的消息列表签名判断：签名变了 = 活着
+        → 看门狗顺延。查不到子代理消息时按"无法判断"处理（宁可多等一个
+        窗口），绝不因辅助检查的抖动误杀长跑子代理；但**连续**查不到
+        （CHILD_PROBE_ERROR_BUDGET 次以上）不再作保——持续断连时顺延会变
+        成永活，看门狗失效。
         `state` 跨轮询持有每个子代理上一次的签名（调用方传同一个 dict）。
         """
-        children = self._running_task_children(msgs, baseline_ids)
         if not children:
             return False
         progressing = False
@@ -1227,8 +1368,16 @@ class WorkerRunnerMixin:
                 raw = opencode_client.get_messages(csid, directory=directory) or []
                 sig = self._raw_progress_signature(raw)
             except Exception:
-                progressing = True   # 查不到 ≠ 死了
+                errs = state.get(csid, {}).get('errors', 0) \
+                    if isinstance(state.get(csid), dict) else 0
+                errs += 1
+                state[csid] = {'errors': errs}
+                if errs <= self.CHILD_PROBE_ERROR_BUDGET:
+                    progressing = True   # 瞬时查不到 ≠ 死了
                 continue
+            if isinstance(state.get(csid), dict):
+                # 从错误态恢复：这次成功读到了，重新观测
+                state[csid] = None
             if state.get(csid) is None:
                 state[csid] = sig
                 progressing = True   # 首次观测：先算活着，下个窗口做对比
@@ -1236,6 +1385,15 @@ class WorkerRunnerMixin:
                 state[csid] = sig
                 progressing = True
         return progressing
+
+    def _subagent_progressing(self, msgs: list, baseline_ids: set | None,
+                              directory: str, state: dict) -> bool:
+        """冻结窗口内，在跑的 task 工具背后的子代理是否仍有产出（工具卡死
+        看门狗用：只看最后一条消息的在跑委派）。没有任何在跑的 task 工具 →
+        False（让卡死的普通工具调用被杀）。"""
+        return self._children_progressing(
+            self._running_task_children(msgs, baseline_ids),
+            directory, state)
 
     @staticmethod
     def _raw_progress_signature(msgs: list) -> tuple:

@@ -14,6 +14,9 @@ class _SessionTimeout(Exception):
         if reason == 'stalled (no progress)':
             msg = (f'AI 会话已 {seconds} 秒没有任何新进展（既无新文本输出，也没有工具调用在执行），'
                    f'可能是模型响应卡住、上游服务异常或网络问题，请重试该会话')
+        elif reason == 'poll unreachable':
+            msg = (f'连续 {seconds} 秒无法读取 AI 会话状态（OpenCode 接口不可达、网络异常'
+                   f'或工作目录错位），已中断该回合，请重试该会话')
         elif reason == 'tool stuck':
             msg = (f'AI 会话的工具调用已持续 {seconds} 秒没有任何进展'
                    f'（可能是提问被挂起、工具或 MCP 服务卡死），已自动中断该回合，请重试该会话')
@@ -39,6 +42,8 @@ def _format_diagnosis(d: dict) -> str:
                          if isinstance(t, dict))
         return (f"lastMsg={d.get('lastMsgId')} finish={d.get('finish')} "
                 f"runningTool={d.get('runningTool')} tools=[{tools}] "
+                f"stepActive={d.get('stepActive')} "
+                f"emptyParts={d.get('emptyParts')} "
                 f"pendingQ={d.get('pendingQuestions')} "
                 f"pendingP={d.get('pendingPermissions')} "
                 f"msgs={d.get('msgCount')}")
