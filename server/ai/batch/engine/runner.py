@@ -1148,7 +1148,10 @@ class WorkerRunnerMixin:
             return False
         if turn_last.get('step_active'):
             return True
-        return not BatchWorker._has_substantive_part(turn_last)
+        # BatchWorker 是组合类名：runner 导入期无此名（见本模块尾部占位 +
+        # worker.py 尾部回填——拆分架构必需的交叉引用），调用期解析为真实
+        # 组合类；main 单体内为同类引用，此处是逐字纪律的认可例外。
+        return not BatchWorker._has_substantive_part(turn_last)  # noqa: F821
 
     @staticmethod
     def _progress_signature(msgs: list) -> tuple:
@@ -1433,3 +1436,10 @@ __all__ = [
     'record_session_files',
     'render_history_block',
 ]
+
+# BatchWorker 占位（_thinking_blindspot 调用期解析）：runner 由 worker.py 顶部
+# 导入（WorkerRunnerMixin），导入期反向 from .worker import 会撞半初始化。
+# 此占位让静态分析可见该名字；worker.py 定义组合类后在尾部回填覆盖（见
+# worker.py「包内交叉引用」段）——调用期必为真实类。刻意不进 __all__：
+# 聚合命名空间符号面不变（symbol_parity 基线约束）。
+BatchWorker = None
