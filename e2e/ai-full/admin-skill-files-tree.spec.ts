@@ -6,9 +6,53 @@
  */
 import { test, expect } from '@playwright/test'
 import { gotoWithAuth, screenshot } from './helpers'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
+import * as os from 'node:os'
+
+// 多目录技能 fixture：skill-creator 原是 2026-10-26 self-evolution 期装到本机
+// OC 全局目录的技能，后随机器清理消失——本测试改为自给自足（开头种、结束
+// 清），不再依赖机器状态；OC 全局目录取 homedir 缺省（本测试本就测真目录）。
+const OC_SKILL_ROOT = path.join(os.homedir(), '.config', 'opencode', 'skill')
+const FIXTURE = path.join(OC_SKILL_ROOT, 'skill-creator')
+
+function seedSkillFixture(): void {
+  fs.mkdirSync(path.join(FIXTURE, 'scripts'), { recursive: true })
+  fs.mkdirSync(path.join(FIXTURE, '__pycache__'), { recursive: true })
+  fs.writeFileSync(
+    path.join(FIXTURE, 'SKILL.md'),
+    '---\nname: skill-creator\ndescription: create skills\n---\n\nCreate new skills.\n',
+  )
+  fs.writeFileSync(path.join(FIXTURE, 'license.txt'), 'MIT License\n')
+  fs.writeFileSync(
+    path.join(FIXTURE, 'scripts', 'init_skill.py'),
+    '# Placeholder init script for runtime skill files tree E2E fixture.\n',
+  )
+  fs.writeFileSync(
+    path.join(FIXTURE, 'scripts', 'quick_validate.py'),
+    '# Placeholder validate script for runtime skill files tree E2E fixture.\n',
+  )
+  fs.writeFileSync(
+    path.join(FIXTURE, '__pycache__', 'init.cpython-311.pyc'),
+    'placeholder pyc\n',
+  )
+}
+
+function removeSkillFixture(): void {
+  fs.rmSync(FIXTURE, { recursive: true, force: true })
+}
 
 test('运行时技能文件：默认收起 / 文件夹展开 / 搜索过滤 / 展开全部', async ({ page }) => {
   test.setTimeout(120_000)
+  seedSkillFixture()
+  try {
+    await runScenario(page)
+  } finally {
+    removeSkillFixture()
+  }
+})
+
+async function runScenario(page: import('@playwright/test').Page): Promise<void> {
   await gotoWithAuth(page, '/admin/ai-settings?tab=runtime')
 
   // 技能列表分页（每页 10 条）→ 用页面检索框过滤到多目录技能 skill-creator
@@ -48,4 +92,4 @@ test('运行时技能文件：默认收起 / 文件夹展开 / 搜索过滤 / �
   await dialog.locator('[data-test="collapse-all"]').click()
   await expect(dialog.locator('[data-path="scripts/init_skill.py"]')).toHaveCount(0)
   await expect(dialog.locator('[data-path="SKILL.md"]')).toBeVisible()
-})
+}
