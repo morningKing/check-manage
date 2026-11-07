@@ -20,7 +20,10 @@ test('AI 会话页 Ctrl+K 唤起面板：二次按键不丢焦点，Esc 焦点�
 
   await login(page)
   await page.goto('/ai-chat')
-  await expect(sessionSearch).toBeVisible()
+  // /ai-chat 首屏数据面较重（会话列表/分组/命令面板注册），冷 dev vite 下
+  // 会话搜索框出现可超 5s 默认等待——复跑两轮都在这一行翻车（:16/:51 互换），
+  // 显式放宽到 30s。
+  await expect(sessionSearch).toBeVisible({ timeout: 30_000 })
 
   // Ctrl+K 打开命令面板，焦点落在面板输入框。
   // 首按带重试：AppLayout 的快捷键监听在异步初始化后注册（修复前），
@@ -55,7 +58,10 @@ test('面板打开后焦点漂移（外部聚焦）Esc 仍能关闭，且不误�
 
   await login(page)
   await page.goto('/ai-chat')
-  await expect(sessionSearch).toBeVisible()
+  // /ai-chat 首屏数据面较重（会话列表/分组/命令面板注册），冷 dev vite 下
+  // 会话搜索框出现可超 5s 默认等待——复跑两轮都在这一行翻车（:16/:51 互换），
+  // 显式放宽到 30s。
+  await expect(sessionSearch).toBeVisible({ timeout: 30_000 })
 
   // 首按带重试（同上，容忍修复前监听器注册晚于首屏可见的冷启动竞态）
   await expect(async () => {

@@ -62,6 +62,12 @@ export async function seedFitAttempt(trace: string[]): Promise<FitSeed> {
   const defName = sharedDefName
   dbSeed(`INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, source, path, content_hash)
           VALUES ('${newId('man_')}', '${attemptId}', 'skill', '${defName}', 'session', '${defPath.replace(/\\/g, '/')}', '${hash}')`)
+  // 拟合门槛（skill_fit.compute_attempt_fit，2026-10-12）：kind='skill' 的
+  // manifest 只有在 ai_skill_invocations 里存在 source='runtime' 的调用证据
+  // 才参与拟合，否则被静默过滤、recompute 不出结果行。种子是直插 DB 的合成
+  // attempt，不会经历插件上报链路，必须自己补这条「运行时确认调用」证据行。
+  dbSeed(`INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level)
+          VALUES ('${newId('inv_')}', '${sessionId}', '${attemptId}', '${defName}', '${hash}', 'runtime', 'direct')`)
   const ocSid = 'ses_' + crypto.randomBytes(6).toString('hex')
   for (const [i, tool] of trace.entries()) {
     dbSeed(`INSERT INTO agent_tool_calls (oc_session_id, root_session_id, part_id, tool, args_text, state, occurred_at)

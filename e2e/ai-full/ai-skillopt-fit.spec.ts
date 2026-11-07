@@ -93,6 +93,10 @@ test('TC-FIT-03 回写→自动归档→回滚：sha256 自洽、虚假版本零
   // 按该名观测，断言强度不变。
   const pathDefName = path.basename(path.dirname(a.path))
   dbSeed(`UPDATE ai_execution_manifests SET name='${pathDefName}' WHERE attempt_id='${a.attemptId}' AND kind='skill'`)
+  // 调用证据行同步改名：compute_attempt_fit 的拟合门槛按 manifest.name 匹配
+  // ai_skill_invocations.skill_name（source='runtime'），只改 manifest 会被
+  // 门槛重新过滤掉、recompute 又不出结果行。
+  dbSeed(`UPDATE ai_skill_invocations SET skill_name='${pathDefName}' WHERE attempt_id='${a.attemptId}' AND skill_name='${a.defName}'`)
   const versionsOf = async () => (await api(request, 'get',
     `/ai/chat/admin/skill-def-versions?defKind=skill&defName=${pathDefName}`)).json.versions
   try {

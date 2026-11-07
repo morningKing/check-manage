@@ -69,8 +69,10 @@ test('版本时间线：内容预览/相邻对比/未归档置灰', async ({ pag
     const defItem = page.locator('.fit-def', { hasText: NAME }).first()
     await defItem.waitFor({ state: 'visible', timeout: 30_000 })
     await defItem.click()
-    // 版本演进子标签
-    await page.getByRole('tab', { name: '版本演进' }).click()
+    // 版本历史折叠面板（问题导向布局改版后，时间线从「版本演进」页签迁入
+    // FitWorkspace 的 ElCollapseItem「版本历史（N 个）」；DefVersionTimeline
+    // 根节点 .vt 与内部动作不变）
+    await page.locator('.el-collapse-item__header', { hasText: '版本历史' }).click()
     const timeline = page.locator('.vt')
     await expect(timeline).toBeVisible()
     // 两个已归档版本的标注可见。标注经 ElInput 渲染为行内输入框的值
