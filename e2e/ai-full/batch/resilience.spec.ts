@@ -210,8 +210,22 @@ test('进程级：worker 运行中重启 → 租约接管 → 批继续收敛（
       const c = (await getDetail(tk, bid)).sessions[0]
       return c.status === 'running' ? c : null
     }, 180_000, 'running 中重启（先确认真实 running）')
+    // main 语义（batch_engine claim 流水线）：claim 只置 status='running'，
+    // oc 会话（create_session → _set_opencode_id）与 attempt 行
+    // （execution_audit.create_attempt）由 worker 拾起后才依次物化。
+    // restart 若落在该窗口内，对账按恢复决策表走 requeue_fresh 分叉
+    // （oc=NULL → 原样重排全新执行），attempt 链只有 1 行——那是另一种
+    // 合法接管形态，但不是本用例要验的「执行中途失联」。等 attempt 行
+    // 物化（= oc 会话已建、attempt 已登记）再杀 worker，restart 才落在
+    // 决策表的 requeue_continue 分支上，下面的链血缘断言才有语义。
+    await waitFor(async () => {
+      const a = (await (await fetch(`${API}/ai/chat/batches/${bid}/attempts`,
+        { headers: authHeaders(tk) })).json()).attempts
+      return a.length >= 1 ? a : null
+    }, 120_000, 'attempt 行物化（等 create_session/create_attempt 完成再失联）')
     await restartBackend()   // 无特殊 env：老进程被 kill，新进程接管
-    // 接管链路：租约 TTL 90s 过期 → 对账 tick（60s）→ requeue_continue → 认领续跑
+    // 接管链路：租约 TTL 90s 过期 → 对账 tick（60s）→ oc 活着+回合已空闲 →
+    // requeue_continue → 认领续跑
     const final = await waitBatchTerminal(tk, bid, 480_000)
     expect(final.batch.status).toBe('completed')
     // 无双执行强证据：attempt 链单线血缘——首 attempt 被对账收口为
