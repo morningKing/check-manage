@@ -1738,6 +1738,10 @@ def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_pat
 
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     monkeypatch.setattr('ai.batch.engine.runner.opencode_client', fake_oc)
+    # 拆分后四个叶子各自绑定 opencode_client（T6 叶级 patch 约定）：
+    # agent 非空时 _run_one→_check_agent 走 gates 的绑定，漏传会打真客户端。
+    monkeypatch.setattr('ai.batch.engine.gates.opencode_client', eng.runner.opencode_client)
+    monkeypatch.setattr('ai.batch.engine.worker.opencode_client', eng.runner.opencode_client)
     monkeypatch.setattr('ai.batch.engine.subtasks.opencode_client', eng.runner.opencode_client)
 
     worker = eng.BatchWorker()
