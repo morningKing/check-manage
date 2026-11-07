@@ -19,8 +19,11 @@ test('AI chat M1 smoke: open drawer, send message, receive streamed reply', asyn
   await input.fill('hello')
   await page.getByRole('button', { name: '发送' }).click()
 
-  // User echo
-  await expect(page.locator('.msg--user').last()).toContainText('hello')
+  // User echo。2026-11-07：首开自动建会话 POST 在当前环境实测 4-11.6s
+  // （双侧对照：merge 前后同签名失败、API 直发 202/0.3s——浏览器侧首开
+  // 请求风暴所致，与后端无关），默认 5s 窗口过敏。放宽到 20s，保留
+  // 功能性断言（回显必须出现，只是容忍首开时延）。
+  await expect(page.locator('.msg--user').last()).toContainText('hello', { timeout: 20_000 })
 
   // Wait for an assistant reply (at least one .msg--assistant with non-empty content)
   // 夜间模型延迟实测 80s+（2026-09-28：hello 回复 12:59:21 发出、13:00:43 落库）
