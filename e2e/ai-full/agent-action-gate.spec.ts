@@ -235,12 +235,16 @@ test('双保险:提示词不可满足→终态核对 fail→gate_retry 修正(�
     expect(Number(rc[0][0]), '修正轮应消耗 retry_count≥1').toBeGreaterThanOrEqual(1)
 
     // 韧性断言(断言「门禁参与判定」本身,不锁定模型最终是否补齐):
-    // completed = 修正轮后 assert 被满足(终态核对放行);
-    // failed    = 两轮都不过(终态兜底拦截,带 action_gate 明细)。
+    // completed = 修正轮后 assert 被满足(终态核对放行,gate_passed≥1)
+    //             或两轮都不过(2026-11-01 裁定:核对不过不终局,会话照常
+    //             completed,gate_status=failed 由 gate_failed≥1 呈现);
+    // failed    = fail-closed 兜底(核对无法证实,仍走 failed+action_gate)。
     expect(['completed', 'failed']).toContain(final.batch.status)
     if (final.batch.status === 'completed') {
       expect(child.status).toBe('completed')
-      expect(child.gate_passed).toBeGreaterThanOrEqual(1)
+      expect(child.gate_passed + child.gate_failed,
+        `门禁终判应已记录(passed=${child.gate_passed} failed=${child.gate_failed})`)
+        .toBeGreaterThanOrEqual(1)
     } else {
       expect(child.status).toBe('failed')
       expect(String(child.error_message || '')).toContain('action_gate')
