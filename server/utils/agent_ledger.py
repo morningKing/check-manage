@@ -599,9 +599,28 @@ def validate_checks(checks) -> list:
                 raise ValueError(f'action_checks[{i}].rubric 必填(verifier 类型)')
             if len(rubric) > 2000:
                 raise ValueError(f'action_checks[{i}].rubric 超长(>2000 字)')
+            # 机械复核标记（2026-11-08 护栏，可选声明）：判官 pass 时逐标记
+            # 复核判官材料，标记不在 → 强制 failed（utils.verifier.
+            # _mechanical_recheck）。归一：strip 逐项、去空；归一后为空视为未
+            # 声明；落库形状（effect_spec.markers）再次校验必须幂等。
+            markers = c.get('markers')
+            if markers is None:
+                markers = espec.get('markers')
+            if markers is not None:
+                if not isinstance(markers, list) or len(markers) > 10 \
+                        or any(not isinstance(m, str) or len(m.strip()) > 200
+                               for m in markers):
+                    raise ValueError(
+                        f'action_checks[{i}].markers 必须是不超过 10 个、'
+                        '每项不超过 200 字的字符串数组')
+                markers = [m.strip() for m in markers if m.strip()]
+            else:
+                markers = []
             tool = 'verifier'   # NOT NULL 列：沿袭 file/db_record 的 tool=check_type 惯例
             pattern = ''
             effect_spec = {'rubric': rubric}
+            if markers:
+                effect_spec['markers'] = markers
             min_count = 1
         elif check_type == 'tool':
             if not tool or len(tool) > 50:

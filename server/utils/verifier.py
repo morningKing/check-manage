@@ -123,6 +123,17 @@ def _group_key(subagents) -> tuple:
     return tuple(sorted({str(a).strip() for a in subagents if str(a).strip()}))
 
 
+def check_row(name, effect_spec) -> dict:
+    """期望行 → 判官核对条目：rubric + 可选机械复核 markers（effect_spec 声明
+    「材料须含标记」的结构化字段，validate_checks 归一落库）。collect_materials
+    与 batch_engine 委派级门禁共用本构造——形状漂移会让护栏在委派路径失效。"""
+    spec = effect_spec or {}
+    row = {'name': name, 'rubric': spec.get('rubric', '')}
+    if spec.get('markers'):
+        row['markers'] = list(spec['markers'])
+    return row
+
+
 def collect_materials(session_id: str, get_db=None):
     """组装判官材料并按核对粒度分组。无 verifier 期望 → None（零开销跳过）。
 
@@ -148,8 +159,7 @@ def collect_materials(session_id: str, get_db=None):
             buckets: dict = {}
             for name, effect_spec, subagents in rows:
                 key = _group_key(subagents)
-                buckets.setdefault(key, []).append(
-                    {'name': name, 'rubric': (effect_spec or {}).get('rubric', '')})
+                buckets.setdefault(key, []).append(check_row(name, effect_spec))
 
             groups = []
             for key, checks in buckets.items():
@@ -290,6 +300,43 @@ def _verdict_row(name, verdict, reasons, evidence, agent):
             'min_count': 1, 'effect_spec': None, 'agent': agent}
 
 
+def _group_material_text(group: dict) -> str:
+    """机械复核搜索语料：判官材料全文（最终回复 / 子代理消息 / 轨迹 args），
+    不含期望 rubric 自身——rubric 里写了标记字样不算「出现在材料」。"""
+    parts = [group.get('reply') or '']
+    for seg in group.get('subagent_segments') or []:
+        for m in seg.get('messages') or []:
+            parts.append(m.get('text') or '')
+    parts.extend(t.get('args') or '' for t in group.get('trace') or [])
+    return '\n'.join(parts)
+
+
+def _mechanical_recheck(group: dict, results: list) -> None:
+    """判官 pass 的机械复核护栏（2026-11-08，fail-closed）：期望声明了
+    markers（effect_spec 结构化字段，可机械判定「材料须含标记」）而判官给
+    passed 时，逐标记复核材料全文——标记不在 → 强制 failed。机械事实优先于
+    LLM 结论（设计原则）；只收紧不放宽：LLM failed 一律不动，无 markers 的
+    纯语义期望完全不碰（判官判定权不变）。终态核对与委派级门禁同经
+    _run_group，护栏在两条路径同等生效。"""
+    by_name = {c['name']: c for c in group['checks']}
+    material = None
+    for r in results:
+        markers = (by_name.get(r['name']) or {}).get('markers')
+        if not markers or r.get('status') != 'passed':
+            continue
+        if material is None:
+            material = _group_material_text(group)
+        missing = [m for m in markers if m not in material]
+        if not missing:
+            continue
+        r['status'] = 'failed'
+        r['reasons'] = [f'机械复核否决判官 pass（标记 {m} 未出现在判官材料：'
+                        f'回复/轨迹/子代理消息）' for m in missing] \
+            + list(r.get('reasons') or [])
+        log.warning('verifier mechanical recheck overrode judge pass: '
+                    'name=%s missing=%s', r['name'], missing)
+
+
 def _all_inconclusive(names, reason, agent=None):
     return [_verdict_row(n, 'inconclusive', [reason], '', agent) for n in names]
 
@@ -387,6 +434,7 @@ def _run_group(oc, group: dict, workspace_path, model: str, session_id: str,
                 'results': parsed['results'] + _all_inconclusive(
                     parsed['unresolved'], 'verifier 未覆盖该期望（缺名）',
                     agent_tag)}
+    _mechanical_recheck(group, parsed['results'])
     for r in parsed['results']:
         r['agent'] = agent_tag
     return {'error': None, 'results': parsed['results']}
