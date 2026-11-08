@@ -84,7 +84,7 @@ export class BatchEventStream {
     const es = new EventSource(url)
     this.es = es
     es.onopen = () => this.handlers.onOpen?.()
-    es.onmessage = (ev: MessageEvent) => {
+    const onFrame = (ev: MessageEvent) => {
       if (this.closed) return
       const idLine = (ev as MessageEvent & { lastEventId?: string }).lastEventId || ''
       const parsed = parseSseId(idLine)
@@ -99,6 +99,21 @@ export class BatchEventStream {
       if (doc.eventSeq) this.lastSeqByBatch.set(doc.batchId, doc.eventSeq)
       this.handlers.onEvent?.(doc.batchId, doc)
     }
+    // 服务端发的是命名帧（`event: batch_event` / `event: batch_done`）——
+    // EventSource 契约里命名事件只投递给同名 addEventListener，onmessage 只收
+    // 缺省 message 帧。原先只挂 onmessage，推送通道整体哑火（R2 e2e 定位：
+    // 徽标更新实际全靠 10s 轮询兜底）。命名监听 + onmessage 兼容旧裸帧。
+    es.addEventListener('batch_event', onFrame as EventListener)
+    es.addEventListener('batch_done', (ev: Event) => {
+      if (this.closed) return
+      // 终态收流帧：data = {"statuses": {batchId: status, ...}}（无 id 行）
+      try {
+        const data = (ev as MessageEvent).data || '{}'
+        const statuses = (JSON.parse(data)?.statuses ?? {}) as Record<string, string>
+        for (const bid of Object.keys(statuses)) this.handlers.onDone?.(bid)
+      } catch { /* 非法帧忽略 */ }
+    })
+    es.onmessage = onFrame
     es.onerror = () => {
       if (this.closed) return
       // EventSource 自动重连（带 Last-Event-ID，由浏览器维护）
