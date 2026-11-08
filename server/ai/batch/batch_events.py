@@ -96,6 +96,37 @@ def read_events(batch_id: str, *, after_seq: int = 0, limit: int = 200) -> list[
     return rows
 
 
+def read_events_many(batch_ids: list[str], after_seq_by_batch: dict[str, int],
+                     limit: int = 400) -> list[dict]:
+    """多批次合并增量读取（SSE 推送通道专用）。
+
+    一条查询（一次借连接）替代逐批 read_events 的 N 次借用——SSE 生成器把
+    事件拾取节拍提到 1s 时（见 routes.ai_chat_batches.batch_events_sse），
+    逐批读的借连接率会随订阅数线性放大；合并后每次 tick 恒定一次借用，
+    不高于旧 15s 节拍 × 逐批读的峰值。单批超过 limit 时剩余事件下一 tick
+    续读（游标按已返回行推进，不丢不重）。
+    """
+    if not batch_ids:
+        return []
+    from db import get_db
+    values = ", ".join(["(%s::text, %s::bigint)"] * len(batch_ids))
+    params: list = []
+    for bid in batch_ids:
+        params.extend([bid, int(after_seq_by_batch.get(bid, 0))])
+    params.append(limit)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT e.batch_id, e.event_seq, e.event_type, e.payload "
+                f"FROM ai_batch_events e JOIN (VALUES {values}) AS c(bid, seq) "
+                "ON e.batch_id = c.bid AND e.event_seq > c.seq "
+                "ORDER BY e.batch_id, e.event_seq LIMIT %s",
+                params,
+            )
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
 def latest_seq(batch_id: str) -> int:
     from db import get_db
     with get_db() as conn:

@@ -223,14 +223,16 @@ class WorkerGatesMixin:
                 for st_id, _info in targets:
                     done[(st_id, session_id)] = True
                 return
-            # 按 subagents 名单组合分组（与 run_verifier 的分组口径一致）
+            # 按 subagents 名单组合分组（与 run_verifier 的分组口径一致；
+            # 条目构造共用 verifier.check_row——机械复核 markers 随行，护栏
+            # 在委派级判定同样生效）
+            from ai.batch import verifier as _v
             buckets: dict = {}
             for name, effect_spec, subagents in rows:
                 key = tuple(sorted({str(a).strip() for a in (subagents or []) if str(a).strip()}))
                 if key == (None,):
                     continue                      # 全树组：终态收尾统一核对
-                buckets.setdefault(key, []).append(
-                    {'name': name, 'rubric': (effect_spec or {}).get('rubric', '')})
+                buckets.setdefault(key, []).append(_v.check_row(name, effect_spec))
             if not buckets:
                 for st_id, _info in targets:
                     done[(st_id, session_id)] = True
@@ -250,7 +252,6 @@ class WorkerGatesMixin:
                         continue                  # 已核对过
                     group = {'agents': key, 'checks': checks,
                              'subagent_segments': [], 'trace': []}
-                    from ai.batch import verifier as _v
                     # 材料组装（spec §4 定向组口径，同 verifier.collect_materials
                     # 的查询/截断上限；渲染走 build_verifier_prompt，形状必须与
                     # 终态路径一致）。此前两键恒为空——判官拿到的材料是空的

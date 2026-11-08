@@ -366,12 +366,19 @@ export const useAiChatStore = defineStore('aiChat', {
       }))
     },
 
-    /** 侧边栏状态图标的数据源：整体替换，轮询失败静默（保留旧值，下轮收敛）。 */
+    /** 侧边栏状态图标的数据源：整体替换，轮询失败静默（保留旧值，下轮收敛）。
+     * 集合未变时跳过赋值——5s 轮询每次都以新对象身份替换会让整个 AiChatView
+     * （3100 行单组件）每 5s 全量重渲染一次（e2e 实测每次 ~2.2s 主线程冻结，
+     * 实时 UI（错误卡/徽标/SSE 流）被系统性推迟）。 */
     async refreshRunningSessions() {
       try {
         const { runningSessionIds } = await getRunningSessions()
         const next: Record<string, boolean> = {}
         for (const id of runningSessionIds || []) next[id] = true
+        const cur = this.runningSessions
+        const curIds = Object.keys(cur)
+        const nextIds = Object.keys(next)
+        if (curIds.length === nextIds.length && nextIds.every(id => cur[id])) return
         this.runningSessions = next
       } catch { /* 指示器尽力而为，不打扰用户 */ }
     },

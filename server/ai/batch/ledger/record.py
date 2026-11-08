@@ -357,9 +357,35 @@ def validate_checks(checks) -> list:
                 raise ValueError(f'action_checks[{i}].rubric 必填(verifier 类型)')
             if len(rubric) > 2000:
                 raise ValueError(f'action_checks[{i}].rubric 超长(>2000 字)')
+            # 机械复核标记（2026-11-08 护栏，可选声明）：判官 pass 时逐标记
+            # 复核判官材料，标记不在 → 强制 failed（ai.batch.verifier.
+            # _mechanical_recheck）。归一：strip 逐项、去空；归一后为空视为未
+            # 声明；落库形状（effect_spec.markers）再次校验必须幂等。
+            # 契约（2026-11-08 审查补记，两点）：① 复核语料是「判官材料全文」
+            # （最终回复 ≤8000 字 / 子代理消息 40 条×每条 500 字 / 轨迹 args
+            # 100 行×每行 200 字，均按上限截断取文），≠ 判官取证范围（判官可
+            # 另读文件等更多证据）且该差异未告知判官——标记必须落在判官材料
+            # 文本内（且在上述截断限度内完整可见），否则判官凭材料外证据
+            # （如文件内容）给的 pass 会被复核必然否决；② 匹配是大小写敏感的
+            # 精确子串——标记字面须与材料逐字（含大小写）一致出现。
+            markers = c.get('markers')
+            if markers is None:
+                markers = espec.get('markers')
+            if markers is not None:
+                if not isinstance(markers, list) or len(markers) > 10 \
+                        or any(not isinstance(m, str) or len(m.strip()) > 200
+                               for m in markers):
+                    raise ValueError(
+                        f'action_checks[{i}].markers 必须是不超过 10 个、'
+                        '每项不超过 200 字的字符串数组')
+                markers = [m.strip() for m in markers if m.strip()]
+            else:
+                markers = []
             tool = 'verifier'   # NOT NULL 列：沿袭 file/db_record 的 tool=check_type 惯例
             pattern = ''
             effect_spec = {'rubric': rubric}
+            if markers:
+                effect_spec['markers'] = markers
             min_count = 1
         elif check_type == 'tool':
             if not tool or len(tool) > 50:

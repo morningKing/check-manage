@@ -949,47 +949,60 @@ def batch_events_sse():
                 except ValueError:
                     pass
         deadline = _time.time() + 30 * 60
+        # 双节拍：事件拾取 1s / ping+终态检查 15s。M11（d5a03473）把整个循环
+        # 统一到 15s 盲等压 DB 池，代价是推送拾取时延均值 +7.5s——前端契约是
+        # 「SSE 推送先于 10s 列表轮询刷新徽标」（aiChatBatches.subscribeListEvents
+        # 防抖 3s + worker 落事件 ~4.5s，留给拾取的窗口 ~1.7s），15s 盲等下该
+        # 契约在相位上不可能达成（ui-journeys 用例9 三轮全量 2/3 超窗）。
+        # 2026-10-09（9c4736c6）已把单次 tick 瘦身为「一条状态 IN 查询」；此处
+        # 事件读再合并成单查询（batch_events.read_events_many，一次借用），1s
+        # 节拍的借连接率（1/2s·连接）不高于旧 15s × 逐批读的峰值，拾取时延
+        # 回到 ≤1s。终态检查/ping 维持 15s 低频（只为收流，不影响时延契约）。
+        event_tick = 1.0
+        slow_tick = 15.0
+        last_slow = 0.0
         while _time.time() < deadline:
             # 池饥饿降级（压测发现：大量 SSE 同相位 tick 瞬时借满连接池时，
             # 不处理会把 PoolError 抛进生成器直接断流/500）——本轮跳过等下一
             # tick，游标未动故事件不丢；get_db 自身已有 1s 排队等待。
             try:
-                for bid in owned:
-                    rows = batch_events.read_events(bid, after_seq=after[bid],
-                                                    limit=200)
-                    for r in rows:
-                        after[bid] = r['event_seq']
-                        frame = {'eventId': f"{bid}:{r['event_seq']}",
-                                 'eventSeq': r['event_seq'],
-                                 'type': r['event_type'],
-                                 'data': r.get('payload') or {}}
-                        yield (f"id: {bid}:{r['event_seq']}\n"
-                               f"event: batch_event\n"
-                               f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
-                # 终态检查：全部批次终态 → batch_done 收流。一条 IN 查询取
-                # status 列（2026-10-09）：原先逐批调 get_batch_detail——每
-                # 15s tick ×每连接 ×N 个批次地全量扫子会话 + gate 子查询，
+                rows_all = batch_events.read_events_many(owned, after, limit=400)
+                for r in rows_all:
+                    bid = r['batch_id']
+                    after[bid] = r['event_seq']
+                    frame = {'eventId': f"{bid}:{r['event_seq']}",
+                             'eventSeq': r['event_seq'],
+                             'type': r['event_type'],
+                             'data': r.get('payload') or {}}
+                    yield (f"id: {bid}:{r['event_seq']}\n"
+                           f"event: batch_event\n"
+                           f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
+                # 终态检查：全部批次终态 → batch_done 收流（慢节拍）。一条 IN
+                # 查询取 status 列（2026-10-09）：原先逐批调 get_batch_detail
                 # 是 DB 池同相位瞬时借满的主源。缺失行（批次已删）按
                 # completed 收流，语义与旧代码一致。
-                from db import get_db as _gdb
-                with _gdb() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT id, status FROM ai_chat_batches "
-                                    "WHERE id = ANY(%s) AND user_id = %s",
-                                    (owned, user_id))
-                        status_map = dict(cur.fetchall())
-                statuses = [status_map.get(bid, 'completed') for bid in owned]
+                statuses = None
+                if _time.time() - last_slow >= slow_tick:
+                    last_slow = _time.time()
+                    from db import get_db as _gdb
+                    with _gdb() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT id, status FROM ai_chat_batches "
+                                        "WHERE id = ANY(%s) AND user_id = %s",
+                                        (owned, user_id))
+                            status_map = dict(cur.fetchall())
+                    statuses = [status_map.get(bid, 'completed') for bid in owned]
+                    yield ': ping\n\n'
             except psycopg2.pool.PoolError:
                 yield ': pool-busy\n\n'
-                _time.sleep(15)
+                _time.sleep(slow_tick)
                 continue
             if statuses and all(st in ('completed', 'partial', 'failed')
                                 for st in statuses):
                 done_frame = _json.dumps({'statuses': dict(zip(owned, statuses))})
                 yield f"event: batch_done\ndata: {done_frame}\n\n"
                 return
-            yield ': ping\n\n'
-            _time.sleep(15)
+            _time.sleep(event_tick)
 
     resp = Response(stream_with_context(generate()),
                     mimetype='text/event-stream')

@@ -23,6 +23,10 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
 
   async function fetchList() {
     const { items: rows } = await api.listBatches()
+    // 内容未变时跳过赋值：10s 轮询 + SSE 防抖刷新都会走这里，无差别替换
+    // items 让 AiChatView（3100 行单组件）整树重渲染——实测每次 ~2.2s 主线程
+    // 冻结，徽标/错误卡等实时 UI 被系统性推迟（R2 e2e 复测定位）。
+    if (JSON.stringify(rows) === JSON.stringify(items.value)) return
     items.value = rows
   }
 

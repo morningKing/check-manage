@@ -64,6 +64,9 @@ test.setTimeout(1_200_000)
 interface RunOpts {
   prompt: string
   rubric: string
+  /** 机械复核标记（护栏数据源）：判官 pass 时逐标记复核判官材料，缺失即
+   * 强制 failed——见 utils/verifier._mechanical_recheck（2026-11-08）。 */
+  markers?: string[]
   gateRetry?: boolean
 }
 
@@ -71,6 +74,8 @@ interface RunResult {
   status: string
   errMsg: string
   gateRetried: boolean
+  gateStatus: string | null
+  gateError: string | null
 }
 
 async function runVerifierBatch(token: string, opts: RunOpts): Promise<RunResult> {
@@ -80,7 +85,8 @@ async function runVerifierBatch(token: string, opts: RunOpts): Promise<RunResult
     name: `AITEST-vf-e2e-${Date.now()}`,
     prompt: opts.prompt,
     gate_retry: opts.gateRetry ?? false,
-    action_checks: [{ name: '语义核对', check_type: 'verifier', rubric: opts.rubric }],
+    action_checks: [{ name: '语义核对', check_type: 'verifier', rubric: opts.rubric,
+                      ...(opts.markers ? { markers: opts.markers } : {}) }],
     files: [file],
   })
   const bid = d.batch.id as string
@@ -93,7 +99,13 @@ async function runVerifierBatch(token: string, opts: RunOpts): Promise<RunResult
         // 终态即取 attempt 链：批删除（finally）后就查不到了
         const att = await (await fetch(`${API}/ai/chat/batches/${bid}/attempts`, { headers: HDRS })).json()
         const gateRetried = (att.attempts as any[]).some(a => (a.error_code || '') === 'GATE_RETRY')
-        return { status: s.status, errMsg: String(s.error_message || ''), gateRetried }
+        // 门禁终判在 gate 通道（gate_status/gate_error，管理面只读出口）——
+        // 2026-11-01 裁定后 error_message 不再承载门禁失败明细
+        const gate = await (await fetch(
+          `${API}/ai/chat/admin/batches/${bid}/sessions/${s.id}/gate`,
+          { headers: HDRS })).json()
+        return { status: s.status, errMsg: String(s.error_message || ''), gateRetried,
+                 gateStatus: gate.gateStatus ?? null, gateError: gate.gateError ?? null }
       }
       await new Promise(rr => setTimeout(rr, 3000))
     }
@@ -114,16 +126,22 @@ test('verifier 门禁：达标 → completed 无失败', async ({ }, testInfo) =
   expect(r.errMsg).not.toContain('action_gate')
 })
 
-test('verifier 门禁：不达标 → failed 且 error_message 带判官理由', async ({ }, testInfo) => {
+test('verifier 门禁：不达标 → 判官拦截，completed + 门禁失败明细可见', async ({ }, testInfo) => {
   testInfo.annotations.push({ type: 'llm' })
   const token = await adminToken()
   const r = await runVerifierBatch(token, {
     prompt: '把 uploads/in.txt 的原文完整复述一遍,不要做其他事。',
     rubric: '最终回复必须包含字符串 VERIFIER-NO-MARK-XYZ(正常任务不可能满足,用于验证判官拦截)。',
+    // 标记期望机械复核护栏（fail-closed）：标记根本不可能出现在材料里，
+    // 即便判官漂移误判 pass 也会被机械复核强制 failed——拦截不依赖判官情绪
+    markers: ['VERIFIER-NO-MARK-XYZ'],
   })
-  expect(r.status).toBe('failed')
-  expect(r.errMsg).toContain('action_gate')
-  expect(r.errMsg).toContain('判官未通过')
+  // 2026-11-01 用户裁定：核对不过不终局——会话照常 completed（done 桶），
+  // 门禁失败明细在 gate_status/gate_error（管理面 gate 出口 + 侧栏徽标）
+  expect(r.status).toBe('completed')
+  expect(r.gateStatus).toBe('failed')
+  expect(r.gateError).toContain('action_gate')
+  expect(r.gateError).toContain('判官未通过')
 })
 
 test('verifier 门禁：gate_retry 闭环——判官理由驱动修复续跑后通过', async ({ }, testInfo) => {
@@ -427,7 +445,7 @@ async function gotoChat(page: Page): Promise<void> {
   await sidebar.waitFor({ state: 'visible', timeout: 60_000 })
 }
 
-test('gate fail：哨兵动作无命中 → failed + action_gate 明细 + 侧栏「门禁 ×1」徽标',
+test('gate fail：哨兵动作无命中 → 门禁拦截（completed+gate 明细）+ 侧栏「门禁 ×1」徽标',
      async ({ page }, testInfo) => {
   testInfo.annotations.push({ type: 'llm' })   // 1 个真实子会话（prompt 回 OK 即终）
   const tk = await adminTokenCached()
@@ -448,11 +466,18 @@ test('gate fail：哨兵动作无命中 → failed + action_gate 明细 + 侧栏
   expect(batchId).toBeTruthy()
   try {
     const final = await waitBatchTerminal(tk, batchId, 480_000, 5000)
-    expect(final.batch.status).toBe('failed')  // 哨兵正则必然无命中 → 门禁不过
+    // 2026-11-01 用户裁定：核对不过不终局——哨兵正则必然无命中 → 门禁
+    // failed，但会话照常 completed（done 桶）；失败明细在 gate 通道
+    expect(final.batch.status).toBe('completed')
     const child = final.sessions[0]
-    expect(child.status).toBe('failed')
-    expect(child.error_message).toContain('action_gate')
-    expect(child.error_message).toContain('读取哨兵文件')
+    expect(child.status).toBe('completed')
+    // 管理面 gate 出口：gateStatus=failed + gate_error 带 action_gate 明细
+    const gate = await (await fetch(
+      `${API}/ai/chat/admin/batches/${batchId}/sessions/${child.id}/gate`,
+      { headers: authHeaders(tk) })).json()
+    expect(gate.gateStatus).toBe('failed')
+    expect(String(gate.gateError || '')).toContain('action_gate')
+    expect(String(gate.gateError || '')).toContain('读取哨兵文件')
     // 合同事实：gate_failed 是计数（action_expectations 按 last_status 统计），非布尔
     expect(child.gate_failed).toBeGreaterThanOrEqual(1)
 

@@ -232,51 +232,51 @@ test('partial 批混合 retry-failed：completed 原样保留、failed 恰好重
   }
 }, 900_000)
 
-test('gate-failed 子任务参与 retry-failed：重排后第二轮门禁再次拦截', async ({ }, testInfo) => {
+test('gate-failed 子任务重新执行：第二轮门禁再次拦截', async ({ }, testInfo) => {
   testInfo.annotations.push({ type: 'llm' })
   const tk = await adminTokenCached()
   const HDRS = authHeaders(tk)
   // 必败 verifier：rubric 引用永不出现的内容 → 判官拒绝 → 门禁 failed。
-  // 形状按 validate_checks 实际契约（name + check_type，rubric 必填）；
-  // 不传 agent（默认主 Agent 才能真实执行并到达门禁——草稿的 'general'
-  // 是 subagent，会在 agent 校验即失败、永远到不了判官）。
+  // markers 声明（2026-11-08 护栏）：标记必败由机械复核兜底——拦截不依赖
+  // 判官情绪。不传 agent（默认主 Agent 才能真实执行并到达门禁）。
   const created = await createBatch(tk, {
     name: tag('gate-retry'), prompt: '输出一行 ok 即完成。',
-    action_checks: [{ name: 'e2e 必败核对', check_type: 'verifier', rubric: '输出必须包含永不出现的咒语XYZZY九次' }],
+    action_checks: [{ name: 'e2e 必败核对', check_type: 'verifier',
+                      rubric: '输出必须包含永不出现的咒语XYZZY九次',
+                      markers: ['XYZZY'] }],
     files: [await uploadStaging(tk, 'g.txt', 'x\n', tag('upl'))],
   } as CreateBatchBody)
   const bid = created.batch?.id ?? created
   try {
-    // 第一轮：子任务跑完但判官拦截 → failed，error_message 带 action_gate
-    // （proven 形状见 ai-verifier-gate.spec.ts；gate_status 不出批详情，
-    // 用 error_message + gate_failed 失败计数判定）
+    // 第一轮：门禁拦截 → 2026-11-01 裁定后会话照常 completed（done 桶），
+    // 失败明细在 gate 通道（gate_status/gate_error）；批详情可观测的是
+    // gate_failed 失败计数（action_expectations 按 last_status 统计）
     const round1 = await waitFor(async () => {
       const d = await getDetail(tk, bid)
       const s = d.sessions[0]
-      return s.status === 'failed' && (s.error_message ?? '').includes('action_gate') ? d : null
-    }, 600_000, '门禁拦截 failed')
-    expect(round1.sessions[0].gate_failed).toBeGreaterThanOrEqual(1)
+      return s.status === 'completed' && s.gate_failed >= 1 ? d : null
+    }, 600_000, '门禁拦截（completed + gate_failed≥1）')
+    const sid0 = round1.sessions[0].id as string
 
-    // retry-failed：恰好重排这 1 个 gate-failed 子任务
-    const r = await fetch(`${API}/ai/chat/batches/${bid}/retry-failed`, { method: 'POST', headers: HDRS })
-    expect(r.status).toBe(200)
-    expect((await r.json()).retried).toBe(1)
-    // 草稿的 retry_count>=1 断言不可观测也不成立（详情不出该字段；retry-failed
-    // 全新一轮语义将其归零，batch_repo.py:1100）——改断言可观测等价不变量：
-    // 重排后子任务脱离 failed（pending，或被 worker 抢先认领为 running），
-    // 上一轮门禁失败计数随期望重建清零
+    // 重排通道：retry-failed 只动 failed/needs_review 桶——gate-failed 子
+    // 落 done 桶后由按会话「重新执行」承担同等语义（全新一轮：清消息/
+    // 账本/门禁期望，期望由派发按批定义重新登记）
+    const r = await fetch(`${API}/ai/chat/batches/${bid}/sessions/${sid0}/reexecute`,
+      { method: 'POST', headers: HDRS })
+    expect(r.status).toBeLessThan(300)
+    // 重排后脱离 completed（pending，或被 worker 抢先认领为 running）
     await waitFor(async () => {
       const redetail = await getDetail(tk, bid)
       const s = redetail.sessions[0]
       return ['pending', 'running'].includes(s.status) ? redetail : null
-    }, 30_000, '重排后子任务脱离 failed')
+    }, 30_000, '重排后子任务脱离 completed')
 
     // 第二轮：门禁再次拦截（期望由 batch.action_checks 重新登记并再次失败）
     const round2 = await waitFor(async () => {
       const d = await getDetail(tk, bid)
       const s = d.sessions[0]
-      return s.status === 'failed' && (s.error_message ?? '').includes('action_gate') ? d : null
-    }, 600_000, '第二轮门禁再次 failed')
+      return s.status === 'completed' && s.gate_failed >= 1 ? d : null
+    }, 600_000, '第二轮门禁再次拦截（completed + gate_failed≥1）')
     expect(round2.sessions[0].gate_failed).toBeGreaterThanOrEqual(1)
   } finally {
     await cleanupBatch(tk, bid)

@@ -149,6 +149,13 @@ html.dark {
       color: #141414;
     }
   }
+
+  /* radio-button 与上面 primary 按钮同一病灶：选中态实底是反转为近白的
+     --el-color-primary，但选中文字固定 var(--el-color-white)=白 → 白底白字
+     不可读。选中态文字同样换深色（未选中项底为透明，不在覆盖范围）。 */
+  .el-radio-button {
+    --el-radio-button-checked-text-color: var(--app-primary-contrast);
+  }
 }
 
 /* ==================== 紧凑模式：在基础态之上进一步收紧 ==================== */
