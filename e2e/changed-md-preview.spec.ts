@@ -45,11 +45,12 @@ test('变更文件 md 预览走富渲染（标题/表格成为 HTML 而非源码
   })
   const token = (await tokenRes.json()).token as string
   const authHdr = { Authorization: `Bearer ${token}` }
+  const seedTitle = `changed-md-seed-${Date.now()}`
 
   // 自建种子会话 + workspace 未跟踪 md（自建，不依赖共享会话）
   const created = await request.post('/api/ai/chat/sessions', {
     headers: authHdr,
-    data: { title: `changed-md-seed-${Date.now()}` },
+    data: { title: seedTitle },
   })
   const sid = (await created.json()).id as string
   const wsRoot = path.join(os.homedir(), '.check-manage', 'ai-workspaces',
@@ -57,15 +58,21 @@ test('变更文件 md 预览走富渲染（标题/表格成为 HTML 而非源码
   fs.mkdirSync(wsRoot, { recursive: true })
   fs.writeFileSync(path.join(wsRoot, MD_NAME), MD_CONTENT, 'utf-8')
 
-  await page.goto('/home')
-  const aiBtn = page.locator('button', { hasText: 'AI 助手' }).first()
-  await aiBtn.waitFor({ state: 'visible', timeout: 30_000 })
-  await aiBtn.click()
+  // ① 打开种子会话（深链 ?session=<sid>，批任务通知铃铛同一入口）——
+  //    变更文件面板是 activeId 级渲染（v-if="activeId"，activeChanges 取
+  //    store.changes[activeSessionId]），/ai-chat 无 ?session= 时挂载不自动
+  //    打开任何会话（restoreFromQuery 只在有 query 时 openSession；空态文案
+  //    「开启一个会话」即此设计）。66ac1db8 重写种子时丢掉了 5ea1b7a2 原版
+  //    的「选中目标会话」步骤，面板因此永不出现。不能点侧栏条目选中：
+  //    create_session 落库标题硬编码「新会话」（请求体 title 不入库），侧栏
+  //    里 551 个「新会话」无从定位——深链是打开指定会话的设计内通道，
+  //    openSession → loadChanges 以「新增」扫出未跟踪 md。
+  await page.goto(`/ai-chat?session=${sid}`)
   await page.getByPlaceholder(/给 AI 助手发消息/)
     .waitFor({ state: 'visible', timeout: 30_000 })
   await page.waitForTimeout(1200)
 
-  // ① 打开变更文件面板（新会话含未跟踪 md → 扫描后以「新增」出现）
+  // ② 打开变更文件面板（种子会话含未跟踪 md → 扫描后以「新增」出现）
   const row = page.locator('.change-file__row', { hasText: MD_NAME }).first()
   try {
     await row.waitFor({ state: 'visible', timeout: 8_000 })
@@ -74,7 +81,7 @@ test('变更文件 md 预览走富渲染（标题/表格成为 HTML 而非源码
     await row.waitFor({ state: 'visible', timeout: 15_000 })
   }
 
-  // ② 点「预览」→ diff 抽屉打开，默认「渲染预览」模式且 Markdown 排版渲染
+  // ③ 点「预览」→ diff 抽屉打开，默认「渲染预览」模式且 Markdown 排版渲染
   await row.getByRole('button', { name: '预览' }).click()
   const drawer = page.locator('.el-drawer').filter({ hasText: MD_NAME })
   await drawer.waitFor({ state: 'visible', timeout: 15_000 })
@@ -84,12 +91,12 @@ test('变更文件 md 预览走富渲染（标题/表格成为 HTML 而非源码
     .toBeVisible({ timeout: 15_000 })
   await expect(body.locator('table')).toBeVisible()
 
-  // ③ 切到「diff 对照」→ FileDiffView 源码态（渲染的 h1 消失）
+  // ④ 切到「diff 对照」→ FileDiffView 源码态（渲染的 h1 消失）
   await drawer.locator('[data-test="diff-mode-toggle"]').getByText('diff 对照').click()
   await expect(body.locator('.file-diff')).toBeVisible({ timeout: 10_000 })
   await expect(body.locator('h1', { hasText: H1_TEXT })).toHaveCount(0)
 
-  // ④ 切回「渲染预览」→ 排版恢复
+  // ⑤ 切回「渲染预览」→ 排版恢复
   await drawer.locator('[data-test="diff-mode-toggle"]').getByText('渲染预览').click()
   await expect(body.locator('h1', { hasText: H1_TEXT }))
     .toBeVisible({ timeout: 10_000 })
