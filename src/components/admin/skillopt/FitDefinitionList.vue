@@ -119,3 +119,11 @@ function isActive(d: SkillFitDefinitionSummary) {
   font-size: 12px; color: var(--el-text-color-secondary);
 }
 </style>
+
+<style lang="scss">
+/* 深色主题覆盖（非 scoped 独立块 + 显式前缀限定，主题全局态统一走全局块
+   的既定教训）：.fit-def 上 all:unset 后 color 走 inherit，一路继承到 body
+   的固定 $color-text-primary(#303133)，深色页底(#16181d)上对比度 1.36。
+   显式给主题文字色；浅色的继承行为不变，不在此覆盖。 */
+html.dark .fit-def__name { color: var(--el-text-color-primary); }
+</style>

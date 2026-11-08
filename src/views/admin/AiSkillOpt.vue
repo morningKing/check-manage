@@ -342,3 +342,17 @@ function fmtTime(v?: string | null) {
   .fit-layout__side { position: static; }
 }
 </style>
+
+<style lang="scss">
+/* 深色主题覆盖——按 PerfDiagnosisList 的教训放非 scoped 独立块、显式前缀
+   限定（scoped 块里的主题全局态覆盖有编译改写/丢失前科）。浅色保持上方
+   原样，不做任何改动。
+   1. 页根统一给主题文字色：body 的 color 是编译期固定的 $color-text-primary
+      (#303133)，本页大量无显式色的节点（fit-summary、DefOverview 名称/统计、
+      FitWorkspace 的 h3、perf 侧栏定义名）在深色页底上都继承到它，对比度
+      1.2~1.4 不可读；在根上换成主题变量后子树随主题（显式色的子元素不受影响）。
+   2. 标题色 #1a237e 是浅色主题的硬编码，深色页底上对比度 1.34。 */
+html.dark .skillopt { color: var(--el-text-color-regular); }
+html.dark .skillopt__title { color: var(--el-text-color-primary); }
+html.dark .fit-summary { color: var(--el-text-color-regular); }
+</style>
