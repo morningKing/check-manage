@@ -96,12 +96,10 @@ def resolve_undo_target(rows, target_seq: int, oc_messages) -> dict:
             oc_target = info['id']
             break
     if oc_target is None:
-        # 锚后无 OC user（锚所在轮之后从未被新用户轮接上，如 dispatch 失败
-        # 收尾轮）→ 无法在 OC 侧定位更晚的撤销点，按「无锚」处理（spec
-        # §2.2a 规则2）：目标＝OC 列表第一条 user 消息，anchor 不回传
-        return {'mode': 'native', 'oc_user_message_id': first_oc_user,
-                'anchor_row_id': None,
-                'files': _files_after(oc_messages, 0) if first_oc_user else []}
+        # 锚存在但锚与目标之间的轮从未到达 OC（dispatch 失败等）→ 纯平台
+        # 撤销：OC 不动、只搬平台行、无文件还原（spec §2.2a 规则⑤）
+        return {'mode': 'native', 'oc_user_message_id': None,
+                'anchor_row_id': anchor, 'files': []}
     t_idx = _oc_index(oc_messages, oc_target)
     return {'mode': 'native', 'oc_user_message_id': oc_target,
             'anchor_row_id': anchor,

@@ -14,14 +14,16 @@ def _row(rid, role, seq):
     return {'id': rid, 'role': role, 'seq': seq}
 
 
-def test_no_anchor_targets_first_oc_user():
-    rows = [_row('msg_a1', 'assistant', 2), _row('msg_u2', 'user', 3)]
+def test_anchor_without_later_oc_user_is_pure_platform_undo():
+    """锚存在但锚之后无 OC user（该轮从未被后续用户轮接上）→ 纯平台撤销：
+    OC 不动、只搬平台行、无文件还原（spec §2.2a 规则⑤）。"""
     # 夹具遵循 spec §2.2a 不变量：平台 assistant 行 id＝该回合第一条 OC
     # assistant 消息 id（msg_a1 即 OC 列表里的锚消息）
+    rows = [_row('msg_a1', 'assistant', 2), _row('msg_u2', 'user', 3)]
     oc = [_oc('msg_o1', 'user', 100), _oc('msg_a1', 'assistant', 200)]
     plan = resolve_undo_target(rows, 3, oc)
-    assert plan == {'mode': 'native', 'oc_user_message_id': 'msg_o1',
-                    'anchor_row_id': None, 'files': []}
+    assert plan == {'mode': 'native', 'oc_user_message_id': None,
+                    'anchor_row_id': 'msg_a1', 'files': []}
 
 
 def test_target_after_anchor_snaps_to_next_oc_user():
