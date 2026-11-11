@@ -25,4 +25,8 @@ describe('findFrontendCommand', () => {
       expect(typeof c.run).toBe('function')
     }
   })
+  it('registers /undo and /redo frontend commands', () => {
+    expect(findFrontendCommand('undo')?.name).toBe('undo')
+    expect(findFrontendCommand('redo')?.name).toBe('redo')
+  })
 })
