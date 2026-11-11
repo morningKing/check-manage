@@ -329,6 +329,18 @@ class OpenCodeClient:
             params=params, timeout=max(self.timeout, 20))
         resp.raise_for_status()
 
+    # ---- runtime 抽象同形别名（undo-redo T7 接线缺口修复）：编排层经
+    # get_runtime().get_client() 拿到的是本类，调的是 stage/clear 形；
+    # StubClient 侧同名方法由 T3 提供。 ----
+    def revert_stage(self, opencode_session_id: str, oc_message_id: str,
+                     directory: str = "") -> dict:
+        return self.revert_session(opencode_session_id, oc_message_id,
+                                   directory=directory)
+
+    def revert_clear(self, opencode_session_id: str,
+                     directory: str = "") -> None:
+        self.unrevert_session(opencode_session_id, directory=directory)
+
     def list_mcp(self, directory: str = "") -> dict:
         """Return configured MCP servers + connection status for `directory`, e.g.
         {"check-manage": {"status": "connected"}}. The un-scoped /mcp returns {}.

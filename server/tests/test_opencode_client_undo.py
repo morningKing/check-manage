@@ -72,3 +72,25 @@ def test_stub_runtime_revert_roundtrip():
     rt.revert_clear(sid, directory='/ws')
     assert rt.get_client()._sessions[sid].revert is None
     assert rt.capabilities()['revert'] is True
+
+
+def test_revert_aliases_forward_to_session_endpoints(monkeypatch):
+    """OpenCodeClient 的 stage/clear 薄别名（T7 接线缺口修复）：编排层
+    ai_revert 经 get_runtime().get_client() 拿到的是本类、调的是 stage/clear
+    形，必须原样转发到底层 revert_session/unrevert_session 端点。"""
+    captured = {}
+
+    def fake_post(url, params=None, json=None, timeout=None):
+        captured.update(url=url, json=json, params=params)
+        return _Resp({'id': 'oc1', 'revert': {'messageID': 'msg_u'}})
+
+    monkeypatch.setattr('utils.opencode_client.requests.post', fake_post)
+    out = OpenCodeClient('http://x').revert_stage('oc1', 'msg_u', directory='/ws')
+    assert captured['url'].endswith('/session/oc1/revert')
+    assert captured['json'] == {'messageID': 'msg_u'}
+    assert captured['params'] == {'directory': '/ws'}
+    assert out['revert']['messageID'] == 'msg_u'
+
+    OpenCodeClient('http://x').revert_clear('oc1', directory='/ws')
+    assert captured['url'].endswith('/session/oc1/unrevert')
+    assert captured['json'] is None
