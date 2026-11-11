@@ -103,6 +103,10 @@ AI_BATCH_EVENT_RETENTION_DAYS = _to_int(os.getenv('AI_BATCH_EVENT_RETENTION_DAYS
 # least this many seconds, the session owner gets a notification-center entry
 # on completion (even if the tab was closed). 0 disables.
 AI_CHAT_NOTIFY_MIN_SECONDS = _to_int(os.getenv('AI_CHAT_NOTIFY_MIN_SECONDS'), 30)
+# undo/redo 文件还原的快照时效上限（天）：OC 快照对象 gc --prune=7.days，
+# 更早轮次的文件还原不可靠 → 撤销自动降级 rebuild（undo-redo spec E10）。
+AI_UNDO_FILE_SNAPSHOT_MAX_AGE_DAYS = _to_int(
+    os.getenv('AI_UNDO_FILE_SNAPSHOT_MAX_AGE_DAYS'), 7)
 # Default OpenCode model id, "<providerID>/<modelID>". Used by:
 #   - single chat: when the user picks "default" (or doesn't pick anything)
 #     in the composer's model dropdown,

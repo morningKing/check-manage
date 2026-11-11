@@ -343,6 +343,17 @@ try:
 except Exception as _e:
     logging.warning('session group icon migration on boot failed: %s', _e)
 
+# AI 会话撤销/重做（2026-11-10 undo-redo spec §2.1）：随启动幂等执行
+try:
+    _mp_undo = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'migrations', '2026_11_10_ai_chat_undo_redo.py')
+    _spec_undo = _ilu.spec_from_file_location('_undo_redo_migration_boot', _mp_undo)
+    _m_undo = _ilu.module_from_spec(_spec_undo)
+    _spec_undo.loader.exec_module(_m_undo)
+    _m_undo.run()
+except Exception as _e:
+    logging.warning('undo/redo migration on boot failed: %s', _e)
+
 # 会话置顶列（2026-09-19）：随启动幂等执行
 try:
     _mp5 = os.path.join(os.path.dirname(os.path.abspath(__file__)),

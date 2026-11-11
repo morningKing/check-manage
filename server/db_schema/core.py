@@ -465,6 +465,38 @@ CREATE TABLE IF NOT EXISTS ai_chat_message_feedback (
 CREATE INDEX IF NOT EXISTS idx_chat_feedback_sess
     ON ai_chat_message_feedback(session_id);
 
+-- AI 会话撤销/重做（2026-11-10 undo-redo spec §2.1）
+CREATE TABLE IF NOT EXISTS ai_chat_message_stash (
+    message_id  VARCHAR(100) PRIMARY KEY,
+    session_id  VARCHAR(100) NOT NULL
+        REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    role        VARCHAR(20) NOT NULL,
+    content     JSONB NOT NULL,
+    meta        JSONB,
+    created_at  TIMESTAMPTZ NOT NULL,
+    seq         BIGINT NOT NULL,
+    rating      SMALLINT,
+    stashed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_msg_stash_session
+    ON ai_chat_message_stash(session_id, seq);
+CREATE TABLE IF NOT EXISTS ai_chat_session_reverts (
+    session_id  VARCHAR(100) PRIMARY KEY
+        REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    mode        VARCHAR(10) NOT NULL,
+    opencode_session_id VARCHAR(200) NOT NULL,
+    oc_message_id VARCHAR(200),
+    from_seq    BIGINT NOT NULL,
+    message_count INT NOT NULL,
+    file_count  INT NOT NULL DEFAULT 0,
+    file_names  JSONB,
+    prev_opencode_session_id VARCHAR(200),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS
+    context_replay_pending BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- ==================== 子代理（subtask/subagent 委托）执行轨迹 ====================
 -- id 就是 OpenCode 自己的子会话 sessionID（ses... 格式），不发明并行的合成 id——
 -- 子代理总是先在 OpenCode 侧存在、我们才从 SubtaskPart 里发现它，跟顶层会话
