@@ -299,6 +299,31 @@ def _oc_anchor_msgs(recent_ms=None):
              'parts': [{'type': 'patch', 'files': [{'file': 'a.txt'}]}]}]
 
 
+def _tracking_db(cursor):
+    """每次 with get_db() 生成独立假连接（同一 cursor 贯穿，fetch 序列连续），
+    并在生成器层镜像 db.py 的事务语义记录结局：with 体正常退出=commit
+    （exc 为 None），体抛异常=rollback（exc 为异常类）。用于断言「收口
+    写入真的提交了」——单纯 patch commit_revert 只能证明调用过，证明
+    不了没被回滚；而 conn.__exit__ 在 `with get_db()` 下根本不会被调用。"""
+    txs = []
+
+    @_cm
+    def fake_db():
+        conn = _MagicMock()
+        conn.cursor.return_value = cursor
+        outcome = {'conn': conn, 'exc': None}
+        conn.__enter__ = lambda self: conn
+        conn.__exit__ = lambda self, *a: False
+        txs.append(outcome)
+        try:
+            yield conn                   # 正常退出 → db.py 在此 commit
+        except BaseException as e:
+            outcome['exc'] = type(e)     # 体抛异常 → db.py 在此 rollback 后重抛
+            raise
+
+    return fake_db, txs
+
+
 def test_undo_native_calls_revert_stage_with_snapped_user_id(monkeypatch):
     oc = [{'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': 1}}, 'parts': []},
           {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}},
@@ -360,6 +385,27 @@ def test_undo_oc_failure_compensates(monkeypatch):
     client.revert_clear.assert_called_once()   # → 平台侧失败触发补偿
 
 
+def test_undo_oc_409_maps_to_session_busy(monkeypatch):
+    """OC revert_stage 回 409（回合进行中）→ SESSION_BUSY，不触发补偿。"""
+    oc = [{'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': 1}}, 'parts': []},
+          {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}},
+           'parts': [{'type': 'patch', 'files': [{'file': 'a.txt'}]}]}]
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    import requests as _rq
+    boom = _rq.HTTPError('409')
+    boom.response = _MagicMock(status_code=409)
+    client.revert_stage.side_effect = boom
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.undo_from_message('sess_x', 'msg_u2')
+    assert ei.value.code == 'SESSION_BUSY'
+    client.revert_clear.assert_not_called()   # OC 撤销未成功，无需补偿
+
+
 def test_undo_busy_409(monkeypatch):
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: True)
     import pytest
@@ -405,6 +451,66 @@ def test_redo_nothing_to_redo(monkeypatch):
     with pytest.raises(ar.UndoError) as ei:
         ar.redo('sess_x')
     assert ei.value.code == 'NOTHING_TO_REDO'
+
+
+def test_redo_success_clears_and_restores(monkeypatch):
+    """重做成功：OC revert_clear + stash 搬回 + 上下文重放旗标清位。"""
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc1', 'active', '/tmp/ws'),                        # sessions 行
+        ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
+         _dt(2026, 11, 10, tzinfo=_tz.utc)),                 # 读态行
+    ]
+    cursor.fetchall.side_effect = [[]]                       # _message_window 空窗
+    conn = _MagicMock(); conn.cursor.return_value = cursor
+    conn.__enter__ = lambda self: conn; conn.__exit__ = lambda self, *a: False
+
+    @_cm
+    def fake_db():
+        yield conn
+    client = _MagicMock()
+    restore_calls, replay_calls = [], []
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    monkeypatch.setattr(ar, 'restore_stash', lambda conn, sid: restore_calls.append(sid))
+    monkeypatch.setattr(ar, 'clear_context_replay',
+                        lambda conn, sid: replay_calls.append(sid))
+    monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
+    out = ar.redo('sess_x')
+    client.revert_clear.assert_called_once_with('oc1', directory='/tmp/ws')
+    assert restore_calls == ['sess_x']
+    assert replay_calls == ['sess_x']
+    assert out['deleted'] == 2
+    assert out['messages'] == []
+
+
+def test_redo_stale_commits_closeout_in_own_tx(monkeypatch):
+    """REDO_STALE：收口必须落在独立事务并正常提交——若与 raise 同块，
+    get_db 异常路径回滚会让「撤销已收口」落空（C1 回归）。"""
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc_old', 'active', '/tmp/ws'),                     # 当前 OC 已换
+        ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
+         _dt(2026, 11, 10, tzinfo=_tz.utc)),                 # 状态行 OC=oc1 ≠ oc_old
+    ]
+    fake_db, txs = _tracking_db(cursor)
+    commit_conns = []
+    monkeypatch.setattr(ar, 'commit_revert',
+                        lambda conn, sid: commit_conns.append(conn))
+    monkeypatch.setattr(ar, 'clear_context_replay', lambda conn, sid: None)
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    client = _MagicMock()
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.redo('sess_x')
+    assert ei.value.code == 'REDO_STALE'
+    assert commit_conns                                      # 收口确已发生
+    assert any(t['conn'] is c and t['exc'] is None           # 且在正常提交的事务里
+               for t in txs for c in commit_conns), \
+        '收口写入被 REDO_STALE 异常一并回滚（C1）'
+    client.revert_clear.assert_not_called()                  # 旧 OC 上下文不可达
 
 
 def test_commit_after_dispatch_noop_without_state(monkeypatch):

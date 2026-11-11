@@ -430,9 +430,13 @@ def redo(sid: str) -> dict:
         if not state:
             raise UndoError('NOTHING_TO_REDO', '没有可重做的撤销', operation='redo')
         if state['opencodeSessionId'] != oc_now:
-            # 会话被恢复/清空换过：旧 OC 上下文不可达，只收口不搬回（spec §2.2c）
-            commit_revert(conn, sid)
-            clear_context_replay(conn, sid)
+            # 会话被恢复/清空换过：旧 OC 上下文不可达，只收口不搬回（spec §2.2c）。
+            # 收口必须独立事务：若与下面的 raise 同处一个 get_db() 块，
+            # db.py 异常路径会把写入一并回滚——「撤销已收口」名存实亡，
+            # 此后每次 redo 都重复失败。
+            with get_db() as commit_conn:
+                commit_revert(commit_conn, sid)
+                clear_context_replay(commit_conn, sid)
             raise UndoError('REDO_STALE', '会话上下文已变化，无法重做（撤销已收口）',
                             operation='redo')
     client = get_runtime().get_client()
