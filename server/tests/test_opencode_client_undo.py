@@ -7,6 +7,10 @@ import pytest
 from utils.opencode_client import OpenCodeClient
 
 
+REVERT_SURFACE = ('revert_stage', 'revert_clear', 'revert_session',
+                  'unrevert_session')
+
+
 class _Resp:
     def __init__(self, payload):
         self._p = payload
@@ -94,3 +98,26 @@ def test_revert_aliases_forward_to_session_endpoints(monkeypatch):
     OpenCodeClient('http://x').revert_clear('oc1', directory='/ws')
     assert captured['url'].endswith('/session/oc1/unrevert')
     assert captured['json'] is None
+
+
+def test_revert_surface_parity():
+    """两侧别名面 parity 守护（I3）：编排层 ai_revert 经 get_client() 消费的
+    四个 revert 方法必须在 OpenCodeClient 与 StubClient 上同时存在——
+    任何一侧缺方法都会把压测/联调栈（stub runtime）炸成 AttributeError，
+    且只在运行时才暴露。此测试杜绝再度漂移。"""
+    from utils.runtime.stub import StubClient
+    for name in REVERT_SURFACE:
+        assert hasattr(OpenCodeClient, name), f'OpenCodeClient 缺 {name}'
+        assert hasattr(StubClient, name), f'StubClient 缺 {name}'
+
+
+def test_stub_client_revert_clear_aliases_unrevert():
+    """StubClient.revert_clear 别名（I3）：转发 unrevert_session，清撤销标记。"""
+    os.environ['AI_STUB_ALLOW'] = '1'
+    from utils.runtime.stub import StubClient
+    c = StubClient({'delay_ms': [1, 1]})
+    sid = c.create_session(directory='/ws')
+    c.revert_stage(sid, 'msg_x', directory='/ws')
+    assert c._sessions[sid].revert == {'messageID': 'msg_x'}
+    c.revert_clear(sid, directory='/ws')
+    assert c._sessions[sid].revert is None

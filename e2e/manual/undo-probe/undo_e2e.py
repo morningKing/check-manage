@@ -11,7 +11,7 @@
     → 提交后 redo 409 NOTHING_TO_REDO
   B 重做全恢复：undo → redo → 文件/消息窗口恢复、revert 清空
   C 锚失效 → rebuild 降级 + 历史重放（直接改库模拟「会话恢复换绑过 OC」，
-    探针特权，生产路径无此操作）
+    探针特权，生产路径无此操作）→ rebuild 重做切回旧 OC 会话（§2.2d）
   D 批子会话 409（执行所有权门禁：非终态批子会话不开放手工撤销）
 
 运行：python e2e/manual/undo-probe/undo_e2e.py [--keep]
@@ -483,6 +483,23 @@ def scenario_rebuild():
 
     st, body = _api('DELETE', f'/ai/chat/sessions/{sid}/messages/{u2}', timeout=90)
     check('undo → rebuild 模式（锚不在当前 OC 会话 → 重建式降级）',
+          st == 200 and (body.get('revert') or {}).get('mode') == 'rebuild',
+          f'st={st} revert={json.dumps(body.get("revert"), ensure_ascii=False)[:200]}')
+
+    # spec §2.2d 重做：rebuild 状态行带 prev_opencode_session_id，重做切回
+    # 撤销前指向的 OC 会话（此时=探针换绑的 oc_new），空重建会话尽力删除。
+    # 注意必须在新回合发送之前——发送即提交撤销（§2.4），重做窗口随之关闭。
+    st, body = _api('POST', f'/ai/chat/sessions/{sid}/redo', timeout=90)
+    check('rebuild redo 200', st == 200,
+          f'st={st} {json.dumps(body, ensure_ascii=False)[:160]}')
+    check('redo 后 sessions.oc 指针切回旧会话（撤销前指向的 OC）',
+          _oc_sid_of(sid) == oc_new['id'],
+          f'now={_oc_sid_of(sid)} expect={oc_new["id"]}')
+
+    # 再撤一次（重建场景：切回的 oc_new 只有 SEED 轮，锚仍不在其消息列表 →
+    # 再次 rebuild）——恢复 context_replay_pending 前提，T3 才走历史重放。
+    st, body = _api('DELETE', f'/ai/chat/sessions/{sid}/messages/{u2}', timeout=90)
+    check('二次 undo → 再次 rebuild（重做切回后锚仍不在 oc_new）',
           st == 200 and (body.get('revert') or {}).get('mode') == 'rebuild',
           f'st={st} revert={json.dumps(body.get("revert"), ensure_ascii=False)[:200]}')
 

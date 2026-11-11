@@ -173,12 +173,14 @@ def get_revert_state(conn, sid):
     cur = conn.cursor()
     cur.execute(
         "SELECT mode, opencode_session_id, oc_message_id, from_seq, "
-        "       message_count, file_count, file_names, created_at "
+        "       message_count, file_count, file_names, created_at, "
+        "       prev_opencode_session_id "
         "FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
     r = cur.fetchone()
     if not r:
         return None
-    return {'mode': r[0], 'opencodeSessionId': r[1], 'ocMessageId': r[2],
+    return {'mode': r[0], 'opencodeSessionId': r[1],
+            'prevOpencodeSessionId': r[8], 'ocMessageId': r[2],
             'fromSeq': r[3], 'messageCount': r[4], 'fileCount': r[5],
             'fileNames': r[6] or [],
             'createdAt': r[7].isoformat() if r[7] else None}
@@ -360,6 +362,8 @@ def _undo_native(sid, ctx, plan, client):
         raise
     with get_db() as conn:
         state = get_revert_state(conn, sid)
+    logger.info('undo committed session=%s oc=%s mode=native rows=%d files=%d',
+                sid, ctx['oc_sid'], ctx['message_count'], len(plan['files']))
     broadcast_revert(sid)
     return state
 
@@ -390,6 +394,8 @@ def _undo_rebuild(sid, ctx, plan, client):
         raise
     with get_db() as conn:
         state = get_revert_state(conn, sid)
+    logger.info('undo committed session=%s oc=%s mode=rebuild rows=%d files=%d',
+                sid, new_oc, ctx['message_count'], 0)
     broadcast_revert(sid)
     return state
 
@@ -414,6 +420,9 @@ def undo_from_message(sid: str, msg_id: str) -> dict:
 
 def redo(sid: str) -> dict:
     from utils import chat_persist
+    if chat_persist.has_listener(sid):
+        raise UndoError('SESSION_BUSY', '回合进行中，请先停止当前回复再重做',
+                        operation='redo')
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -434,28 +443,58 @@ def redo(sid: str) -> dict:
             # 收口必须独立事务：若与下面的 raise 同处一个 get_db() 块，
             # db.py 异常路径会把写入一并回滚——「撤销已收口」名存实亡，
             # 此后每次 redo 都重复失败。
+            # 注：校验发生在切回（rebuild 分支的 UPDATE）之前——rebuild 状态行
+            # 的 opencodeSessionId 是撤销时新建的空会话，与切回前 sessions 行
+            # 一致，此处不会误触发。
             with get_db() as commit_conn:
                 commit_revert(commit_conn, sid)
                 clear_context_replay(commit_conn, sid)
             raise UndoError('REDO_STALE', '会话上下文已变化，无法重做（撤销已收口）',
                             operation='redo')
+    # rebuild（spec §2.2d）：重做切回旧 OC 会话；切回后 sessions 行的
+    # opencode_session_id 变为 prev，仅影响本事务之后的读取方。
+    switch_back_prev = state['prevOpencodeSessionId'] \
+        if state['mode'] == 'rebuild' and state.get('prevOpencodeSessionId') \
+        else None
     client = get_runtime().get_client()
     try:
         with get_db() as conn:
             conn.cursor().execute(
                 "SELECT pg_advisory_xact_lock(hashtext(%s))", (sid,))
             if state['mode'] == 'native' and state['ocMessageId']:
-                client.revert_clear(state['opencodeSessionId'],
-                                    directory=workspace_path)
+                try:
+                    client.revert_clear(state['opencodeSessionId'],
+                                        directory=workspace_path)
+                except requests.HTTPError as e:
+                    if getattr(e, 'response', None) is not None \
+                            and e.response.status_code == 409:
+                        raise UndoError('SESSION_BUSY',
+                                        '回合进行中，请先停止当前回复再重做',
+                                        operation='redo') from e
+                    raise
             chat_persist.stop_listener(sid)
-            restore_stash(conn, sid)
+            restore_stash(conn, sid)               # 先搬回 stash，再切回 OC 指针
             clear_context_replay(conn, sid)
+            if switch_back_prev:
+                conn.cursor().execute(
+                    "UPDATE ai_chat_sessions SET opencode_session_id = %s, "
+                    "context_replay_pending = FALSE WHERE id = %s",
+                    (switch_back_prev, sid))
             conn.cursor().execute(
                 "DELETE FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
     except Exception:
         # OC clear 已发出而 DB 回滚：平台仍处撤销态，再次 redo 幂等重试
         logger.error('redo 失败 session=%s（OC clear 可能已发出）', sid, exc_info=True)
         raise
+    if switch_back_prev:
+        # 切回已提交：撤销时新建的空会话尽力删除（与 _undo_rebuild 补偿同风格）
+        try:
+            client.delete_session(state['opencodeSessionId'])
+        except Exception:
+            pass
+    logger.info('redo committed session=%s oc=%s mode=%s rows=%d files=%d',
+                sid, switch_back_prev or state['opencodeSessionId'] or '-',
+                state['mode'], state['messageCount'], state['fileCount'] or 0)
     broadcast_revert(sid)
     return {'deleted': state['messageCount'], 'messages': _message_window(sid)}
 
@@ -469,6 +508,10 @@ def commit_after_dispatch(sid: str) -> None:
             return
         commit_revert(conn, sid)
         clear_context_replay(conn, sid)
+    logger.info('revert committed session=%s oc=%s mode=%s rows=%d files=%d',
+                sid, state.get('opencodeSessionId') or '-',
+                state.get('mode') or '-', state.get('messageCount') or 0,
+                state.get('fileCount') or 0)
     broadcast_revert(sid)
 
 

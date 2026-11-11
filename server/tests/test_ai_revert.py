@@ -329,7 +329,7 @@ def test_undo_native_calls_revert_stage_with_snapped_user_id(monkeypatch):
           {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}},
            'parts': [{'type': 'patch', 'files': [{'file': 'a.txt'}]}]}]
     state = ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
-             _dt(2026, 11, 10, tzinfo=_tz.utc))
+             _dt(2026, 11, 10, tzinfo=_tz.utc), None)
     cursor, client, fake_db = _mock_env(_two_turn_rows(), oc,
                                         revert_info={'messageID': 'msg_o3'},
                                         state_rows=[state])
@@ -418,7 +418,8 @@ def test_undo_rebuild_promotes_stale_and_never_calls_oc_revert(monkeypatch):
     oc = _oc_anchor_msgs()          # msg_o3 created=1ms → 必 stale → 促销 rebuild
     cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
     client.create_session.return_value = 'oc_new'
-    state = ('rebuild', 'oc_new', None, 3, 2, 0, [], _dt(2026, 11, 10, tzinfo=_tz.utc))
+    state = ('rebuild', 'oc_new', None, 3, 2, 0, [], _dt(2026, 11, 10, tzinfo=_tz.utc),
+             None)
     cursor.fetchone.side_effect = [
         ('oc1', 'active', '/tmp/ws'), (3,), state,   # 实现读取序：ctx → target → 读态
     ]
@@ -459,7 +460,7 @@ def test_redo_success_clears_and_restores(monkeypatch):
     cursor.fetchone.side_effect = [
         ('oc1', 'active', '/tmp/ws'),                        # sessions 行
         ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
-         _dt(2026, 11, 10, tzinfo=_tz.utc)),                 # 读态行
+         _dt(2026, 11, 10, tzinfo=_tz.utc), None),           # 读态行（无 prev）
     ]
     cursor.fetchall.side_effect = [[]]                       # _message_window 空窗
     conn = _MagicMock(); conn.cursor.return_value = cursor
@@ -492,7 +493,7 @@ def test_redo_stale_commits_closeout_in_own_tx(monkeypatch):
     cursor.fetchone.side_effect = [
         ('oc_old', 'active', '/tmp/ws'),                     # 当前 OC 已换
         ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
-         _dt(2026, 11, 10, tzinfo=_tz.utc)),                 # 状态行 OC=oc1 ≠ oc_old
+         _dt(2026, 11, 10, tzinfo=_tz.utc), None),           # 状态行 OC=oc1 ≠ oc_old
     ]
     fake_db, txs = _tracking_db(cursor)
     commit_conns = []
@@ -511,6 +512,80 @@ def test_redo_stale_commits_closeout_in_own_tx(monkeypatch):
                for t in txs for c in commit_conns), \
         '收口写入被 REDO_STALE 异常一并回滚（C1）'
     client.revert_clear.assert_not_called()                  # 旧 OC 上下文不可达
+
+
+def test_redo_rebuild_switches_back_to_prev_session(monkeypatch):
+    """rebuild 重做（I1 / spec §2.2d）：切回 prev OC 会话 + 清标记 + 删除撤销时
+    新建的空会话 + stash 搬回。哨兵用例：prev_opencode_session_id 此前只写不读，
+    重做后 sessions.opencode_session_id 必须指回旧会话（探针场景 C 同路径）。"""
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc_new', 'active', '/tmp/ws'),                     # sessions 行（undo 时已切到新空会话）
+        ('rebuild', 'oc_new', None, 3, 2, 0, [],
+         _dt(2026, 11, 10, tzinfo=_tz.utc), 'oc_old'),       # 状态行（含 prev=oc_old）
+    ]
+    cursor.fetchall.side_effect = [[]]                       # _message_window 空窗
+    fake_db, txs = _tracking_db(cursor)
+    client = _MagicMock()
+    restore_calls = []
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    monkeypatch.setattr(ar, 'restore_stash',
+                        lambda conn, sid: restore_calls.append(sid))
+    monkeypatch.setattr(ar, 'clear_context_replay', lambda conn, sid: None)
+    monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
+    ar.redo('sess_x')
+    assert restore_calls == ['sess_x']                       # stash 恢复被调
+    # 切回 UPDATE 已发出且参数=旧会话（先搬回 stash、再切回，同一事务）
+    update_calls = [c for c in cursor.execute.call_args_list
+                    if 'UPDATE ai_chat_sessions' in str(c.args[0])]
+    assert len(update_calls) == 1
+    assert update_calls[0].args[1] == ('oc_old', 'sess_x')
+    # 撤销时新建的空会话被删除（事务提交后 best-effort）
+    client.delete_session.assert_called_once_with('oc_new')
+    # rebuild 无 OC 撤销点 → 不调 revert_clear
+    client.revert_clear.assert_not_called()
+    assert all(t['exc'] is None for t in txs)                # 两个事务都正常提交
+
+
+def test_redo_busy_409(monkeypatch):
+    """redo 与 undo 对称的 busy 守卫（I2）：监听器活着 → 409 SESSION_BUSY。"""
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: True)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.redo('sess_x')
+    assert ei.value.code == 'SESSION_BUSY'
+    assert ei.value.operation == 'redo'
+
+
+def test_redo_oc_409_maps_to_session_busy(monkeypatch):
+    """OC revert_clear 回 409（回合进行中）→ SESSION_BUSY（redo 侧镜像 undo 的
+    映射）；异常抛出使事务回滚＝什么都没改。"""
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc1', 'active', '/tmp/ws'),
+        ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
+         _dt(2026, 11, 10, tzinfo=_tz.utc), None),
+    ]
+    fake_db, txs = _tracking_db(cursor)
+    import requests as _rq
+    boom = _rq.HTTPError('409')
+    boom.response = _MagicMock(status_code=409)
+    client = _MagicMock()
+    client.revert_clear.side_effect = boom
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    monkeypatch.setattr(ar, 'restore_stash', lambda conn, sid: None)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.redo('sess_x')
+    assert ei.value.code == 'SESSION_BUSY'
+    assert ei.value.operation == 'redo'
+    assert any(t['exc'] is ar.UndoError for t in txs)        # 写事务已回滚
 
 
 def test_commit_after_dispatch_noop_without_state(monkeypatch):

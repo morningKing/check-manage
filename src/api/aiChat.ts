@@ -547,6 +547,8 @@ export interface RevertState {
   ocMessageId?: string | null
   fromSeq?: number | null
   opencodeSessionId?: string | null
+  /* rebuild 模式：撤销前的旧 OC 会话 id（重做切回目标，spec §2.2d） */
+  prevOpencodeSessionId?: string | null
 }
 
 export interface UndoPreview {

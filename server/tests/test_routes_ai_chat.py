@@ -1010,7 +1010,7 @@ def test_delete_message_runs_native_undo(setup):
         ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
         ('oc', 'active', '/tmp/ws'),
         (3,),
-        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt),   # 提交后读态
+        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt, None),   # 提交后读态
     ]
     cursor.fetchall.side_effect = [
         # 平台行（锚点解析）：seq >= 3 的 u2/a2 共 2 条 → deleted
@@ -1054,7 +1054,7 @@ def test_delete_message_platform_only_no_oc_call(setup):
         ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
         ('oc', 'active', '/tmp/ws'),
         (3,),
-        ('native', 'oc', None, 3, 2, 0, [], dt),
+        ('native', 'oc', None, 3, 2, 0, [], dt, None),
     ]
     cursor.fetchall.side_effect = [
         [('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
@@ -1708,7 +1708,7 @@ def test_undo_route_native_ok(setup):
         ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
         ('oc', 'active', '/tmp/ws'),
         (3,),
-        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt),   # 提交后读态
+        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt, None),   # 提交后读态
     ]
     cursor.fetchall.side_effect = [
         [('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
@@ -1774,7 +1774,7 @@ def test_messages_response_carries_revert_state(setup):
     # 只被消息窗口消费一次）
     cursor.fetchone.side_effect = [
         ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
-        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt),
+        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt, None),
     ]
     cursor.fetchall.return_value = [
         ('msg_a1', 'assistant', [], dt, None, 2, None)]
