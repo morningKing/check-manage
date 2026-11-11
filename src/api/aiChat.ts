@@ -543,6 +543,10 @@ export interface RevertState {
   fileCount: number
   fileNames?: string[]
   createdAt?: string
+  /* 后端 get_revert_state 同键返回：native 模式记录 oc 消息锚点，供重做/续传对齐 */
+  ocMessageId?: string | null
+  fromSeq?: number | null
+  opencodeSessionId?: string | null
 }
 
 export interface UndoPreview {
