@@ -60,6 +60,12 @@ def setup(mock_conn, mock_cursor, tmp_path):
         patch('routes.ai_chat.OpenCodeClient', return_value=fake_client),
         patch('routes.ai_chat.get_runtime',
               lambda: _RuntimeStub(fake_client)),
+        # 撤销/重做编排器（utils/ai_revert）持有独立的 get_db/get_runtime
+        # 引用（模块顶层 from-import），必须单独打补丁才能与路由共用同一
+        # 套 mock 连接与 fake_client
+        patch('utils.ai_revert.get_db', fake_db),
+        patch('utils.ai_revert.get_runtime',
+              lambda: _RuntimeStub(fake_client)),
         patch('config.AI_WORKSPACE_ROOT', str(tmp_path)),
         patch('routes.ai_chat.AI_WORKSPACE_ROOT', str(tmp_path)),
     ]
@@ -206,9 +212,12 @@ def test_list_models_flattens_connected_providers(setup):
 
 def test_get_messages_returns_history(setup):
     client, cursor, oc, dev_h, _, _ = setup
-    # owner check：_load_session_for_user 现 SELECT 7 列（…, batch_id, orchestration_run_id）
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
-                                    '/tmp/ws', None, None)
+    # owner check：_load_session_for_user 现 SELECT 7 列（…, batch_id, orchestration_run_id）；
+    # 第二次 fetchone 是 messages 端点新增的撤销态读取（无撤销态 → None）
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None, None),
+        None,
+    ]
     # history fetch：消息 SELECT 现 7 列（id, role, content, created_at, meta,
     # seq, f.rating——2026-10-30 第一档 Feature A 的 LEFT JOIN 反馈列），
     # 默认分支 ORDER BY seq DESC（最新在前）——mock 按该序返回，rating None
@@ -230,7 +239,11 @@ def test_loading_session_touches_last_active_and_extends_token(setup):
     extends token_expires_at — keeps MCP token alive + powers the sidebar
     recency sort."""
     client, cursor, oc, dev_h, _, _ = setup
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    # 第二次 fetchone 是 messages 端点新增的撤销态读取（无撤销态 → None）
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws'),
+        None,
+    ]
     cursor.fetchall.return_value = []
     client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
     sqls = [c.args[0] for c in cursor.execute.call_args_list]
@@ -1596,3 +1609,133 @@ def test_reply_permission_accepts_subtask_owned_request(setup):
     a, k = oc.reply_permission.call_args
     assert a[0] == 'per_child' and a[1] == 'once'
     assert k.get('directory') == '/tmp/ws'
+
+
+# ---------------- 撤销/重做端点（undo-redo spec §2.3） ----------------
+def _undo_oc_messages(now_ms):
+    """undo-preview / undo 共用的 OC 消息供给。
+
+    锚点吸附规则（ai_revert.resolve_undo_target）：平台 assistant 行
+    msg_a1 必须出现在 OC 列表里才能吸附出 oc 目标 msg_o3；files 统计的
+    是「OC 目标之后」的 patch part，所以 patch 要挂在目标之后的
+    msg_a2 上。created 用当前毫秒——7 天快照窗口（E10）内才保持
+    native/full，不会促销成 rebuild。"""
+    return [
+        {'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': now_ms}},
+         'parts': []},
+        {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': now_ms}},
+         'parts': []},
+        {'info': {'id': 'msg_a2', 'role': 'assistant', 'time': {'created': now_ms}},
+         'parts': [{'type': 'patch', 'files': [{'file': 'a.txt'}]}]},
+    ]
+
+
+def test_undo_preview_returns_plan(setup):
+    """撤销预览：native 计划 + full 文件能力（确认弹窗数据，只读）。"""
+    import time
+    client, cursor, oc, dev_h, _, _ = setup
+    now_ms = int(time.time() * 1000)
+    # fetchone 供给序 = 路由实际读取序：会话行 → 撤销上下文（OC/状态/工作区）
+    # → 目标消息 seq
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('oc', 'active', '/tmp/ws'),
+        (3,),
+    ]
+    cursor.fetchall.return_value = [
+        ('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
+        ('msg_a2', 'assistant', 4), ('msg_u3', 'user', 5)]
+    oc.get_messages.return_value = _undo_oc_messages(now_ms)
+    oc.get_project.return_value = {'vcs': 'git', 'worktree': '/tmp/ws'}
+    resp = client.get('/ai/chat/sessions/sess_x/undo-preview?messageId=msg_u2',
+                      headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body == {'messageCount': 3, 'files': ['a.txt'],
+                    'fileCapability': 'full', 'mode': 'native', 'reason': None}
+
+
+def test_undo_route_native_ok(setup):
+    """撤销落位：OC revert_stage 用吸附出的 user id，响应带撤销态与消息窗口。"""
+    import time
+    from datetime import datetime, timezone
+    client, cursor, oc, dev_h, _, _ = setup
+    now_ms = int(time.time() * 1000)
+    dt = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('oc', 'active', '/tmp/ws'),
+        (3,),
+        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt),   # 提交后读态
+    ]
+    cursor.fetchall.side_effect = [
+        [('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
+         ('msg_a2', 'assistant', 4), ('msg_u3', 'user', 5)],  # 平台行（锚点解析）
+        [('msg_a1', 'assistant', [], dt, None, 2, None)],     # message window
+    ]
+    oc.get_messages.return_value = _undo_oc_messages(now_ms)
+    oc.get_project.return_value = {'vcs': 'git', 'worktree': '/tmp/ws'}
+    oc.revert_stage.return_value = {'id': 'oc', 'revert': {'messageID': 'msg_o3'}}
+    resp = client.post('/ai/chat/sessions/sess_x/undo',
+                       json={'messageId': 'msg_u2'}, headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['revert']['mode'] == 'native'
+    assert body['revert']['ocMessageId'] == 'msg_o3'
+    assert body['messages'][0]['id'] == 'msg_a1'
+    oc.revert_stage.assert_called_once()
+
+
+def test_undo_route_busy_409(setup, monkeypatch):
+    """回合进行中（持久化监听器活着）→ 409 SESSION_BUSY，什么都没改。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active',
+                                    '/tmp/ws', None, None)
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: True)
+    resp = client.post('/ai/chat/sessions/sess_x/undo',
+                       json={'messageId': 'msg_u2'}, headers=dev_h)
+    assert resp.status_code == 409
+    assert resp.get_json()['error']['code'] == 'SESSION_BUSY'
+
+
+def test_undo_route_batch_child_409(setup):
+    """批任务子会话由后台执行器独家驱动 → 路由层先挡（不进编排器）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'running',
+                                    '/tmp/ws', 'batch_1', None)
+    resp = client.post('/ai/chat/sessions/sess_x/undo',
+                       json={'messageId': 'msg_u2'}, headers=dev_h)
+    assert resp.status_code == 409
+    assert resp.get_json()['error']['code'] == 'BATCH_SESSION_CONTROLLED'
+
+
+def test_redo_route_nothing_to_redo(setup):
+    """无撤销状态行 → 409 NOTHING_TO_REDO。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('oc', 'active', '/tmp/ws'),
+        None,
+    ]
+    resp = client.post('/ai/chat/sessions/sess_x/redo', headers=dev_h)
+    assert resp.status_code == 409
+    assert resp.get_json()['error']['code'] == 'NOTHING_TO_REDO'
+
+
+def test_messages_response_carries_revert_state(setup):
+    """GET /messages 响应携带撤销态（读态复用编排器 get_revert_state，
+    与 SSE session.revert 广播同键名，含 ocMessageId）。"""
+    from datetime import datetime, timezone
+    client, cursor, oc, dev_h, _, _ = setup
+    dt = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    # fetchone 供给序 = 路由实际读取序：会话行 → revert 状态行（fetchall
+    # 只被消息窗口消费一次）
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt),
+    ]
+    cursor.fetchall.return_value = [
+        ('msg_a1', 'assistant', [], dt, None, 2, None)]
+    resp = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json()['revert']['ocMessageId'] == 'msg_o3'

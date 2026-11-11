@@ -25,6 +25,9 @@ Routes registered:
     POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
     POST   /ai/chat/sessions/:id/messages/:msg_id/feedback  set_message_feedback (rating 1/-1/0, 0=清除)
+    POST   /ai/chat/sessions/:id/undo  undo_to_message（撤销到某条消息之前）
+    POST   /ai/chat/sessions/:id/redo  redo_session_route（恢复被撤销的消息）
+    GET    /ai/chat/sessions/:id/undo-preview  undo_preview（确认弹窗数据）
     GET    /ai/chat/sessions/:id/export.md  export_session_markdown (会话归档 Markdown 下载)
     GET    /ai/chat/agents                list_agents
 """
@@ -64,6 +67,7 @@ from utils.session_history import render_history_block
 from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
     INTERNAL_MCP_NAME as MCP_NAME
 from utils import agent_ledger
+from utils import ai_revert
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
     has_listener, live_listener_sids,
@@ -1341,6 +1345,77 @@ def _render_export_markdown(title: str, rows) -> str:
     return head + '\n' + '\n\n'.join(body)
 
 
+# ---------------- 撤销/重做（undo-redo spec §2.3） ----------------
+def _undo_error_response(e: 'ai_revert.UndoError'):
+    return jsonify({'error': {'code': e.code, 'message': e.message,
+                              'retryable': e.retryable,
+                              'operation': e.operation}}), e.status
+
+
+@ai_chat_bp.route('/sessions/<sid>/undo-preview', methods=['GET'])
+@login_required
+def undo_preview(sid):
+    """撤销预览：确认弹窗数据（条数/文件/能力/模式）。只读。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    msg_id = request.args.get('messageId') or ''
+    try:
+        return jsonify(ai_revert.preview_undo(sid, msg_id))
+    except ai_revert.UndoError as e:
+        return _undo_error_response(e)
+
+
+@ai_chat_bp.route('/sessions/<sid>/undo', methods=['POST'])
+@write_required
+def undo_to_message(sid):
+    """撤销到某条用户消息之前：OpenCode revert + 平台行搬 stash（可重做）。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能撤销',
+            'retryable': False, 'operation': 'undo',
+        }}), 409
+    body = request.get_json(force=True) or {}
+    msg_id = body.get('messageId') or ''
+    try:
+        result = ai_revert.undo_from_message(sid, msg_id)
+    except ai_revert.UndoError as e:
+        return _undo_error_response(e)
+    log_operation('update', 'ai_chat_session', sid, sid,
+                  f"撤销到消息（{result['deleted']} 条，"
+                  f"约 {(result['revert'] or {}).get('fileCount', 0)} 文件）")
+    return jsonify(result)
+
+
+@ai_chat_bp.route('/sessions/<sid>/redo', methods=['POST'])
+@write_required
+def redo_session_route(sid):
+    """重做：恢复最近一次撤销的全部消息（stash 搬回 + unrevert）。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能重做',
+            'retryable': False, 'operation': 'redo',
+        }}), 409
+    try:
+        result = ai_revert.redo(sid)
+    except ai_revert.UndoError as e:
+        return _undo_error_response(e)
+    log_operation('update', 'ai_chat_session', sid, sid,
+                  f"重做（恢复 {result['deleted']} 条）")
+    return jsonify(result)
+
+
 @ai_chat_bp.route('/sessions/<sid>/messages/<mid>/feedback', methods=['POST'])
 @login_required
 def set_message_feedback(sid, mid):
@@ -1433,6 +1508,11 @@ def get_messages(sid):
             rows = rows[:limit]
             rows.reverse()  # 窗口内恢复时间正序，与原全量行为一致
 
+        # 撤销态（undo-redo spec §2.3）：任何端打开页面即收敛（重做横幅）。
+        # 读态复用编排器的 get_revert_state——与 SSE session.revert 广播
+        # 同键名（含 ocMessageId），避免两处字典形状漂移。
+        revert = ai_revert.get_revert_state(conn, sid)
+
     return jsonify({
         'messages': [
             {'id': r[0], 'role': r[1], 'content': r[2],
@@ -1441,6 +1521,7 @@ def get_messages(sid):
             for r in rows
         ],
         'hasMore': has_more,
+        'revert': revert,
     })
 
 
