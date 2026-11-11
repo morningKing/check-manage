@@ -120,3 +120,117 @@ def test_capability_full():
     assert file_capability({'vcs': 'git', 'worktree': '/ws'}, '/ws',
                            now - 86400 * 1000, ['a.txt'],
                            now_ms=now, max_age_days=7) == 'full'
+
+
+# ---------------- SQL 助手（真实 casemanage_test 库，bootstrap 用户） ----------------
+import json as _json
+import uuid as _uuid
+
+from db import get_db
+from utils.ai_revert import (stash_rows, restore_stash, get_revert_state,
+                             upsert_revert_state, commit_revert,
+                             clear_context_replay)
+
+
+def _mk_undo_session(sid):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = 'admin' LIMIT 1")
+        uid = cur.fetchone()[0]
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+            "  session_token, token_expires_at) "
+            "VALUES (%s, %s, '/tmp/undo-test', 'tok-' || %s, NOW() + interval '1 day') "
+            "ON CONFLICT (id) DO NOTHING", (sid, uid, sid))
+
+
+def _cleanup_undo_session(sid):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ai_chat_message_stash WHERE session_id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+
+
+def _insert_msg(cur, sid, role, text):
+    cur.execute(
+        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+        "VALUES (%s, %s, %s, %s)",
+        (f'{sid}:{text}', sid, role,
+         _json.dumps([{'type': 'text', 'text': text}])))
+
+
+def test_stash_restore_roundtrip_preserves_seq_and_rating():
+    sid = f'sess_undo_{_uuid.uuid4().hex[:8]}'
+    try:
+        _mk_undo_session(sid)
+        with get_db() as conn:
+            cur = conn.cursor()
+            for role, text in (('user', 'u1'), ('assistant', 'a1'),
+                               ('user', 'u2'), ('assistant', 'a2')):
+                _insert_msg(cur, sid, role, text)
+            cur.execute(
+                "SELECT id, seq FROM ai_chat_messages WHERE session_id = %s "
+                "ORDER BY seq", (sid,))
+            before = cur.fetchall()
+            cur.execute(
+                "INSERT INTO ai_chat_message_feedback (message_id, session_id, rating) "
+                "VALUES (%s, %s, 1) ON CONFLICT (message_id) DO NOTHING",
+                (f'{sid}:a1', sid))
+            u2_seq = next(s for i, s in before if i.endswith(':u2'))
+        with get_db() as conn:
+            n = stash_rows(conn, sid, u2_seq)
+        assert n == 2
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM ai_chat_messages WHERE session_id = %s",
+                        (sid,))
+            assert cur.fetchone()[0] == 2
+            cur.execute("SELECT count(*) FROM ai_chat_message_stash WHERE session_id = %s",
+                        (sid,))
+            assert cur.fetchone()[0] == 2
+        with get_db() as conn:
+            m = restore_stash(conn, sid)
+        assert m == 2
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, seq FROM ai_chat_messages WHERE session_id = %s ORDER BY seq",
+                (sid,))
+            assert cur.fetchall() == before          # seq 保真、顺序不变
+            cur.execute("SELECT rating FROM ai_chat_message_feedback "
+                        "WHERE message_id = %s", (f'{sid}:a1',))
+            assert cur.fetchone()[0] == 1            # rating 随 stash 回插
+    finally:
+        _cleanup_undo_session(sid)
+
+
+def test_revert_state_upsert_get_commit():
+    sid = f'sess_undo_{_uuid.uuid4().hex[:8]}'
+    try:
+        _mk_undo_session(sid)
+        with get_db() as conn:
+            assert get_revert_state(conn, sid) is None
+            upsert_revert_state(conn, sid, mode='native',
+                                opencode_session_id='oc1',
+                                oc_message_id='msg_o3', from_seq=5,
+                                message_count=3, file_count=2,
+                                file_names=['a.txt', 'b.txt'])
+            st = get_revert_state(conn, sid)
+            assert st['mode'] == 'native'
+            assert st['opencodeSessionId'] == 'oc1'
+            assert st['ocMessageId'] == 'msg_o3'
+            assert st['fileNames'] == ['a.txt', 'b.txt']
+            upsert_revert_state(conn, sid, mode='rebuild',
+                                opencode_session_id='oc2', oc_message_id=None,
+                                from_seq=5, message_count=3,
+                                prev_opencode_session_id='oc1')
+            assert get_revert_state(conn, sid)['mode'] == 'rebuild'
+            clear_context_replay(conn, sid)
+        with get_db() as conn:
+            n = commit_revert(conn, sid)
+        assert n == 0        # stash 空
+        with get_db() as conn:
+            assert get_revert_state(conn, sid) is None
+    finally:
+        _cleanup_undo_session(sid)

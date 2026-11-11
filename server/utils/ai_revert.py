@@ -131,3 +131,108 @@ def file_capability(project_info, workspace_path: str, created_ms: int,
     if created_ms and (now - created_ms) > max_age_days * 86400 * 1000:
         return 'stale'
     return 'full'
+
+
+# ================================================================ stash / 状态
+def stash_rows(conn, sid: str, from_seq: int) -> int:
+    """把 seq >= from_seq 的消息搬进 stash 并从主表删除（rating 随行携带，
+    feedback 行随消息 CASCADE 删除）。返回删除条数。"""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO ai_chat_message_stash "
+        "  (message_id, session_id, role, content, meta, created_at, seq, rating) "
+        "SELECT m.id, m.session_id, m.role, m.content, m.meta, m.created_at, m.seq, f.rating "
+        "FROM ai_chat_messages m "
+        "LEFT JOIN ai_chat_message_feedback f ON f.message_id = m.id "
+        "WHERE m.session_id = %s AND m.seq >= %s", (sid, from_seq))
+    cur.execute(
+        "DELETE FROM ai_chat_messages WHERE session_id = %s AND seq >= %s",
+        (sid, from_seq))
+    return cur.rowcount
+
+
+def restore_stash(conn, sid: str) -> int:
+    """stash 整体搬回主表（seq/created_at 保真——旧值必小于当前序列值，
+    新消息 nextval 不会冲突）+ feedback 回插 + 清 stash。返回恢复条数。"""
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO ai_chat_messages (id, session_id, role, content, meta, "
+        "  created_at, seq) "
+        "SELECT message_id, session_id, role, content, meta, created_at, seq "
+        "FROM ai_chat_message_stash WHERE session_id = %s", (sid,))
+    cur.execute(
+        "INSERT INTO ai_chat_message_feedback (message_id, session_id, rating) "
+        "SELECT message_id, session_id, rating FROM ai_chat_message_stash "
+        "WHERE session_id = %s AND rating IS NOT NULL "
+        "ON CONFLICT (message_id) DO NOTHING", (sid,))
+    cur.execute("DELETE FROM ai_chat_message_stash WHERE session_id = %s", (sid,))
+    return cur.rowcount
+
+
+def get_revert_state(conn, sid):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT mode, opencode_session_id, oc_message_id, from_seq, "
+        "       message_count, file_count, file_names, created_at "
+        "FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
+    r = cur.fetchone()
+    if not r:
+        return None
+    return {'mode': r[0], 'opencodeSessionId': r[1], 'ocMessageId': r[2],
+            'fromSeq': r[3], 'messageCount': r[4], 'fileCount': r[5],
+            'fileNames': r[6] or [],
+            'createdAt': r[7].isoformat() if r[7] else None}
+
+
+def upsert_revert_state(conn, sid, *, mode, opencode_session_id, oc_message_id,
+                        from_seq, message_count, file_count=0, file_names=None,
+                        prev_opencode_session_id=None):
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO ai_chat_session_reverts "
+        "  (session_id, mode, opencode_session_id, oc_message_id, from_seq, "
+        "   message_count, file_count, file_names, prev_opencode_session_id, "
+        "   created_at, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()) "
+        "ON CONFLICT (session_id) DO UPDATE SET "
+        "  mode = EXCLUDED.mode, "
+        "  opencode_session_id = EXCLUDED.opencode_session_id, "
+        "  oc_message_id = EXCLUDED.oc_message_id, from_seq = EXCLUDED.from_seq, "
+        "  message_count = EXCLUDED.message_count, "
+        "  file_count = EXCLUDED.file_count, file_names = EXCLUDED.file_names, "
+        "  prev_opencode_session_id = EXCLUDED.prev_opencode_session_id, "
+        "  updated_at = NOW()",
+        (sid, mode, opencode_session_id, oc_message_id, from_seq,
+         message_count, file_count, json.dumps(file_names or []),
+         prev_opencode_session_id))
+
+
+def commit_revert(conn, sid) -> int:
+    """提交撤销（不可重做）：清 stash + 状态行 + 被撤内容引用的孤儿子任务行。
+    返回 stash 清理条数（0 = 无挂起撤销）。"""
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT content FROM ai_chat_message_stash WHERE session_id = %s", (sid,))
+    subtask_ids = set()
+    for (content,) in cur.fetchall():
+        if not isinstance(content, list):
+            continue
+        for p in content:
+            if isinstance(p, dict) and p.get('type') == 'subtask_use' \
+                    and p.get('subtaskId'):
+                subtask_ids.add(p['subtaskId'])
+    if subtask_ids:
+        cur.execute(
+            "DELETE FROM ai_chat_subtasks WHERE root_session_id = %s "
+            "AND id = ANY(%s)", (sid, sorted(subtask_ids)))
+    cur.execute("DELETE FROM ai_chat_message_stash WHERE session_id = %s", (sid,))
+    n = cur.rowcount
+    cur.execute("DELETE FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
+    return n
+
+
+def clear_context_replay(conn, sid):
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE ai_chat_sessions SET context_replay_pending = FALSE "
+        "WHERE id = %s", (sid,))
