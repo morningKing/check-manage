@@ -234,3 +234,199 @@ def test_revert_state_upsert_get_commit():
             assert get_revert_state(conn, sid) is None
     finally:
         _cleanup_undo_session(sid)
+
+
+# ---------------- 编排器（mock db + mock client，仿 test_routes_ai_chat.setup） ----------------
+import time as _time
+from contextlib import contextmanager as _cm
+from datetime import datetime as _dt, timezone as _tz
+from unittest.mock import MagicMock as _MagicMock
+
+import utils.ai_revert as ar
+
+
+def _mock_env(rows, oc_messages, project=None, revert_info=None, state_rows=None):
+    """打桩 get_db/get_runtime/chat_persist；fetchone 按 (ctx, target, state…) 供给。"""
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc1', 'active', '/tmp/ws'),                # _load_undo_context
+        (3,),                                        # target seq
+    ] + (state_rows or [])
+    # fetchall 首个=ctx rows，必须是 DB 元组形态（实现内 r[0] 索引后转 dict）；
+    # 其后是 _message_window 等空窗
+    cursor.fetchall.side_effect = [
+        [(r['id'], r['role'], r['seq']) for r in rows], [], [], [], []]
+    conn = _MagicMock()
+    conn.cursor.return_value = cursor
+    conn.__enter__ = lambda self: conn
+    conn.__exit__ = lambda self, *a: False
+
+    @_cm
+    def fake_db():
+        yield conn
+
+    client = _MagicMock()
+    client.get_messages.return_value = oc_messages
+    client.get_project.return_value = project or {'vcs': 'git', 'worktree': '/tmp/ws'}
+    client.revert_stage.return_value = {'id': 'oc1',
+                                        'revert': {'messageID': (revert_info or {}).get(
+                                            'messageID', 'msg_o3')}}
+    return cursor, client, fake_db
+
+
+def _two_turn_rows():
+    return [{'id': 'msg_a1', 'role': 'assistant', 'seq': 2},
+            {'id': 'msg_u2', 'role': 'user', 'seq': 3},
+            {'id': 'msg_a2', 'role': 'assistant', 'seq': 4},
+            {'id': 'msg_u3', 'role': 'user', 'seq': 5}]
+
+
+def _oc_anchor_msgs(recent_ms=None):
+    """带活锚（msg_a1 在 OC 里）的 OC 夹具：resolve_undo_target 走原生吸附路径。
+
+    msg_o3 是吸附出的 OC user 目标（E2）；msg_o4 携带 patch——files 统计
+    只取目标之后的消息，patch 挂在目标自身上会是空集（空 files 直接判
+    'none'，到不了 stale 促销）。recent_ms=None 表示 msg_o3 快照远古
+    （created=1ms，必 stale）；传具体值则表示新鲜快照（必 full）。
+    """
+    created = 1 if recent_ms is None else recent_ms
+    return [{'info': {'id': 'msg_a1', 'role': 'assistant',
+                      'time': {'created': 1}}, 'parts': []},
+            {'info': {'id': 'msg_o3', 'role': 'user',
+                      'time': {'created': created}}, 'parts': []},
+            {'info': {'id': 'msg_o4', 'role': 'assistant',
+                      'time': {'created': created + 1000}},
+             'parts': [{'type': 'patch', 'files': [{'file': 'a.txt'}]}]}]
+
+
+def test_undo_native_calls_revert_stage_with_snapped_user_id(monkeypatch):
+    oc = [{'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': 1}}, 'parts': []},
+          {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}},
+           'parts': [{'type': 'patch', 'files': [{'file': 'a.txt'}]}]}]
+    state = ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
+             _dt(2026, 11, 10, tzinfo=_tz.utc))
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc,
+                                        revert_info={'messageID': 'msg_o3'},
+                                        state_rows=[state])
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
+    out = ar.undo_from_message('sess_x', 'msg_u2')
+    client.revert_stage.assert_called_once()
+    args, kwargs = client.revert_stage.call_args
+    assert args[0] == 'oc1' and args[1] == 'msg_o3'      # E2 吸附
+    assert kwargs['directory'] == '/tmp/ws'
+    assert out['revert']['ocMessageId'] == 'msg_o3'
+    assert out['deleted'] == 3                            # seq>=3 的平台行数
+
+
+def test_undo_revert_mismatch_rolls_back(monkeypatch):
+    oc = [{'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': 1}}, 'parts': []},
+          {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}}, 'parts': []}]
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    client.revert_stage.return_value = {'id': 'oc1', 'revert': None}   # E6 形态
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.undo_from_message('sess_x', 'msg_u2')
+    assert ei.value.code == 'REVERT_MISMATCH'
+    client.revert_clear.assert_not_called()   # 未成功过无需补偿
+
+
+def test_undo_oc_failure_compensates(monkeypatch):
+    """原子性契约：OC revert_stage 成功后平台侧落库失败 → 反向补偿 revert_clear。"""
+    oc = [{'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': 1}}, 'parts': []},
+          {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}}, 'parts': []}]
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    import requests as _rq
+    boom = _rq.HTTPError('500')
+    boom.response = _MagicMock(status_code=500)
+    # 失败注入点在 revert_stage 成功之后（upsert_revert_state 抛错）——
+    # 若 revert_stage 自身抛错则 oc_reverted=False，补偿分支覆盖不到
+    monkeypatch.setattr(ar, 'upsert_revert_state', _MagicMock(side_effect=boom))
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    import pytest
+    with pytest.raises(_rq.HTTPError):
+        ar.undo_from_message('sess_x', 'msg_u2')
+    client.revert_stage.assert_called_once()   # OC 侧已成功撤销
+    client.revert_clear.assert_called_once()   # → 平台侧失败触发补偿
+
+
+def test_undo_busy_409(monkeypatch):
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: True)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.undo_from_message('sess_x', 'msg_u2')
+    assert ei.value.code == 'SESSION_BUSY'
+
+
+def test_undo_rebuild_promotes_stale_and_never_calls_oc_revert(monkeypatch):
+    oc = _oc_anchor_msgs()          # msg_o3 created=1ms → 必 stale → 促销 rebuild
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    client.create_session.return_value = 'oc_new'
+    state = ('rebuild', 'oc_new', None, 3, 2, 0, [], _dt(2026, 11, 10, tzinfo=_tz.utc))
+    cursor.fetchone.side_effect = [
+        ('oc1', 'active', '/tmp/ws'), (3,), state,   # 实现读取序：ctx → target → 读态
+    ]
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
+    out = ar.undo_from_message('sess_x', 'msg_u2')
+    client.revert_stage.assert_not_called()
+    client.create_session.assert_called_once()
+    client.get_project.assert_called_once()    # 走了 native→stale 促销，非 anchor-missing
+    assert out['revert']['mode'] == 'rebuild'
+    client.delete_session.assert_not_called()  # 成功路径不触发补偿（换 OC 已提交）
+
+
+def test_redo_nothing_to_redo(monkeypatch):
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc1', 'active', '/tmp/ws'), None,              # sessions + 无状态行
+    ]
+    conn = _MagicMock(); conn.cursor.return_value = cursor
+    conn.__enter__ = lambda self: conn; conn.__exit__ = lambda self, *a: False
+
+    @_cm
+    def fake_db():
+        yield conn
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.redo('sess_x')
+    assert ei.value.code == 'NOTHING_TO_REDO'
+
+
+def test_commit_after_dispatch_noop_without_state(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ar, 'get_revert_state', lambda conn, sid: None)
+    monkeypatch.setattr(ar, 'commit_revert', lambda conn, sid: calls.append(sid))
+
+    @_cm
+    def fake_db():
+        yield _MagicMock()
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    ar.commit_after_dispatch('s1')
+    assert calls == []
+
+
+def test_preview_shape(monkeypatch):
+    oc = _oc_anchor_msgs(recent_ms=int(_time.time() * 1000))   # 新鲜快照 → full
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    out = ar.preview_undo('sess_x', 'msg_u2')
+    assert out['messageCount'] == 3
+    assert out['files'] == ['a.txt']
+    assert out['fileCapability'] == 'full'
+    assert out['mode'] == 'native'

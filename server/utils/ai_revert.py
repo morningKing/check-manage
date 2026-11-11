@@ -236,3 +236,260 @@ def clear_context_replay(conn, sid):
     cur.execute(
         "UPDATE ai_chat_sessions SET context_replay_pending = FALSE "
         "WHERE id = %s", (sid,))
+
+
+# ================================================================ 编排器
+def _fetch_oc_messages(client, oc_sid, workspace_path):
+    if not oc_sid:
+        return []
+    try:
+        return client.get_messages(oc_sid, directory=workspace_path) or []
+    except requests.RequestException as e:
+        raise UndoError('OPENCODE_UNAVAILABLE', 'AI 运行时暂时不可用，请稍后重试',
+                        status=502, retryable=True, operation='undo') from e
+
+
+def _load_undo_context_or_raise(sid: str, msg_id: str) -> dict:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT opencode_session_id, status, workspace_path "
+            "FROM ai_chat_sessions WHERE id = %s", (sid,))
+        row = cur.fetchone()
+        if row is None:
+            raise UndoError('SESSION_NOT_FOUND', 'session not found', status=404,
+                            operation='undo')
+        oc_sid, status, workspace_path = row
+        if status != 'active':
+            raise UndoError('INVALID_STATUS', '该状态会话不可撤销', operation='undo')
+        cur.execute(
+            "SELECT seq FROM ai_chat_messages WHERE id = %s AND session_id = %s",
+            (msg_id, sid))
+        trow = cur.fetchone()
+        if trow is None:
+            raise UndoError('MESSAGE_NOT_FOUND', 'message not found', status=404,
+                            operation='undo')
+        target_seq = trow[0]
+        cur.execute(
+            "SELECT id, role, seq FROM ai_chat_messages "
+            "WHERE session_id = %s ORDER BY seq ASC", (sid,))
+        rows = [{'id': r[0], 'role': r[1], 'seq': r[2]} for r in cur.fetchall()]
+    return {'oc_sid': oc_sid, 'workspace_path': workspace_path,
+            'target_seq': target_seq, 'rows': rows,
+            'message_count': sum(1 for r in rows if r['seq'] >= target_seq)}
+
+
+def _finalize_plan(client, plan: dict, workspace_path: str, oc_messages) -> dict:
+    """补文件能力分级并把 stale 促销为 rebuild（spec §2.2a(5)）。"""
+    if plan['mode'] != 'native' or not plan['oc_user_message_id']:
+        plan['fileCapability'] = 'none'
+        return plan
+    created_ms = 0
+    for m in oc_messages:
+        info = (m.get('info') or {})
+        if info.get('id') == plan['oc_user_message_id']:
+            created_ms = ((info.get('time') or {}).get('created')) or 0
+            break
+    try:
+        project_info = client.get_project(directory=workspace_path)
+    except requests.RequestException:
+        project_info = None
+    cap = file_capability(project_info, workspace_path, created_ms, plan['files'])
+    plan['fileCapability'] = cap
+    if cap == 'stale':
+        plan['mode'] = 'rebuild'
+        plan['reason'] = 'file-snapshot-stale'
+    return plan
+
+
+def preview_undo(sid: str, msg_id: str) -> dict:
+    """撤销预览（只读，1 次 OC get_messages + 1 次 get_project）。"""
+    ctx = _load_undo_context_or_raise(sid, msg_id)
+    client = get_runtime().get_client()
+    oc_messages = _fetch_oc_messages(client, ctx['oc_sid'], ctx['workspace_path'])
+    plan = resolve_undo_target(ctx['rows'], ctx['target_seq'], oc_messages)
+    plan = _finalize_plan(client, plan, ctx['workspace_path'], oc_messages)
+    return {'messageCount': ctx['message_count'], 'files': plan['files'],
+            'fileCapability': plan['fileCapability'], 'mode': plan['mode'],
+            'reason': plan.get('reason')}
+
+
+def _compensate_clear(client, oc_sid, workspace_path):
+    """OC 已撤销但平台侧失败 → 反向补偿（尽力而为并留痕）。"""
+    try:
+        client.revert_clear(oc_sid, directory=workspace_path)
+    except Exception:
+        logger.error('revert 补偿失败 oc=%s（平台已回滚，OC 侧处于撤销态，'
+                     '下次发送将被提交）', oc_sid, exc_info=True)
+
+
+def _undo_native(sid, ctx, plan, client):
+    from utils import chat_persist
+    oc_reverted = False
+    try:
+        with get_db() as conn:
+            conn.cursor().execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", (sid,))
+            chat_persist.stop_listener(sid)   # 防监听器复活（clear_session 先例）
+            stash_rows(conn, sid, ctx['target_seq'])
+            if plan['oc_user_message_id']:
+                try:
+                    info = client.revert_stage(ctx['oc_sid'],
+                                               plan['oc_user_message_id'],
+                                               directory=ctx['workspace_path'])
+                except requests.HTTPError as e:
+                    if getattr(e, 'response', None) is not None \
+                            and e.response.status_code == 409:
+                        raise UndoError('SESSION_BUSY',
+                                        '回合进行中，请先停止当前回复再撤销',
+                                        operation='undo') from e
+                    raise
+                if ((info or {}).get('revert') or {}).get('messageID') \
+                        != plan['oc_user_message_id']:
+                    raise UndoError('REVERT_MISMATCH',
+                                    '撤销点校验失败（OpenCode 未按请求回退）')
+                oc_reverted = True
+            upsert_revert_state(
+                conn, sid, mode='native', opencode_session_id=ctx['oc_sid'],
+                oc_message_id=plan['oc_user_message_id'],
+                from_seq=ctx['target_seq'], message_count=ctx['message_count'],
+                file_count=len(plan['files']), file_names=plan['files'])
+    except Exception:
+        if oc_reverted:
+            _compensate_clear(client, ctx['oc_sid'], ctx['workspace_path'])
+        raise
+    with get_db() as conn:
+        state = get_revert_state(conn, sid)
+    broadcast_revert(sid)
+    return state
+
+
+def _undo_rebuild(sid, ctx, plan, client):
+    from utils import chat_persist
+    new_oc = client.create_session(directory=ctx['workspace_path'],
+                                   title='撤销重建')
+    try:
+        with get_db() as conn:
+            conn.cursor().execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", (sid,))
+            chat_persist.stop_listener(sid)
+            stash_rows(conn, sid, ctx['target_seq'])
+            conn.cursor().execute(
+                "UPDATE ai_chat_sessions SET opencode_session_id = %s, "
+                "context_replay_pending = TRUE WHERE id = %s", (new_oc, sid))
+            upsert_revert_state(
+                conn, sid, mode='rebuild', opencode_session_id=new_oc,
+                oc_message_id=None, from_seq=ctx['target_seq'],
+                message_count=ctx['message_count'], file_count=0, file_names=[],
+                prev_opencode_session_id=ctx['oc_sid'])
+    except Exception:
+        try:
+            client.delete_session(new_oc)
+        except Exception:
+            pass
+        raise
+    with get_db() as conn:
+        state = get_revert_state(conn, sid)
+    broadcast_revert(sid)
+    return state
+
+
+def undo_from_message(sid: str, msg_id: str) -> dict:
+    from utils import chat_persist
+    if chat_persist.has_listener(sid):
+        raise UndoError('SESSION_BUSY', '回合进行中，请先停止当前回复再撤销',
+                        operation='undo')
+    ctx = _load_undo_context_or_raise(sid, msg_id)
+    client = get_runtime().get_client()
+    oc_messages = _fetch_oc_messages(client, ctx['oc_sid'], ctx['workspace_path'])
+    plan = resolve_undo_target(ctx['rows'], ctx['target_seq'], oc_messages)
+    plan = _finalize_plan(client, plan, ctx['workspace_path'], oc_messages)
+    if plan['mode'] == 'rebuild':
+        state = _undo_rebuild(sid, ctx, plan, client)
+    else:
+        state = _undo_native(sid, ctx, plan, client)
+    return {'deleted': ctx['message_count'], 'revert': state,
+            'messages': _message_window(sid)}
+
+
+def redo(sid: str) -> dict:
+    from utils import chat_persist
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT opencode_session_id, status, workspace_path "
+            "FROM ai_chat_sessions WHERE id = %s", (sid,))
+        row = cur.fetchone()
+        if row is None:
+            raise UndoError('SESSION_NOT_FOUND', 'session not found', status=404,
+                            operation='redo')
+        oc_now, status, workspace_path = row
+        if status != 'active':
+            raise UndoError('INVALID_STATUS', '该状态会话不可重做', operation='redo')
+        state = get_revert_state(conn, sid)
+        if not state:
+            raise UndoError('NOTHING_TO_REDO', '没有可重做的撤销', operation='redo')
+        if state['opencodeSessionId'] != oc_now:
+            # 会话被恢复/清空换过：旧 OC 上下文不可达，只收口不搬回（spec §2.2c）
+            commit_revert(conn, sid)
+            clear_context_replay(conn, sid)
+            raise UndoError('REDO_STALE', '会话上下文已变化，无法重做（撤销已收口）',
+                            operation='redo')
+    client = get_runtime().get_client()
+    try:
+        with get_db() as conn:
+            conn.cursor().execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))", (sid,))
+            if state['mode'] == 'native' and state['ocMessageId']:
+                client.revert_clear(state['opencodeSessionId'],
+                                    directory=workspace_path)
+            chat_persist.stop_listener(sid)
+            restore_stash(conn, sid)
+            clear_context_replay(conn, sid)
+            conn.cursor().execute(
+                "DELETE FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
+    except Exception:
+        # OC clear 已发出而 DB 回滚：平台仍处撤销态，再次 redo 幂等重试
+        logger.error('redo 失败 session=%s（OC clear 可能已发出）', sid, exc_info=True)
+        raise
+    broadcast_revert(sid)
+    return {'deleted': state['messageCount'], 'messages': _message_window(sid)}
+
+
+def commit_after_dispatch(sid: str) -> None:
+    """提交挂起的撤销（新回合已被接受——OC 侧 prompt 开头自动 commit，E3，
+    平台侧同步收口）。无撤销态时零开销（单 SELECT）。"""
+    with get_db() as conn:
+        state = get_revert_state(conn, sid)
+        if not state:
+            return
+        commit_revert(conn, sid)
+        clear_context_replay(conn, sid)
+    broadcast_revert(sid)
+
+
+def broadcast_revert(sid: str) -> None:
+    """向该会话全部 SSE 连接广播撤销态（无连接时 no-op）。"""
+    try:
+        with get_db() as conn:
+            state = get_revert_state(conn, sid)
+        from utils.session_event_bus import broadcast
+        broadcast(sid, 'session.revert', {'sessionId': sid, 'revert': state})
+    except Exception:
+        logger.warning('revert 广播失败 session=%s', sid, exc_info=True)
+
+
+def _message_window(sid: str, limit: int = 200) -> list:
+    """与 GET /messages 默认分支同形（seq DESC 取 limit 再反转）。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT m.id, m.role, m.content, m.created_at, m.meta, m.seq, f.rating "
+            "FROM ai_chat_messages m "
+            "LEFT JOIN ai_chat_message_feedback f ON f.message_id = m.id "
+            "WHERE m.session_id = %s ORDER BY m.seq DESC LIMIT %s", (sid, limit))
+        rows = cur.fetchall()
+    rows = list(reversed(rows))
+    return [{'id': r[0], 'role': r[1], 'content': r[2],
+             'createdAt': r[3].isoformat() if r[3] else None,
+             'meta': r[4], 'seq': r[5], 'rating': r[6]} for r in rows]
