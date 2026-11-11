@@ -997,33 +997,75 @@ def test_run_script_other_users_session_404(setup):
     assert resp.status_code == 404
 
 
-def test_delete_message_onwards_drops_from_created_at(setup):
+def test_delete_message_runs_native_undo(setup):
+    """升级为真撤销：OC revert_stage 用吸附出的 user id，响应带 revert。"""
+    import time
     from datetime import datetime, timezone
     client, cursor, oc, dev_h, _, _ = setup
+    now_ms = int(time.time() * 1000)
+    dt = datetime(2026, 5, 30, tzinfo=timezone.utc)
+    # fetchone 供给序 = 路由 + 编排器实际读取序：会话行 → 撤销上下文
+    # （OC 会话/状态/工作区）→ 目标消息 seq → 撤销态读态（落库后读回）
     cursor.fetchone.side_effect = [
-        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws'),
-        (datetime(2026, 5, 30, tzinfo=timezone.utc),),
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('oc', 'active', '/tmp/ws'),
+        (3,),
+        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt),   # 提交后读态
     ]
-    cursor.rowcount = 3
-    resp = client.delete('/ai/chat/sessions/sess_x/messages/msg_dead', headers=dev_h)
+    cursor.fetchall.side_effect = [
+        # 平台行（锚点解析）：seq >= 3 的 u2/a2 共 2 条 → deleted
+        [('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
+         ('msg_a2', 'assistant', 4)],
+        [('msg_a1', 'assistant', [], dt, None, 2, None)],     # message window
+    ]
+    # OC 夹具复用 _undo_oc_messages：锚 msg_a1 必须在 OC 列表内才能吸附出
+    # 目标 msg_o3；patch 挂在目标之后的 msg_a2；created 用当前毫秒避免
+    # 7 天快照窗口（E10）判 stale 促销成 rebuild（与 T7 undo 用例同修正）
+    oc.get_messages.return_value = _undo_oc_messages(now_ms)
+    oc.get_project.return_value = {'vcs': 'git', 'worktree': '/tmp/ws'}
+    oc.revert_stage.return_value = {'id': 'oc', 'revert': {'messageID': 'msg_o3'}}
+    resp = client.delete('/ai/chat/sessions/sess_x/messages/msg_u2', headers=dev_h)
     assert resp.status_code == 200
-    assert resp.get_json() == {'deleted': 3}
-    # asserts: (1) we looked up created_at for the target msg, (2) DELETE used it
-    sqls = [c.args[0] for c in cursor.execute.call_args_list]
-    assert any('SELECT created_at FROM ai_chat_messages' in s for s in sqls)
-    assert any('DELETE FROM ai_chat_messages' in s and 'created_at' in s for s in sqls)
-    oc.abort_session.assert_called_once()  # best-effort abort
+    body = resp.get_json()
+    assert body['deleted'] == 2
+    assert body['revert']['ocMessageId'] == 'msg_o3'
+    oc.revert_stage.assert_called_once()       # 顶替旧 abort_session 断言
 
 
 def test_delete_message_unknown_msg_404(setup):
+    """目标消息不存在（编排器抛 MESSAGE_NOT_FOUND）→ 404 结构化错误。"""
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.side_effect = [
-        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws'),
-        None,  # message not found
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('oc', 'active', '/tmp/ws'),
+        None,
     ]
     resp = client.delete('/ai/chat/sessions/sess_x/messages/msg_nope', headers=dev_h)
     assert resp.status_code == 404
-    assert resp.get_json()['code'] == 'MESSAGE_NOT_FOUND'
+    assert resp.get_json()['error']['code'] == 'MESSAGE_NOT_FOUND'
+
+
+def test_delete_message_platform_only_no_oc_call(setup):
+    """失败轮从未到达 OC（OC 列表空）→ 不调 OC，纯平台 stash（spec §2.2b5）。"""
+    from datetime import datetime, timezone
+    client, cursor, oc, dev_h, _, _ = setup
+    dt = datetime(2026, 5, 30, tzinfo=timezone.utc)
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('oc', 'active', '/tmp/ws'),
+        (3,),
+        ('native', 'oc', None, 3, 2, 0, [], dt),
+    ]
+    cursor.fetchall.side_effect = [
+        [('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
+         ('msg_a2', 'assistant', 4)],     # 平台行（锚点解析）
+        [],                               # message window（已全部搬入 stash）
+    ]
+    oc.get_messages.return_value = []
+    resp = client.delete('/ai/chat/sessions/sess_x/messages/msg_u2', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json()['revert']['ocMessageId'] is None
+    oc.revert_stage.assert_not_called()
 
 
 def test_delete_message_guest_403(setup):

@@ -23,7 +23,7 @@ Routes registered:
     POST   /ai/chat/sessions/:id/close    close_session
     POST   /ai/chat/sessions/:id/reopen   reopen_session
     POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
-    DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
+    DELETE /ai/chat/sessions/:id/messages/:msg_id  delete_message_onwards（真撤销核心：OC revert + 平台行搬 stash，编辑/重新生成/发送失败清理共用）
     POST   /ai/chat/sessions/:id/messages/:msg_id/feedback  set_message_feedback (rating 1/-1/0, 0=清除)
     POST   /ai/chat/sessions/:id/undo  undo_to_message（撤销到某条消息之前）
     POST   /ai/chat/sessions/:id/redo  redo_session_route（恢复被撤销的消息）
@@ -2603,9 +2603,9 @@ def set_permission_mode(sid):
 @ai_chat_bp.route('/sessions/<sid>/messages/<msg_id>', methods=['DELETE'])
 @write_required
 def delete_message_onwards(sid, msg_id):
-    """Remove a message and every message after it in the session — used by the
-    user-bubble Edit / Retry affordances. Also aborts any in-flight turn so the
-    next prompt isn't stacked on top of a still-streaming one (best-effort)."""
+    """真撤销（undo-redo spec §2.3）：OpenCode revert（上下文回退 + 文件按步
+    还原）+ 平台行搬入 stash（可重做，下次发送提交）。编辑/重新生成/发送失败
+    清理三个调用方共用。响应 = {'deleted', 'revert', 'messages'}。"""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
@@ -2619,26 +2619,13 @@ def delete_message_onwards(sid, msg_id):
             'retryable': False,
             'operation': 'delete_message',
         }}), 409
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT created_at FROM ai_chat_messages WHERE id = %s AND session_id = %s",
-            (msg_id, sid),
-        )
-        row = cur.fetchone()
-        if not row:
-            return jsonify({'error': 'message not found', 'code': 'MESSAGE_NOT_FOUND'}), 404
-        cur.execute(
-            "DELETE FROM ai_chat_messages "
-            "WHERE session_id = %s AND created_at >= %s",
-            (sid, row[0]),
-        )
-        deleted = cur.rowcount
     try:
-        OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
-    except Exception as e:
-        logger.debug('abort_session best-effort no-op session=%s: %s', sid, e)
-    return jsonify({'deleted': deleted}), 200
+        result = ai_revert.undo_from_message(sid, msg_id)
+    except ai_revert.UndoError as e:
+        return _undo_error_response(e)
+    log_operation('update', 'ai_chat_session', sid, sid,
+                  f'删除该消息及之后（撤销 {result["deleted"]} 条）')
+    return jsonify(result)
 
 
 @ai_chat_bp.route('/sessions/<sid>/files/download', methods=['GET'])
