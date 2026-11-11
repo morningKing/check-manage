@@ -68,6 +68,7 @@ from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
     INTERNAL_MCP_NAME as MCP_NAME
 from utils import agent_ledger
 from utils import ai_revert
+from utils import session_event_bus
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
     has_listener, live_listener_sids,
@@ -1893,6 +1894,15 @@ def _pump_upstream_events(q, client, directory: str):
         q.put(None)
 
 
+def _pump_bus_events(bus_q, out_q):
+    """平台侧事件（session.revert 等）转发进主流队列；unregister 后以 None 收尾。"""
+    while True:
+        item = bus_q.get()
+        if item is None:
+            break
+        out_q.put(item)
+
+
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
 @login_required_sse
 def sse_events(sid):
@@ -1920,6 +1930,11 @@ def sse_events(sid):
             # （把子代理事件排除在父会话流式状态之外，2026-10-11 子代理区块
             # 缺陷修复）需要这个判据。必须先于快照爆发与实时流，消除子代理
             # 事件先于委托发现到达时的判别竞态。
+            # 平台事件总线注册（undo-redo spec §2.6）：ai_revert 提交后
+            # broadcast 的 session.revert 帧经 bus_pump 汇入主流队列，其他
+            # 已连标签页即时收敛。bus_q 必须先于任何 yield 注册，保证 finally
+            # 里的 unregister / None 哨兵总能拿到已绑定的队列。
+            bus_q = session_event_bus.register(sid)
             yield _format_sse('session.hello',
                               {'sessionID': opencode_session_id, 'sessionId': sid})
             # 订阅起点先补发进行中回合的快照爆发（见 _midturn_snapshot_events），
@@ -1934,6 +1949,12 @@ def sse_events(sid):
                 target=_pump_upstream_events, args=(q, client, sess[4]),
                 daemon=True, name=f'sse-pump-{sid[:8]}')
             pump.start()
+            # 平台总线转发线程：与 OC pump 并行喂同一个主流队列，帧形一致，
+            # 主循环零特判（session.revert 无 sessionID → 相关性闸门放行，
+            # apply_event 对未知类型返回 None → 原样转发给前端）。
+            bus_pump = threading.Thread(target=_pump_bus_events, args=(bus_q, q),
+                                        daemon=True, name=f'sse-bus-{sid[:8]}')
+            bus_pump.start()
             while True:
                 try:
                     evt = q.get(timeout=SSE_PING_SEC)
@@ -2007,6 +2028,8 @@ def sse_events(sid):
             logger.exception('sse stream error session=%s oc=%s', sid, opencode_session_id)
             return
         finally:
+            session_event_bus.unregister(sid, bus_q)
+            bus_q.put(None)          # 收掉 bus 转发线程
             logger.info('sse stream closed session=%s', sid)
 
     return Response(
