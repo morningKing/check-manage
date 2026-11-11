@@ -10,7 +10,7 @@ export const FRONTEND_COMMANDS: FrontendCommand[] = [
   { name: 'mcps', description: '列出已配置的 MCP 服务及工具', run: (s) => s.showMcpServices() },
   { name: 'lsp', description: '查看 LSP 服务与格式化器状态', run: (s) => s.showLspFormatter() },
   { name: 'undo', description: '撤销最后一个用户轮（文本装回输入框）',
-    run: (s) => s.undoLastTurn() },
+    run: async (s) => { await s.undoLastTurn() } },
   { name: 'redo', description: '恢复最近一次撤销的对话',
     run: (s) => { if (s.activeSessionId) return s.redoSession(s.activeSessionId) } },
 ]
