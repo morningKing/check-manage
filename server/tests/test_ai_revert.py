@@ -536,3 +536,23 @@ def test_preview_shape(monkeypatch):
     assert out['files'] == ['a.txt']
     assert out['fileCapability'] == 'full'
     assert out['mode'] == 'native'
+
+
+def test_commit_after_dispatch_clears_state(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ar, 'get_revert_state',
+                        lambda conn, sid: {'mode': 'native'} if sid == 's1' else None)
+    monkeypatch.setattr(ar, 'commit_revert',
+                        lambda conn, sid: calls.append(('commit', sid)) or 3)
+    monkeypatch.setattr(ar, 'clear_context_replay',
+                        lambda conn, sid: calls.append(('flag', sid)))
+    monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: calls.append(('bc', sid)))
+
+    @_cm
+    def fake_db():
+        yield _MagicMock()
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    ar.commit_after_dispatch('s1')
+    assert ('commit', 's1') in calls and ('bc', 's1') in calls
+    ar.commit_after_dispatch('s2')                     # 无状态 → no-op
+    assert not any(c == ('commit', 's2') for c in calls)

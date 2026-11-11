@@ -980,6 +980,10 @@ def compact_session(sid):
             OpenCodeClient(OPENCODE_BASE_URL).summarize_session(
                 sess[2], provider_id, model_id, directory=sess[4])
             logger.info('compact done session=%s model=%s', sid, model)
+            try:
+                ai_revert.commit_after_dispatch(sid)   # OC compact 亦自动 commit
+            except Exception:
+                logger.warning('undo commit hook failed session=%s', sid, exc_info=True)
         except Exception:
             logger.warning('compact failed session=%s model=%s', sid, model, exc_info=True)
 
@@ -1097,6 +1101,23 @@ def send_message(sid):
             (msg_id, sid, json.dumps(stored_parts or [{'type': 'text', 'text': ''}])),
         )
 
+    # undo-redo spec §2.2d：rebuild 撤销后首次发送 → 用既有恢复机制把被保留
+    # 的历史重放给新 OC 会话（与 _recover_session_and_resend 同一格式）。
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT context_replay_pending FROM ai_chat_sessions "
+            "WHERE id = %s AND user_id = %s", (sid, user['userId']))
+        _rp = cur.fetchone()
+    if _rp and _rp[0]:
+        with get_db() as conn:
+            conn.cursor().execute(
+                "UPDATE ai_chat_sessions SET context_replay_pending = FALSE "
+                "WHERE id = %s", (sid,))
+        _replayed = render_history_block(sid, exclude_msg_id=msg_id)
+        if _replayed:
+            prompt = _replayed + prompt
+
     # Per-message model override: composer dropdown sends a `model` field
     # ("<providerID>/<modelID>"). Empty/missing falls back to get_default_chat_model()
     # (which itself may be empty, in which case OpenCode picks its default).
@@ -1207,6 +1228,12 @@ def send_message(sid):
                 payload={'new_opencode_session_id': oc_sid})
         stop_listener(sid)
         ensure_listener(sid, oc_sid, sess[4])
+    # undo-redo spec §2.4：新回合已被 OC 接受（OC prompt 开头自动提交撤销，
+    # E3）——平台侧同步收口，重做窗口关闭。失败不阻断发送。
+    try:
+        ai_revert.commit_after_dispatch(sid)
+    except Exception:
+        logger.warning('undo commit hook failed session=%s', sid, exc_info=True)
     return jsonify({
         'messageId': msg_id,
         'model': effective_model or None,
@@ -2287,6 +2314,12 @@ def run_session_command(sid):
     OpenCodeClient(OPENCODE_BASE_URL).run_command(
         sess[2], command, arguments, model=get_default_chat_model(), directory=sess[4],
     )
+    # undo-redo spec §2.4：新回合已被 OC 接受（OC prompt 开头自动提交撤销，
+    # E3）——平台侧同步收口，重做窗口关闭。失败不阻断发送。
+    try:
+        ai_revert.commit_after_dispatch(sid)
+    except Exception:
+        logger.warning('undo commit hook failed session=%s', sid, exc_info=True)
     return jsonify({'messageId': msg_id}), 202
 
 
@@ -2708,6 +2741,12 @@ def run_script(sid):
         'stderr': result['stderr'],
         'outputFiles': result['outputFiles'],
     }
+    # undo-redo spec §2.4：run_script 写平台侧行前收口撤销（该轮不在 OC，
+    # OC 到下次 prompt 自然提交）
+    try:
+        ai_revert.commit_after_dispatch(sid)
+    except Exception:
+        logger.warning('undo commit hook failed session=%s', sid, exc_info=True)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -2828,9 +2867,14 @@ def clear_session(sid):
         cur = conn.cursor()
         cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (sid,))
         cur.execute("DELETE FROM ai_chat_subtasks WHERE root_session_id = %s", (sid,))
+        # undo-redo spec §2.4：清空会话＝全新开始，撤销暂存与可重做工作集
+        # 一并清掉，重放待办 flag 同步复位（新 OC 会话无需历史重放）
+        cur.execute("DELETE FROM ai_chat_message_stash WHERE session_id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
         cur.execute(
             "UPDATE ai_chat_sessions SET opencode_session_id = %s, status = 'active', "
-            "permission_mode = 'ask', workspace_path = %s "
+            "permission_mode = 'ask', workspace_path = %s, "
+            "context_replay_pending = FALSE "
             "WHERE id = %s AND user_id = %s",
             (new_oc, workspace_path, sid, user['userId']),
         )
@@ -2880,6 +2924,9 @@ def delete_session(sid):
         cur = conn.cursor()
         cur.execute("UPDATE ai_chat_sessions SET status = 'deleted' WHERE id = %s AND user_id = %s",
                     (sid, user['userId']))
+        # undo-redo spec §2.4：软删不留悬挂可重做工作集（消息行按审计保留不变）
+        cur.execute("DELETE FROM ai_chat_message_stash WHERE session_id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_session_reverts WHERE session_id = %s", (sid,))
     # P0 §7.3 WORKSPACE_CLEANUP_FAILED：清理失败（Windows 句柄占用等）不得
     # 伪装成完全成功——207 多状态返回，token 已吊销、行已标记删除，安全边界不受影响
     cleanup_failed = False
