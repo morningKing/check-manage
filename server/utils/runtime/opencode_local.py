@@ -16,6 +16,7 @@ class OpenCodeLocalRuntime(AgentRuntime):
 
     def capabilities(self) -> dict:
         return {'checkpoint': True, 'pause': True, 'abort': True,
+                'revert': True,
                 'network_isolation': False, 'process_tree_kill': False}
 
     def _client(self):
@@ -58,6 +59,14 @@ class OpenCodeLocalRuntime(AgentRuntime):
 
     def abort(self, oc_session_id: str, directory: str = '') -> None:
         self._client().abort_session(oc_session_id, directory=directory)
+
+    def revert_stage(self, oc_session_id: str, oc_message_id: str,
+                     directory: str = '') -> dict:
+        return self._client().revert_session(oc_session_id, oc_message_id,
+                                             directory=directory)
+
+    def revert_clear(self, oc_session_id: str, directory: str = '') -> None:
+        self._client().unrevert_session(oc_session_id, directory=directory)
 
     def health(self) -> dict:
         try:

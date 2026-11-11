@@ -40,6 +40,16 @@ class AgentRuntime:
     def health(self) -> dict:
         raise NotImplementedError
 
+    def revert_stage(self, oc_session_id: str, oc_message_id: str,
+                     directory: str = '') -> dict:
+        """软撤销：会话回退到 oc_message_id（user 消息）之前。返回带
+        'revert' 键的会话信息；busy 抛 requests.HTTPError(409)。"""
+        raise RuntimeCapabilityError('revert not supported by this runtime')
+
+    def revert_clear(self, oc_session_id: str, directory: str = '') -> None:
+        """撤销重做：还原文件 + 清撤销标记；无撤销态时 no-op。"""
+        raise RuntimeCapabilityError('revert not supported by this runtime')
+
     def subscribe_events(self, directory: str = '', read_timeout=None):
         """订阅会话事件流（OpenCode /event 的 runtime 抽象）。
 
