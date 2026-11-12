@@ -1692,14 +1692,16 @@ def _undo_oc_messages(now_ms):
     msg_a1 必须出现在 OC 列表里才能吸附出 oc 目标 msg_o3；files 统计的
     是「OC 目标之后」的 patch part，所以 patch 要挂在目标之后的
     msg_a2 上。created 用当前毫秒——7 天快照窗口（E10）内才保持
-    native/full，不会促销成 rebuild。"""
+    native/full，不会促销成 rebuild。patch 文件名用带目录的相对路径：
+    preview 的 files 与落库 file_names 会做 basename 展示安全化（批次 B3），
+    断言侧按 basename 形态校验。"""
     return [
         {'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': now_ms}},
          'parts': []},
         {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': now_ms}},
          'parts': []},
         {'info': {'id': 'msg_a2', 'role': 'assistant', 'time': {'created': now_ms}},
-         'parts': [{'type': 'patch', 'files': [{'file': 'a.txt'}]}]},
+         'parts': [{'type': 'patch', 'files': [{'file': 'sub/dir/a.txt'}]}]},
     ]
 
 
@@ -1724,6 +1726,8 @@ def test_undo_preview_returns_plan(setup):
                       headers=dev_h)
     assert resp.status_code == 200
     body = resp.get_json()
+    # files 断言 basename 形态（批次 B3）：OC patch 给的是 sub/dir/a.txt，
+    # 展示面（预览弹窗/重做横幅）不暴露多级路径，file_count 语义不变
     assert body == {'messageCount': 3, 'files': ['a.txt'],
                     'fileCapability': 'full', 'mode': 'native', 'reason': None}
 
@@ -1744,7 +1748,8 @@ def test_undo_route_native_ok(setup):
     cursor.fetchall.side_effect = [
         [('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
          ('msg_a2', 'assistant', 4), ('msg_u3', 'user', 5)],  # 平台行（锚点解析）
-        [('msg_a1', 'assistant', [], dt, None, 2, None)],     # message window
+        [('msg_a1', 'assistant', [], dt, None, 2, None),      # message window
+         ('msg_u0', 'user', [], dt, None, 1, None)],          # （补一行：非平凡窗）
     ]
     oc.get_messages.return_value = _undo_oc_messages(now_ms)
     oc.get_project.return_value = {'vcs': 'git', 'worktree': '/tmp/ws'}
@@ -1755,8 +1760,42 @@ def test_undo_route_native_ok(setup):
     body = resp.get_json()
     assert body['revert']['mode'] == 'native'
     assert body['revert']['ocMessageId'] == 'msg_o3'
-    assert body['messages'][0]['id'] == 'msg_a1'
+    # 窗口 ASC（seq 时序正序）：补一行后首行是更早的 msg_u0，锚轮 msg_a1 在末尾
+    assert [m['id'] for m in body['messages']] == ['msg_u0', 'msg_a1']
+    # hasMore（批次 B1）：窗口 2 条 < limit+1 → 没有更早历史，前端据此
+    # 校正「加载更早」分页游标
+    assert body['hasMore'] is False
     oc.revert_stage.assert_called_once()
+
+
+def test_undo_response_has_more_true_when_history_overflows(setup):
+    """hasMore 语义（批次 B1）：mock 窗口塞满 limit+1 条 → 响应带
+    hasMore=True 且 messages 裁到 limit（与 GET /messages 默认分支同形）。"""
+    import time
+    from datetime import datetime, timezone
+    client, cursor, oc, dev_h, _, _ = setup
+    now_ms = int(time.time() * 1000)
+    dt = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws', None, None),
+        ('oc', 'active', '/tmp/ws'),
+        (3,),
+        ('native', 'oc', 'msg_o3', 3, 2, 1, ['a.txt'], dt, None),   # 提交后读态
+    ]
+    cursor.fetchall.side_effect = [
+        [('msg_a1', 'assistant', 2), ('msg_u2', 'user', 3),
+         ('msg_a2', 'assistant', 4), ('msg_u3', 'user', 5)],        # 平台行
+        [(f'm{i}', 'assistant', [], dt, None, i, None) for i in range(202)],
+    ]
+    oc.get_messages.return_value = _undo_oc_messages(now_ms)
+    oc.get_project.return_value = {'vcs': 'git', 'worktree': '/tmp/ws'}
+    oc.revert_stage.return_value = {'id': 'oc', 'revert': {'messageID': 'msg_o3'}}
+    resp = client.post('/ai/chat/sessions/sess_x/undo',
+                       json={'messageId': 'msg_u2'}, headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['hasMore'] is True
+    assert len(body['messages']) == 200
 
 
 def test_undo_route_busy_409(setup, monkeypatch):

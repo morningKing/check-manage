@@ -51,6 +51,15 @@ def _oc_index(oc_messages, mid: str) -> int:
                 if ((m.get('info') or {}).get('id')) == mid)
 
 
+def _display_file_name(path) -> str:
+    """文件清单展示安全化（终审 triage「后跟」）：posix/nt 分隔符兼容取
+    basename——OC patch 的 file 是工作区相对路径，basename 即文件名。
+    只用于 preview 返回的 files 与落库的 file_names（预览弹窗/重做横幅
+    不向用户暴露多级路径）；file_count 语义不变，messages revert 块与
+    SSE 广播走 get_revert_state 自然继承。"""
+    return str(path or '').replace('\\', '/').rsplit('/', 1)[-1]
+
+
 def resolve_undo_target(rows, target_seq: int, oc_messages) -> dict:
     """锚点解析（spec §2.2a）。
 
@@ -311,7 +320,8 @@ def preview_undo(sid: str, msg_id: str) -> dict:
     oc_messages = _fetch_oc_messages(client, ctx['oc_sid'], ctx['workspace_path'])
     plan = resolve_undo_target(ctx['rows'], ctx['target_seq'], oc_messages)
     plan = _finalize_plan(client, plan, ctx['workspace_path'], oc_messages)
-    return {'messageCount': ctx['message_count'], 'files': plan['files'],
+    return {'messageCount': ctx['message_count'],
+            'files': [_display_file_name(f) for f in plan['files']],
             'fileCapability': plan['fileCapability'], 'mode': plan['mode'],
             'reason': plan.get('reason')}
 
@@ -382,7 +392,8 @@ def _undo_native(sid, ctx, plan, client):
                 conn, sid, mode='native', opencode_session_id=ctx['oc_sid'],
                 oc_message_id=plan['oc_user_message_id'],
                 from_seq=ctx['target_seq'], message_count=ctx['message_count'],
-                file_count=len(plan['files']), file_names=plan['files'])
+                file_count=len(plan['files']),
+                file_names=[_display_file_name(f) for f in plan['files']])
     except Exception:
         if oc_reverted:
             _compensate_clear(client, ctx['oc_sid'], ctx['workspace_path'])
@@ -463,8 +474,9 @@ def undo_from_message(sid: str, msg_id: str) -> dict:
         state = _undo_rebuild(sid, ctx, plan, client)
     else:
         state = _undo_native(sid, ctx, plan, client)
+    messages, has_more = _message_window(sid)
     return {'deleted': ctx['message_count'], 'revert': state,
-            'messages': _message_window(sid)}
+            'messages': messages, 'hasMore': has_more}
 
 
 def redo(sid: str) -> dict:
@@ -556,7 +568,9 @@ def redo(sid: str) -> dict:
                 sid, switch_back_prev or state['opencodeSessionId'] or '-',
                 state['mode'], state['messageCount'], state['fileCount'] or 0)
     broadcast_revert(sid)
-    return {'deleted': state['messageCount'], 'messages': _message_window(sid)}
+    messages, has_more = _message_window(sid)
+    return {'deleted': state['messageCount'], 'messages': messages,
+            'hasMore': has_more}
 
 
 def commit_after_dispatch(sid: str) -> None:
@@ -586,17 +600,23 @@ def broadcast_revert(sid: str) -> None:
         logger.warning('revert 广播失败 session=%s', sid, exc_info=True)
 
 
-def _message_window(sid: str, limit: int = 200) -> list:
-    """与 GET /messages 默认分支同形（seq DESC 取 limit 再反转）。"""
+def _message_window(sid: str, limit: int = 200) -> tuple:
+    """与 GET /messages 默认分支同形（seq DESC 取 limit 再反转）。
+
+    多取 1 行判断是否还有更早历史：返回 (messages, hasMore)。undo/redo
+    响应据此携带 hasMore——撤销/重做会整窗替换前端消息列表，必须一并
+    同步「加载更早」分页游标，否则 >limit 条的会话撤销后游标漂移
+    （终审 M1）。"""
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             "SELECT m.id, m.role, m.content, m.created_at, m.meta, m.seq, f.rating "
             "FROM ai_chat_messages m "
             "LEFT JOIN ai_chat_message_feedback f ON f.message_id = m.id "
-            "WHERE m.session_id = %s ORDER BY m.seq DESC LIMIT %s", (sid, limit))
+            "WHERE m.session_id = %s ORDER BY m.seq DESC LIMIT %s", (sid, limit + 1))
         rows = cur.fetchall()
-    rows = list(reversed(rows))
+    has_more = len(rows) > limit
+    rows = list(reversed(rows[:limit]))
     return [{'id': r[0], 'role': r[1], 'content': r[2],
              'createdAt': r[3].isoformat() if r[3] else None,
-             'meta': r[4], 'seq': r[5], 'rating': r[6]} for r in rows]
+             'meta': r[4], 'seq': r[5], 'rating': r[6]} for r in rows], has_more

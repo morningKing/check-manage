@@ -1497,7 +1497,13 @@ async function send() {
   const parsed = parseCommandLine(text)
   if (parsed) {
     const fc = findFrontendCommand(parsed.name)
-    if (fc) { await fc.run(store); return }
+    if (fc) {
+      // /undo /redo 等前端命令：失败时 request 拦截器已全局 toast，
+      // 这里吞掉异常保持输入不变（与 editMessage 的显式 catch 对齐），
+      // 不放任 unhandled rejection（终审 M2）
+      try { await fc.run(store) } catch { /* 拦截器已全局 toast；/undo 失败保持输入不变 */ }
+      return
+    }
     if (store.isOpencodeCommand(sid, parsed.name)) {
       try { await store.runCommand(sid, parsed.name, parsed.args) } catch { ElMessage.error('执行失败') }
       return
@@ -2989,8 +2995,16 @@ function onKey(e: Event) {
   color: var(--el-text-color-secondary);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
-.composer-revert__btn { color: var(--el-color-primary); }
-.composer-revert__close { margin-left: auto; opacity: .6; }
+/* reset 浏览器按钮默认样式（T12 minor）：原生 button 自带灰底/边框，
+   横幅内联按钮需显式抹掉，仅保留文本色与布局声明 */
+.composer-revert__btn {
+  color: var(--el-color-primary);
+  background: none; border: none; cursor: pointer;
+}
+.composer-revert__close {
+  margin-left: auto; opacity: .6;
+  background: none; border: none; cursor: pointer;
+}
 .composer-attachments { margin-bottom: 4px; }
 /* bypass 自动放行 chip 行（spec 2026-10-31 §2.4） */
 .auto-approved { margin-bottom: 4px; display: flex; flex-wrap: wrap; gap: 4px; }

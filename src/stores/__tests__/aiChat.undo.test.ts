@@ -58,11 +58,15 @@ describe('aiChat store undo/redo', () => {
     // mock 形态 = 真实载荷（request 拦截器已解包 axios data，顶层即响应体）
     vi.mocked(undoToMessage).mockResolvedValueOnce({
       deleted: 2, revert: { mode: 'native', messageCount: 2, fileCount: 1 },
-      messages: [{ id: 'u1', role: 'user', content: [] }],
+      messages: [{ id: 'u1', role: 'user', content: [], seq: 2 }],
+      hasMore: true,
     } as any)
     await s.undoFromMessage('s1', 'u2')
     expect(s.messages['s1']).toHaveLength(1)
     expect(s.revertState['s1']).toEqual({ mode: 'native', messageCount: 2, fileCount: 1 })
+    // 撤销后窗口按服务端权威重算：分页游标同步校正（批次 B1，终审 M1）
+    expect(s.hasMoreMessages['s1']).toBe(true)
+    expect(s.oldestLoadedSeq['s1']).toBe(2)
   })
 
   it('deleteFromMessage 委托 undoFromMessage（失败上抛）', async () => {
@@ -71,16 +75,20 @@ describe('aiChat store undo/redo', () => {
     await expect(s.deleteFromMessage('s1', 'u2')).rejects.toBeTruthy()
   })
 
-  it('redoSession 恢复窗口并清撤销态', async () => {
+  it('redoSession 恢复窗口并清撤销态，同步分页游标', async () => {
     const s = useAiChatStore()
     s.revertState['s1'] = { mode: 'native', messageCount: 2, fileCount: 0 }
     vi.mocked(redoSession).mockResolvedValueOnce({
-      deleted: 2, messages: [{ id: 'u1', role: 'user', content: [] },
-                             { id: 'a1', role: 'assistant', content: [] }],
+      deleted: 2, messages: [{ id: 'u1', role: 'user', content: [], seq: 1 },
+                             { id: 'a1', role: 'assistant', content: [], seq: 2 }],
+      hasMore: false,
     } as any)
     await s.redoSession('s1')
     expect(s.messages['s1']).toHaveLength(2)
     expect(s.revertState['s1']).toBeNull()
+    // 重做恢复同理：游标按恢复后的窗口校正（批次 B1）
+    expect(s.hasMoreMessages['s1']).toBe(false)
+    expect(s.oldestLoadedSeq['s1']).toBe(1)
   })
 
   it('发送成功清撤销态（重做窗口关闭）', async () => {
@@ -112,18 +120,22 @@ describe('aiChat store undo/redo', () => {
 
   it('session.revert 事件防抖后强一致重载（采纳变短列表）', async () => {
     vi.useFakeTimers()
-    const s = useAiChatStore()
-    s.activeSessionId = 's1'
-    s.messages['s1'] = [{ id: 'u1', role: 'user', content: [] },
-                        { id: 'a1', role: 'assistant', content: [] }] as any
-    vi.mocked(getMessages).mockResolvedValueOnce({
-      messages: [{ id: 'u1', role: 'user', content: [] }],
-      revert: { mode: 'native', messageCount: 1, fileCount: 0 },
-    } as any)
-    s._handleEvent('s1', 'session.revert', { sessionId: 's1', revert: null })
-    await vi.advanceTimersByTimeAsync(400)
-    expect(s.messages['s1']).toHaveLength(1)           // 变短被采纳
-    expect(s.revertState['s1']!.messageCount).toBe(1)
-    vi.useRealTimers()
+    try {
+      const s = useAiChatStore()
+      s.activeSessionId = 's1'
+      s.messages['s1'] = [{ id: 'u1', role: 'user', content: [] },
+                          { id: 'a1', role: 'assistant', content: [] }] as any
+      vi.mocked(getMessages).mockResolvedValueOnce({
+        messages: [{ id: 'u1', role: 'user', content: [] }],
+        revert: { mode: 'native', messageCount: 1, fileCount: 0 },
+      } as any)
+      s._handleEvent('s1', 'session.revert', { sessionId: 's1', revert: null })
+      await vi.advanceTimersByTimeAsync(400)
+      expect(s.messages['s1']).toHaveLength(1)           // 变短被采纳
+      expect(s.revertState['s1']!.messageCount).toBe(1)
+    } finally {
+      // 测试卫生（批次 B5/T11）：中途断言失败也不向同文件后续用例泄漏假计时器
+      vi.useRealTimers()
+    }
   })
 })

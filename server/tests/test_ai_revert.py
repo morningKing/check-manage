@@ -298,7 +298,8 @@ from unittest.mock import MagicMock as _MagicMock
 import utils.ai_revert as ar
 
 
-def _mock_env(rows, oc_messages, project=None, revert_info=None, state_rows=None):
+def _mock_env(rows, oc_messages, project=None, revert_info=None, state_rows=None,
+              window_rows=None):
     """打桩 get_db/get_runtime/chat_persist；fetchone 按 (ctx, target, state…) 供给。"""
     cursor = _MagicMock()
     cursor.fetchone.side_effect = [
@@ -306,9 +307,10 @@ def _mock_env(rows, oc_messages, project=None, revert_info=None, state_rows=None
         (3,),                                        # target seq
     ] + (state_rows or [])
     # fetchall 首个=ctx rows，必须是 DB 元组形态（实现内 r[0] 索引后转 dict）；
-    # 其后是 _message_window 等空窗
+    # 其后是 _message_window（默认空窗，window_rows 可注入非平凡窗）
     cursor.fetchall.side_effect = [
-        [(r['id'], r['role'], r['seq']) for r in rows], [], [], [], []]
+        [(r['id'], r['role'], r['seq']) for r in rows],
+        window_rows or [], [], [], []]
     conn = _MagicMock()
     conn.cursor.return_value = cursor
     conn.__enter__ = lambda self: conn
@@ -398,6 +400,7 @@ def test_undo_native_calls_revert_stage_with_snapped_user_id(monkeypatch):
     assert kwargs['directory'] == '/tmp/ws'
     assert out['revert']['ocMessageId'] == 'msg_o3'
     assert out['deleted'] == 3                            # seq>=3 的平台行数
+    assert out['hasMore'] is False                        # 空窗 → 没有更早历史
 
 
 def test_undo_revert_mismatch_rolls_back(monkeypatch):
@@ -573,7 +576,9 @@ def test_redo_success_clears_and_restores(monkeypatch):
         ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
          _dt(2026, 11, 10, tzinfo=_tz.utc), None),           # 读态行（无 prev）
     ]
-    cursor.fetchall.side_effect = [[]]                       # _message_window 空窗
+    cursor.fetchall.side_effect = [
+        [('msg_a1', 'assistant', [], _dt(2026, 11, 10, tzinfo=_tz.utc), None, 2, None)],
+    ]                                                        # _message_window（补一行）
     conn = _MagicMock(); conn.cursor.return_value = cursor
     conn.__enter__ = lambda self: conn; conn.__exit__ = lambda self, *a: False
 
@@ -594,7 +599,49 @@ def test_redo_success_clears_and_restores(monkeypatch):
     assert restore_calls == ['sess_x']
     assert replay_calls == ['sess_x']
     assert out['deleted'] == 2
-    assert out['messages'] == []
+    assert out['messages'][0]['id'] == 'msg_a1'
+    assert out['hasMore'] is False                           # 单行窗 < limit+1
+
+
+def test_undo_redo_window_has_more_when_history_overflows(monkeypatch):
+    """hasMore 语义（批次 B1）：undo/redo 响应窗口 mock 满 limit+1 行 →
+    hasMore=True 且 messages 裁到 limit；前端据此校正「加载更早」游标。"""
+    dt = _dt(2026, 11, 10, tzinfo=_tz.utc)
+    full_window = [(f'm{i}', 'assistant', [], dt, None, i, None) for i in range(202)]
+    oc = [{'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': 1}}, 'parts': []},
+          {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}}, 'parts': []}]
+    state = ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'], dt, None)
+    # undo 侧：202 行窗 → 裁到 200 + hasMore=True
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc,
+                                        revert_info={'messageID': 'msg_o3'},
+                                        state_rows=[state], window_rows=full_window)
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
+    out = ar.undo_from_message('sess_x', 'msg_u2')
+    assert out['hasMore'] is True
+    assert len(out['messages']) == 200
+    # redo 侧：同样的溢出窗 → hasMore=True
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc1', 'active', '/tmp/ws'),                        # sessions 行
+        state,                                               # 读态行
+    ]
+    cursor.fetchall.side_effect = [full_window]
+    conn = _MagicMock(); conn.cursor.return_value = cursor
+    conn.__enter__ = lambda self: conn; conn.__exit__ = lambda self, *a: False
+
+    @_cm
+    def fake_db2():
+        yield conn
+    monkeypatch.setattr(ar, 'get_db', fake_db2)
+    monkeypatch.setattr(ar, 'restore_stash', lambda conn, sid: None)
+    monkeypatch.setattr(ar, 'clear_context_replay', lambda conn, sid: None)
+    out = ar.redo('sess_x')
+    assert out['hasMore'] is True
+    assert len(out['messages']) == 200
 
 
 def test_redo_stale_commits_closeout_in_own_tx(monkeypatch):

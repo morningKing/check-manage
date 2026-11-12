@@ -566,13 +566,15 @@ export function undoPreview(id: string, msgId: string) {
     { messageId: msgId }, { silent: true })
 }
 
+// undo/redo 响应携带 hasMore（批次 B1）：服务端整窗重算时一并给出
+// 「是否还有更早历史」，前端据此校正「加载更早」分页游标（终审 M1）
 export function undoToMessage(id: string, msgId: string) {
-  return post<{ deleted: number; revert: RevertState | null; messages: AiMessage[] }>(
+  return post<{ deleted: number; revert: RevertState | null; messages: AiMessage[]; hasMore: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/undo`, { messageId: msgId })
 }
 
 export function redoSession(id: string) {
-  return post<{ deleted: number; messages: AiMessage[] }>(
+  return post<{ deleted: number; messages: AiMessage[]; hasMore: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/redo`)
 }
 

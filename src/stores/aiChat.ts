@@ -911,6 +911,11 @@ export const useAiChatStore = defineStore('aiChat', {
     async undoFromMessage(id: string, msgId: string) {
       const res = await undoToMessage(id, msgId)
       this.messages[id] = res.messages
+      // 整窗替换后同步分页游标（批次 B1，终审 M1）：撤销会搬走整段历史，
+      // hasMore/oldestLoadedSeq 必须按服务端权威窗口重算，否则 >limit 条
+      // 的会话撤销后「加载更早」游标错位
+      this.hasMoreMessages[id] = res.hasMore
+      this.oldestLoadedSeq[id] = res.messages[0]?.seq ?? null
       this.revertState[id] = res.revert
       this._recomputeUsage(id)
       this.streaming[id] = false
@@ -928,6 +933,9 @@ export const useAiChatStore = defineStore('aiChat', {
     async redoSession(id: string) {
       const res = await apiRedoSession(id)
       this.messages[id] = res.messages
+      // 重做恢复同理：stash 搬回会改变窗口两端，游标按响应重算（批次 B1）
+      this.hasMoreMessages[id] = res.hasMore
+      this.oldestLoadedSeq[id] = res.messages[0]?.seq ?? null
       this.revertState[id] = null
       this._recomputeUsage(id)
       void this.loadChanges(id)
