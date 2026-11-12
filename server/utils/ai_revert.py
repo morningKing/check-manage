@@ -317,9 +317,17 @@ def preview_undo(sid: str, msg_id: str) -> dict:
 
 
 def _compensate_clear(client, oc_sid, workspace_path):
-    """OC 已撤销但平台侧失败 → 反向补偿（尽力而为并留痕）。"""
+    """OC 已撤销但平台侧失败 → 反向补偿（尽力而为并留痕）。
+
+    补偿请求自身若遇 ConnectionError/ReadTimeout（请求已达 OC 但响应丢失），
+    结局不可知：若未达，OC 侧仍处撤销态而平台已回滚 → 下次发送将被提交
+    （at-least-once），须与确定性失败区分留痕。"""
     try:
         client.revert_clear(oc_sid, directory=workspace_path)
+    except (requests.ConnectionError, requests.ReadTimeout):
+        logger.error('revert 补偿响应丢失 oc=%s（补偿请求可能已达 OC：'
+                     'OC 可能已撤销而平台回滚，下次发送将被提交（at-least-once））',
+                     oc_sid, exc_info=True)
     except Exception:
         logger.error('revert 补偿失败 oc=%s（平台已回滚，OC 侧处于撤销态，'
                      '下次发送将被提交）', oc_sid, exc_info=True)
@@ -345,7 +353,26 @@ def _undo_native(sid, ctx, plan, client):
                         raise UndoError('SESSION_BUSY',
                                         '回合进行中，请先停止当前回复再撤销',
                                         operation='undo') from e
-                    raise
+                    # 其余 HTTP 错误（非 409）：OC 可用性问题统一包 502，
+                    # 不再穿透成 Flask 500（spec §2.3 错误信封）
+                    raise UndoError('OPENCODE_UNAVAILABLE',
+                                    'AI 运行时暂时不可用，请稍后重试',
+                                    status=502, retryable=True,
+                                    operation='undo') from e
+                except requests.RequestException as e:
+                    if isinstance(e, (requests.ConnectionError,
+                                      requests.ReadTimeout)):
+                        # 请求已达 OC 但响应丢失：OC 可能已执行撤销而平台
+                        # 事务回滚（stash_rows 同事务一并回滚）→ 下次发送
+                        # 将被提交（at-least-once）
+                        logger.error('undo revert_stage 响应丢失 session=%s '
+                                     'oc=%s：OC 可能已撤销而平台回滚，下次发送'
+                                     '将被提交（at-least-once）',
+                                     sid, ctx['oc_sid'], exc_info=True)
+                    raise UndoError('OPENCODE_UNAVAILABLE',
+                                    'AI 运行时暂时不可用，请稍后重试',
+                                    status=502, retryable=True,
+                                    operation='undo') from e
                 if ((info or {}).get('revert') or {}).get('messageID') \
                         != plan['oc_user_message_id']:
                     raise UndoError('REVERT_MISMATCH',
@@ -370,9 +397,25 @@ def _undo_native(sid, ctx, plan, client):
 
 def _undo_rebuild(sid, ctx, plan, client):
     from utils import chat_persist
-    new_oc = client.create_session(directory=ctx['workspace_path'],
-                                   title='撤销重建')
+    # oc_created 标志位区分补偿：create_session 未成功（含响应丢失——会话
+    # 可能已在 OC 创建但 id 未知，无从 delete）不触发补偿，避免双重补偿
+    new_oc = None
+    oc_created = False
     try:
+        try:
+            new_oc = client.create_session(directory=ctx['workspace_path'],
+                                           title='撤销重建')
+        except requests.RequestException as e:
+            if isinstance(e, (requests.ConnectionError, requests.ReadTimeout)):
+                # 请求已达 OC 但响应丢失：重建空会话可能已在 OC 创建（孤儿，
+                # 平台未换绑、无消息丢失面——下次发送仍指向旧 OC 会话）
+                logger.error('undo rebuild create_session 响应丢失 session=%s：'
+                             '重建会话可能已在 OC 创建而平台未换绑（孤儿会话）',
+                             sid, exc_info=True)
+            raise UndoError('OPENCODE_UNAVAILABLE',
+                            'AI 运行时暂时不可用，请稍后重试',
+                            status=502, retryable=True, operation='undo') from e
+        oc_created = True
         with get_db() as conn:
             conn.cursor().execute(
                 "SELECT pg_advisory_xact_lock(hashtext(%s))", (sid,))
@@ -387,10 +430,16 @@ def _undo_rebuild(sid, ctx, plan, client):
                 message_count=ctx['message_count'], file_count=0, file_names=[],
                 prev_opencode_session_id=ctx['oc_sid'])
     except Exception:
-        try:
-            client.delete_session(new_oc)
-        except Exception:
-            pass
+        if oc_created:
+            try:
+                client.delete_session(new_oc)
+            except (requests.ConnectionError, requests.ReadTimeout):
+                # 补偿请求已达 OC 但响应丢失：新空会话可能已删/未删（孤儿，
+                # 无消息丢失面），与确定性失败区分留痕
+                logger.error('rebuild 补偿 delete_session 响应丢失 new_oc=%s'
+                             '（可能已删除，孤儿空会话无害）', new_oc, exc_info=True)
+            except Exception:
+                pass
         raise
     with get_db() as conn:
         state = get_revert_state(conn, sid)
@@ -471,7 +520,18 @@ def redo(sid: str) -> dict:
                         raise UndoError('SESSION_BUSY',
                                         '回合进行中，请先停止当前回复再重做',
                                         operation='redo') from e
-                    raise
+                    # 其余 HTTP 错误（非 409）：统一包 502，不穿透成 500
+                    raise UndoError('OPENCODE_UNAVAILABLE',
+                                    'AI 运行时暂时不可用，请稍后重试',
+                                    status=502, retryable=True,
+                                    operation='redo') from e
+                except requests.RequestException as e:
+                    # 外层 except 已带「OC clear 可能已发出」留痕（含响应丢失
+                    # 场景），此处只做 502 信封收口
+                    raise UndoError('OPENCODE_UNAVAILABLE',
+                                    'AI 运行时暂时不可用，请稍后重试',
+                                    status=502, retryable=True,
+                                    operation='redo') from e
             chat_persist.stop_listener(sid)
             restore_stash(conn, sid)               # 先搬回 stash，再切回 OC 指针
             clear_context_replay(conn, sid)

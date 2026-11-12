@@ -1029,6 +1029,7 @@ def test_delete_message_runs_native_undo(setup):
     body = resp.get_json()
     assert body['deleted'] == 2
     assert body['revert']['ocMessageId'] == 'msg_o3'
+    assert body['messages'][0]['id'] == 'msg_a1'   # 窗口首行＝被保留的锚轮（前端整窗换新）
     oc.revert_stage.assert_called_once()       # 顶替旧 abort_session 断言
 
 
@@ -1538,6 +1539,36 @@ def test_send_message_passes_agent_mentions(setup):
     assert resp.status_code == 202
     _, kwargs = oc.send_prompt_async.call_args
     assert kwargs.get('agent_parts') == mentions
+
+
+def test_send_message_rebuild_replay_prepends_sentinel(setup, monkeypatch):
+    """T9-M1 正向哨兵：rebuild 撤销后首次发送（context_replay_pending=TRUE）
+    → 历史重放块拼在 prompt 最前，dispatch 给 OC 的 prompt 以哨兵开头。
+    fetchone 用 side_effect 按真实读取序逐跳供给（mock 惯性防护）：replay
+    检查那一跳必须精确返回 (True,)，不能靠 return_value 惯性碰巧为真。"""
+    import routes.ai_chat as rc
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.side_effect = [
+        # 会话行（_load_session_for_user 7 列）
+        ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None, None),
+        (True,),          # context_replay_pending 检查（重放分支的唯一入口）
+        None,             # undo commit hook 的撤销态读态（无挂起撤销）
+    ]
+    monkeypatch.setattr(rc, 'render_history_block',
+                        lambda sid, exclude_msg_id=None, max_turns=6:
+                            '[SENTINEL-REPLAY]')
+    resp = client.post('/ai/chat/sessions/sess_x/messages',
+                       json={'content': 'hello replay'}, headers=dev_h)
+    assert resp.status_code == 202
+    args, kwargs = oc.send_prompt_async.call_args
+    prompt = kwargs['prompt'] if 'prompt' in kwargs else args[1]
+    assert prompt.startswith('[SENTINEL-REPLAY]')        # 重放块在最前
+    assert 'hello replay' in prompt
+    assert prompt.index('[SENTINEL-REPLAY]') < prompt.index('hello replay')
+    # 旗标已清位：发送路径负责关掉重放开关，否则下轮重复重放
+    sqls = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any('UPDATE ai_chat_sessions' in s
+               and 'context_replay_pending = FALSE' in s for s in sqls)
 
 
 # ── 权限请求（external_directory ask）重水化与应答 ──────────────────────────

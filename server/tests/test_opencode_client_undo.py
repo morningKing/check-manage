@@ -42,13 +42,14 @@ def test_unrevert_session_posts_empty(monkeypatch):
     captured = {}
 
     def fake_post(url, params=None, json=None, timeout=None):
-        captured.update(url=url, json=json)
+        captured.update(url=url, json=json, params=params)
         return _Resp({'id': 'oc1', 'revert': None})
 
     monkeypatch.setattr('utils.opencode_client.requests.post', fake_post)
     OpenCodeClient('http://x').unrevert_session('oc1', directory='/ws')
     assert captured['url'].endswith('/session/oc1/unrevert')
     assert captured['json'] is None
+    assert captured['params'] == {'directory': '/ws'}
 
 
 def test_get_project_scopes_directory(monkeypatch):
@@ -64,9 +65,8 @@ def test_get_project_scopes_directory(monkeypatch):
     assert out['vcs'] == 'git'
 
 
-def test_stub_runtime_revert_roundtrip():
-    import os
-    os.environ['AI_STUB_ALLOW'] = '1'
+def test_stub_runtime_revert_roundtrip(monkeypatch):
+    monkeypatch.setenv('AI_STUB_ALLOW', '1')
     from utils.runtime.stub import StubRuntime
     rt = StubRuntime({'delay_ms': [1, 1]})
     sid = rt.create_session(directory='/ws')
@@ -98,6 +98,7 @@ def test_revert_aliases_forward_to_session_endpoints(monkeypatch):
     OpenCodeClient('http://x').revert_clear('oc1', directory='/ws')
     assert captured['url'].endswith('/session/oc1/unrevert')
     assert captured['json'] is None
+    assert captured['params'] == {'directory': '/ws'}   # clear 转发同样带 directory
 
 
 def test_revert_surface_parity():
@@ -111,9 +112,9 @@ def test_revert_surface_parity():
         assert hasattr(StubClient, name), f'StubClient 缺 {name}'
 
 
-def test_stub_client_revert_clear_aliases_unrevert():
+def test_stub_client_revert_clear_aliases_unrevert(monkeypatch):
     """StubClient.revert_clear 别名（I3）：转发 unrevert_session，清撤销标记。"""
-    os.environ['AI_STUB_ALLOW'] = '1'
+    monkeypatch.setenv('AI_STUB_ALLOW', '1')
     from utils.runtime.stub import StubClient
     c = StubClient({'delay_ms': [1, 1]})
     sid = c.create_session(directory='/ws')

@@ -405,6 +405,13 @@ def scenario_native():
     fs = files_state(ws)
     check('文件还原: a.txt=v1 / b.txt 缺失 / c.txt 缺失',
           fs == {'a.txt': 'v1', 'b.txt': '<缺失>', 'c.txt': '<缺失>'}, str(fs))
+    # T2 脚本写了 outputs/o.txt='out-v1'（stub 固定值）：outputs/ 被
+    # .gitignore 忽略、不在 git 快照还原面内 → undo 后必须原样保留
+    o_path = Path(ws) / 'outputs' / 'o.txt'
+    o_val = o_path.read_text(encoding='utf-8', errors='replace').strip() \
+        if o_path.exists() else '<缺失>'
+    check('outputs/o.txt 不回滚（.gitignore 产物留在原地 = out-v1）',
+          o_val == 'out-v1', o_val)
 
     [t.join(timeout=15) for t in th]
     check('两个 SSE 连接都收到 session.revert',
@@ -505,13 +512,16 @@ def scenario_rebuild():
 
     send(sid, 'T3'); wait_turn(sid, ws, 2)
     # 重放块把被保留轮次的 T1 标记带进了同一条 user 文本 → stub 的首标记
-    # 归类为 T1；取证不按 tag=T3 过滤，按「T3 标记 + 摘要头」双条件定位。
+    # 归类为 T1；取证不按 tag=T3 过滤，按「T3 标记 + 摘要头 + T1 标记」
+    # 三条件定位（第三条防「只注入空头摘要」退化：内容保真）。
     hit = None
     for r in stub_rows():
         users = [m.get('text', '') for m in r['messages'] if m['role'] == 'user']
-        if any('UNDO-PROBE:T3' in u and '此前对话摘要' in u for u in users):
+        if any('UNDO-PROBE:T3' in u and '此前对话摘要' in u
+               and 'UNDO-PROBE:T1' in u for u in users):
             hit = r
-    check('T3 请求含「此前对话摘要」（历史重放到达模型）', hit is not None,
+    check('T3 请求含「此前对话摘要」且保留 T1 标记（历史重放到达模型、内容保真）',
+          hit is not None,
           '' if hit is None else 'stub 请求 ts=' + hit.get('ts', ''))
 
 

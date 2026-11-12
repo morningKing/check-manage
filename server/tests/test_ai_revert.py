@@ -236,6 +236,59 @@ def test_revert_state_upsert_get_commit():
         _cleanup_undo_session(sid)
 
 
+def test_commit_revert_deletes_orphan_subtask_rows():
+    """A2（真实库集成）：被撤 assistant 行 content 里的 subtask_use part 引用的
+    子任务行（ai_chat_subtasks）在 commit_revert 时随 stash 一起清理——
+    孤儿行不再挂在已收口的会话上。DDL NOT NULL 集仅 id/root_session_id/status
+    （db_schema/core.py），其余列可空、给合法值。"""
+    sid = f'sess_undo_{_uuid.uuid4().hex[:8]}'
+    st_id = 'ses_probe_' + _uuid.uuid4().hex[:10]
+    try:
+        _mk_undo_session(sid)
+        with get_db() as conn:
+            cur = conn.cursor()
+            _insert_msg(cur, sid, 'assistant', 'delegated-turn')
+            cur.execute(
+                "UPDATE ai_chat_messages SET content = %s WHERE id = %s",
+                (_json.dumps([{'type': 'text', 'text': '委托轮'},
+                              {'type': 'subtask_use', 'subtaskId': st_id}]),
+                 f'{sid}:delegated-turn'))
+            cur.execute(
+                "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, "
+                "  prompt, description, status) "
+                "VALUES (%s, %s, 'general', 'probe prompt', 'probe desc', "
+                "  'completed')", (st_id, sid))
+            cur.execute("SELECT seq FROM ai_chat_messages WHERE id = %s",
+                        (f'{sid}:delegated-turn',))
+            seq = cur.fetchone()[0]
+            stash_rows(conn, sid, seq)           # 行进 stash、主表删除
+            upsert_revert_state(conn, sid, mode='native',
+                                opencode_session_id='oc1', oc_message_id='msg_o3',
+                                from_seq=seq, message_count=1)
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM ai_chat_subtasks WHERE id = %s", (st_id,))
+            assert cur.fetchone()[0] == 1        # 前置：子任务行在、状态挂起
+        with get_db() as conn:
+            n = commit_revert(conn, sid)
+        assert n == 1                            # stash 清理 1 条
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM ai_chat_subtasks WHERE id = %s", (st_id,))
+            assert cur.fetchone()[0] == 0        # 孤儿子任务行被删
+            cur.execute("SELECT count(*) FROM ai_chat_message_stash "
+                        "WHERE session_id = %s", (sid,))
+            assert cur.fetchone()[0] == 0        # stash 清空
+            cur.execute("SELECT count(*) FROM ai_chat_session_reverts "
+                        "WHERE session_id = %s", (sid,))
+            assert cur.fetchone()[0] == 0        # 状态行清空
+    finally:
+        with get_db() as conn:                   # 兜底清理（正常路径已被删）
+            conn.cursor().execute("DELETE FROM ai_chat_subtasks WHERE id = %s",
+                                  (st_id,))
+        _cleanup_undo_session(sid)
+
+
 # ---------------- 编排器（mock db + mock client，仿 test_routes_ai_chat.setup） ----------------
 import time as _time
 from contextlib import contextmanager as _cm
@@ -406,6 +459,30 @@ def test_undo_oc_409_maps_to_session_busy(monkeypatch):
     client.revert_clear.assert_not_called()   # OC 撤销未成功，无需补偿
 
 
+def test_undo_revert_stage_non409_maps_502(monkeypatch):
+    """非 409 的 revert_stage HTTPError → 502 信封（A1），不再穿透成 Flask 500；
+    oc_reverted=False → 不补偿。"""
+    oc = [{'info': {'id': 'msg_a1', 'role': 'assistant', 'time': {'created': 1}}, 'parts': []},
+          {'info': {'id': 'msg_o3', 'role': 'user', 'time': {'created': 2}}, 'parts': []}]
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    import requests as _rq
+    boom = _rq.HTTPError('500')
+    boom.response = _MagicMock(status_code=500)
+    client.revert_stage.side_effect = boom
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.undo_from_message('sess_x', 'msg_u2')
+    assert ei.value.code == 'OPENCODE_UNAVAILABLE'
+    assert ei.value.status == 502
+    assert ei.value.retryable is True
+    assert ei.value.operation == 'undo'
+    client.revert_clear.assert_not_called()   # 撤销未成功，无需补偿
+
+
 def test_undo_busy_409(monkeypatch):
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: True)
     import pytest
@@ -434,6 +511,40 @@ def test_undo_rebuild_promotes_stale_and_never_calls_oc_revert(monkeypatch):
     client.get_project.assert_called_once()    # 走了 native→stale 促销，非 anchor-missing
     assert out['revert']['mode'] == 'rebuild'
     client.delete_session.assert_not_called()  # 成功路径不触发补偿（换 OC 已提交）
+
+
+def test_undo_rebuild_create_session_failure_maps_502(monkeypatch):
+    """A1：rebuild 的 create_session 失败 → 502 信封；标志位区分下不误补偿
+    （响应丢失时会话 id 未知，无从 delete）；而建会话成功后落库失败 → 新空
+    会话仍被 delete（补偿保留，无双重补偿）。"""
+    oc = _oc_anchor_msgs()          # msg_o3 created=1ms → 必 stale → 促销 rebuild
+    # 场景一：create_session 响应丢失（ConnectionError）→ 502 且不补偿
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    import requests as _rq
+    client.create_session.side_effect = _rq.ConnectionError('response lost')
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.undo_from_message('sess_x', 'msg_u2')
+    assert ei.value.code == 'OPENCODE_UNAVAILABLE'
+    assert ei.value.status == 502 and ei.value.retryable is True
+    assert ei.value.operation == 'undo'
+    client.delete_session.assert_not_called()  # oc_created=False → 不补偿
+
+    # 场景二：create_session 成功、落库失败 → 新空会话被 delete（原有补偿保留）
+    cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
+    client.create_session.return_value = 'oc_new'
+    boom = _rq.HTTPError('db down')
+    monkeypatch.setattr(ar, 'upsert_revert_state', _MagicMock(side_effect=boom))
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    with pytest.raises(_rq.HTTPError):
+        ar.undo_from_message('sess_x', 'msg_u2')
+    client.create_session.assert_called_once()
+    client.delete_session.assert_called_once_with('oc_new')   # 新空会话被补偿删除
 
 
 def test_redo_nothing_to_redo(monkeypatch):
@@ -584,6 +695,36 @@ def test_redo_oc_409_maps_to_session_busy(monkeypatch):
     with pytest.raises(ar.UndoError) as ei:
         ar.redo('sess_x')
     assert ei.value.code == 'SESSION_BUSY'
+    assert ei.value.operation == 'redo'
+    assert any(t['exc'] is ar.UndoError for t in txs)        # 写事务已回滚
+
+
+def test_redo_clear_non409_maps_502(monkeypatch):
+    """A1：redo 的 revert_clear 非 409 HTTPError → 502 信封（operation='redo'），
+    不穿透成 500；事务回滚＝什么都没改。"""
+    cursor = _MagicMock()
+    cursor.fetchone.side_effect = [
+        ('oc1', 'active', '/tmp/ws'),
+        ('native', 'oc1', 'msg_o3', 3, 2, 1, ['a.txt'],
+         _dt(2026, 11, 10, tzinfo=_tz.utc), None),
+    ]
+    fake_db, txs = _tracking_db(cursor)
+    import requests as _rq
+    boom = _rq.HTTPError('500')
+    boom.response = _MagicMock(status_code=500)
+    client = _MagicMock()
+    client.revert_clear.side_effect = boom
+    monkeypatch.setattr(ar, 'get_db', fake_db)
+    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
+    monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
+    monkeypatch.setattr(ar, 'restore_stash', lambda conn, sid: None)
+    import pytest
+    with pytest.raises(ar.UndoError) as ei:
+        ar.redo('sess_x')
+    assert ei.value.code == 'OPENCODE_UNAVAILABLE'
+    assert ei.value.status == 502
+    assert ei.value.retryable is True
     assert ei.value.operation == 'redo'
     assert any(t['exc'] is ar.UndoError for t in txs)        # 写事务已回滚
 
