@@ -389,7 +389,9 @@ def test_undo_native_calls_revert_stage_with_snapped_user_id(monkeypatch):
                                         revert_info={'messageID': 'msg_o3'},
                                         state_rows=[state])
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
@@ -409,7 +411,9 @@ def test_undo_revert_mismatch_rolls_back(monkeypatch):
     cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
     client.revert_stage.return_value = {'id': 'oc1', 'revert': None}   # E6 形态
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     import pytest
@@ -431,7 +435,9 @@ def test_undo_oc_failure_compensates(monkeypatch):
     # 若 revert_stage 自身抛错则 oc_reverted=False，补偿分支覆盖不到
     monkeypatch.setattr(ar, 'upsert_revert_state', _MagicMock(side_effect=boom))
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     import pytest
@@ -452,7 +458,9 @@ def test_undo_oc_409_maps_to_session_busy(monkeypatch):
     boom.response = _MagicMock(status_code=409)
     client.revert_stage.side_effect = boom
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     import pytest
@@ -473,7 +481,9 @@ def test_undo_revert_stage_non409_maps_502(monkeypatch):
     boom.response = _MagicMock(status_code=500)
     client.revert_stage.side_effect = boom
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 双栈：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     import pytest
@@ -504,7 +514,9 @@ def test_undo_rebuild_promotes_stale_and_never_calls_oc_revert(monkeypatch):
         ('oc1', 'active', '/tmp/ws'), (3,), state,   # 实现读取序：ctx → target → 读态
     ]
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
@@ -526,7 +538,9 @@ def test_undo_rebuild_create_session_failure_maps_502(monkeypatch):
     import requests as _rq
     client.create_session.side_effect = _rq.ConnectionError('response lost')
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 双栈：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     import pytest
@@ -543,7 +557,9 @@ def test_undo_rebuild_create_session_failure_maps_502(monkeypatch):
     boom = _rq.HTTPError('db down')
     monkeypatch.setattr(ar, 'upsert_revert_state', _MagicMock(side_effect=boom))
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 双栈：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     with pytest.raises(_rq.HTTPError):
         ar.undo_from_message('sess_x', 'msg_u2')
     client.create_session.assert_called_once()
@@ -588,7 +604,9 @@ def test_redo_success_clears_and_restores(monkeypatch):
     client = _MagicMock()
     restore_calls, replay_calls = [], []
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     monkeypatch.setattr(ar, 'restore_stash', lambda conn, sid: restore_calls.append(sid))
     monkeypatch.setattr(ar, 'clear_context_replay',
@@ -616,7 +634,9 @@ def test_undo_redo_window_has_more_when_history_overflows(monkeypatch):
                                         revert_info={'messageID': 'msg_o3'},
                                         state_rows=[state], window_rows=full_window)
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 双栈：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     monkeypatch.setattr(ar, 'broadcast_revert', lambda sid: None)
@@ -660,7 +680,9 @@ def test_redo_stale_commits_closeout_in_own_tx(monkeypatch):
     monkeypatch.setattr(ar, 'clear_context_replay', lambda conn, sid: None)
     monkeypatch.setattr(ar, 'get_db', fake_db)
     client = _MagicMock()
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     import pytest
     with pytest.raises(ar.UndoError) as ei:
         ar.redo('sess_x')
@@ -687,7 +709,9 @@ def test_redo_rebuild_switches_back_to_prev_session(monkeypatch):
     client = _MagicMock()
     restore_calls = []
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 双栈：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     monkeypatch.setattr(ar, 'restore_stash',
@@ -734,7 +758,9 @@ def test_redo_oc_409_maps_to_session_busy(monkeypatch):
     client = _MagicMock()
     client.revert_clear.side_effect = boom
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 双栈：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     monkeypatch.setattr(ar, 'restore_stash', lambda conn, sid: None)
@@ -762,7 +788,9 @@ def test_redo_clear_non409_maps_502(monkeypatch):
     client = _MagicMock()
     client.revert_clear.side_effect = boom
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 双栈：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     monkeypatch.setattr('utils.chat_persist.has_listener', lambda sid: False)
     monkeypatch.setattr('utils.chat_persist.stop_listener', lambda sid: None)
     monkeypatch.setattr(ar, 'restore_stash', lambda conn, sid: None)
@@ -793,7 +821,9 @@ def test_preview_shape(monkeypatch):
     oc = _oc_anchor_msgs(recent_ms=int(_time.time() * 1000))   # 新鲜快照 → full
     cursor, client, fake_db = _mock_env(_two_turn_rows(), oc)
     monkeypatch.setattr(ar, 'get_db', fake_db)
-    monkeypatch.setattr(ar, 'get_runtime', lambda: _MagicMock(get_client=lambda: client))
+    # OC2 阶段二：ai_revert 客户端经 registry.client_for_session 按会话栈路由
+    monkeypatch.setattr('utils.runtime.registry.client_for_session',
+                        lambda sid: client)
     out = ar.preview_undo('sess_x', 'msg_u2')
     assert out['messageCount'] == 3
     assert out['files'] == ['a.txt']

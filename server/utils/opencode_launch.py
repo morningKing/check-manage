@@ -20,6 +20,7 @@ Config (server/.env or environment):
 """
 
 import os
+from pathlib import Path
 
 DEFAULT_BIN = 'opencode'
 
@@ -119,3 +120,148 @@ def serve_env(base: dict | None = None) -> dict:
         if _val:
             env[_var] = _val
     return env
+
+
+# ---------------------------------------------------------------------------
+# OpenCode 2.x 双栈（OC2 适配阶段三：V2 serve 启动链）
+#
+# V2 没有 OPENCODE_GLOBAL_DIR（真机实测）：全局根改为 XDG 四件套
+# （config/data/state/cache 各自拼 opencode/）。V2 serve 即使未设密码也会
+# 自生成随机密码链：env → 状态文件 → 现场生成并持久化，serve 重启与 backend
+# 重启都经状态文件找回，免刮日志。
+#
+# 注意 V1/V2 二进制同名（V2 安装会覆盖 PATH 上的 opencode）——生产部署必须
+# 显式 OPENCODE2_BIN 指向 V2 二进制；默认值只适合已装 V2 的开发机。
+# ---------------------------------------------------------------------------
+
+DEFAULT_OC2_XDG_ROOT = os.path.join(os.path.expanduser('~'), '.check-manage', 'oc2')
+DEFAULT_OC2_PORT = 4196
+_OC2_PASSWORD_FILE = 'platform-password'
+
+
+def oc2_bin() -> str:
+    """V2 二进制。V1/V2 同名（V2 安装覆盖 PATH 上的 opencode）——生产部署
+    必须显式 OPENCODE2_BIN 指向 V2 二进制；默认值仅适合已装 V2 的开发机。"""
+    return (os.environ.get('OPENCODE2_BIN', '') or '').strip() or DEFAULT_BIN
+
+
+def oc2_xdg_root() -> str:
+    """V2 全局数据根（XDG 家目录父级）。env 可覆盖，但路径必须归一化且
+    不含 '..' 段（防路径穿越——该目录下有密码状态文件）。"""
+    raw = (os.environ.get('OPENCODE2_XDG_ROOT', '') or '').strip() \
+        or DEFAULT_OC2_XDG_ROOT
+    root = os.path.abspath(os.path.expanduser(raw))
+    if '..' in root.split(os.sep):
+        raise ValueError(f'invalid OPENCODE2_XDG_ROOT: {raw!r}')
+    return root
+
+
+def oc2_port() -> int:
+    raw = (os.environ.get('OPENCODE2_PORT', '') or '').strip()
+    try:
+        return int(raw) if raw else DEFAULT_OC2_PORT
+    except ValueError:
+        return DEFAULT_OC2_PORT
+
+
+def oc2_base_url() -> str:
+    return (os.environ.get('OPENCODE2_BASE_URL', '') or '').strip() \
+        or f'http://127.0.0.1:{oc2_port()}'
+
+
+def oc2_log_file() -> str:
+    return str(Path(oc2_xdg_root()) / 'serve.log')
+
+
+def oc2_password_file() -> str:
+    return str(Path(oc2_xdg_root()) / _OC2_PASSWORD_FILE)
+
+
+def oc2_serve_env() -> tuple[dict, str]:
+    """V2 serve 子进程环境：XDG 四件套整组钉死（只设 config 一项会让
+    data/state 落到用户家目录默认位置，与手工安装冲突）+ 显式
+    OPENCODE_PASSWORD。密码链：env → 状态文件 → 生成并写状态文件。"""
+    env = child_env()
+    root = oc2_xdg_root()
+    env['XDG_CONFIG_HOME'] = os.path.join(root, 'config')
+    env['XDG_DATA_HOME'] = os.path.join(root, 'data')
+    env['XDG_STATE_HOME'] = os.path.join(root, 'state')
+    env['XDG_CACHE_HOME'] = os.path.join(root, 'cache')
+    password = (os.environ.get('OPENCODE2_PASSWORD', '') or '').strip()
+    if not password:
+        password = oc2_known_password()
+    if not password:
+        import secrets
+        password = secrets.token_urlsafe(32)
+    Path(root).mkdir(parents=True, exist_ok=True)
+    Path(oc2_password_file()).write_text(password, encoding='utf-8')
+    env['OPENCODE_PASSWORD'] = password
+    return env, password
+
+
+def oc2_known_password() -> str:
+    """客户端侧取 V2 serve 密码（opencode_v2_local 构造 client_v2 用）：
+    env → 状态文件 → ''（空密码时全部请求 401，health 探活显式报红——
+    不静默假装健康）。"""
+    password = (os.environ.get('OPENCODE2_PASSWORD', '') or '').strip()
+    if password:
+        return password
+    try:
+        return Path(oc2_password_file()).read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+
+
+def spawn_oc2_serve():
+    """拉起 V2 serve（detached），返回 (Popen, password)。日志落
+    <xdg_root>/serve.log（append；显式密码模式下 stdout 的 server password
+    行仅作审计留痕，不再需要刮取）。"""
+    import subprocess
+    Path(oc2_xdg_root()).mkdir(parents=True, exist_ok=True)
+    env, password = oc2_serve_env()
+    argv = [oc2_bin(), 'serve', '--port', str(oc2_port()),
+            '--hostname', '127.0.0.1']
+    log_fh = open(Path(oc2_log_file()), 'ab')
+    proc = subprocess.Popen(
+        argv, env=env, cwd=serve_cwd(),
+        stdout=log_fh, stderr=subprocess.STDOUT,
+        creationflags=(getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+                       | getattr(subprocess, 'DETACHED_PROCESS', 0)),
+        close_fds=True,
+    )
+    return proc, password
+
+
+def oc2_serve_health(timeout: float = 5) -> dict:
+    """GET /api/info（V2 唯一健康面——/global/health 在 V2 兜底到 web 页，
+    V1 式探活会假阳性，真机实测）。返回 {'ok', 'version', 'error'}。"""
+    import base64
+
+    import requests
+    try:
+        headers = {}
+        password = oc2_known_password()
+        if password:
+            token = base64.b64encode(f'opencode:{password}'.encode()).decode()
+            headers['Authorization'] = f'Basic {token}'
+        url = oc2_base_url() + '/api/info'
+        from urllib.parse import urlsplit
+        _u = urlsplit(url)
+        assert _u.scheme == 'http', 'oc2 URL scheme boundary'
+        assert _u.hostname == '127.0.0.1' and _u.port == 4196, \
+            'oc2 URL host boundary violated'
+        resp = requests.request('GET', url, timeout=timeout, headers=headers)
+        if resp.status_code == 401:
+            return {'ok': False, 'version': None,
+                    'error': '401 auth required (password mismatch/missing)'}
+        resp.raise_for_status()
+        version = (resp.json() or {}).get('version') or ''
+        # 栈指纹校验：/api/info 只存在于 V2——若对面是误指的 V1 serve，
+        # 这里会 404/HTML（raise_for_status 或解析失败）；再验版本号双保险。
+        if version and not version.startswith('2'):
+            return {'ok': False, 'version': version,
+                    'error': 'OPENCODE2_BASE_URL 指向的不是 OpenCode 2.x '
+                             '(version=%s)' % version}
+        return {'ok': True, 'version': version, 'error': None}
+    except Exception as e:  # noqa: BLE001
+        return {'ok': False, 'version': None, 'error': str(e)[:200]}

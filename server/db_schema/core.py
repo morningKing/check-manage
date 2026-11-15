@@ -439,6 +439,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_sess_token
     ON ai_chat_sessions(session_token);
 -- 会话级权限模式：ask=弹卡 / bypass=自动放行（2026-10-31 bypass spec）
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS permission_mode VARCHAR(10) DEFAULT 'ask';
+-- 会话绑定 OC 栈（OC2 适配阶段一）：v1=OpenCode 1.x（默认） / v2=OpenCode 2.x。
+-- 全生命周期钉死创建时所在栈；路由 fail-closed 回 v1（utils.runtime.registry）。
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS oc_runtime VARCHAR(10) DEFAULT 'v1';
 
 CREATE TABLE IF NOT EXISTS ai_chat_messages (
     id          VARCHAR(100) PRIMARY KEY,

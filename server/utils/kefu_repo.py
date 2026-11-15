@@ -180,13 +180,17 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
     workspace_path = create_session_workspace(AI_WORKSPACE_ROOT, bot_user_id, session_id)
     _inject_system_prompt(workspace_path, instance)
 
+    # OC2 适配：客服会话创建即钉栈（默认栈灰度开关，默认 'v1' 行为不变）。
+    from utils.runtime import registry as _oc_registry
+    _oc_kind = _oc_registry.default_kind()
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO ai_chat_sessions "
             "(id, user_id, title, workspace_path, session_token, token_expires_at, "
-            " status, kefu_instance_id, visitor_id) "
-            "VALUES (%s,%s,%s,%s,%s, NOW() + INTERVAL '1 hour', 'active', %s, %s)",
+            " status, kefu_instance_id, visitor_id, oc_runtime) "
+            "VALUES (%s,%s,%s,%s,%s, NOW() + INTERVAL '1 hour', 'active', %s, "
+            "%s, %s)",
             (
                 session_id,
                 bot_user_id,
@@ -195,6 +199,7 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
                 '_pending_',
                 instance['id'],
                 visitor_id,
+                _oc_kind,
             ),
         )
 
@@ -208,7 +213,7 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
         include_internal=internal_mcp_enabled(),
     )
 
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_registry.runtime_for(_oc_kind).get_client()
     oc_sid = client.create_session(directory=workspace_path, title='客服会话')
 
     with get_db() as conn:

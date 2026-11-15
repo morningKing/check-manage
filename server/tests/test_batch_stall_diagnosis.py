@@ -62,7 +62,7 @@ def _diag_worker(monkeypatch, list_messages, list_questions=None,
     worker.POLL_INTERVAL_SEC = 0.02
     worker.QUESTION_CHECK_INTERVAL = 999  # 关掉周期性自动拒绝，隔离看门狗本身
     methods = {
-        'create_session': staticmethod(lambda directory='', title='': 'oc-diag'),
+        'create_session': staticmethod(lambda directory='', title='', **k: 'oc-diag'),
         'send_message': staticmethod(lambda *a, **k: None),
         'list_messages': staticmethod(
             lambda oc, directory='': list_messages()),

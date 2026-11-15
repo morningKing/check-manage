@@ -171,6 +171,7 @@ def test_auto_reject_only_own_session_questions(monkeypatch):
     import utils.batch_engine as eng
     rejected = []
     fake = type('F', (), {
+        '_client': property(lambda self: lambda *a, **k: self),
         'list_questions': staticmethod(lambda directory='': [
             {'id': 'q1', 'sessionID': 'oc'},     # 本会话 → 拒
             {'id': 'q2', 'sessionID': 'other'},  # 别的会话 → 不动
@@ -189,7 +190,8 @@ def test_auto_reject_swallows_opencode_errors(monkeypatch):
     def _boom(directory=''):
         raise RuntimeError('opencode down')
 
-    fake = type('F', (), {'list_questions': staticmethod(_boom)})()
+    fake = type('F', (), {
+        '_client': property(lambda self: lambda *a, **k: self),'list_questions': staticmethod(_boom)})()
     monkeypatch.setattr(eng, 'opencode_client', fake)
     # 不抛异常即可（辅助检查绝不能打断主轮询）
     eng.BatchWorker()._reject_pending_questions('oc')
@@ -202,6 +204,7 @@ def test_auto_reject_covers_running_subagent_sessions(monkeypatch):
     import utils.batch_engine as eng
     perms, qs = [], []
     fake = type('F', (), {
+        '_client': property(lambda self: lambda *a, **k: self),
         'list_permissions': staticmethod(lambda directory='': [
             {'id': 'p1', 'sessionID': 'oc'},           # 批子会话自己 → 拒
             {'id': 'p2', 'sessionID': 'oc_child'},     # 在跑的子代理 → 拒
@@ -252,6 +255,7 @@ def test_tool_stall_watchdog_kills_frozen_plain_tool(monkeypatch):
                              'output_len': 0, 'child_sid': None}])]
     aborted = []
     fake = type('F', (), {
+        '_client': property(lambda self: lambda *a, **k: self),
         'list_messages': staticmethod(lambda oc, directory='': frozen),
         'get_messages': staticmethod(lambda oc, directory='': []),
         'abort_session': staticmethod(lambda oc, directory='': aborted.append(oc)),
@@ -291,6 +295,7 @@ def test_turn_loop_auto_rejects_subagent_asks(monkeypatch):
         return [_msg(finish='stop', content=[{'type': 'text', 'text': 'done'}])]
 
     fake = type('F', (), {
+        '_client': property(lambda self: lambda *a, **k: self),
         'list_messages': staticmethod(fake_list_messages),
         'list_permissions': staticmethod(lambda directory='': [
             {'id': 'p_own', 'sessionID': 'oc'},            # 父会话自己 → 拒
@@ -345,6 +350,7 @@ def test_tool_stall_deferred_while_subagent_progressing(monkeypatch):
                 for i in range(child_msgs['n'])]
 
     fake = type('F', (), {
+        '_client': property(lambda self: lambda *a, **k: self),
         'list_messages': staticmethod(fake_list_messages),
         'get_messages': staticmethod(fake_get_messages),
         'abort_session': staticmethod(lambda oc, directory='': (_ for _ in ()).throw(AssertionError('should not abort'))),
@@ -368,6 +374,7 @@ def test_tool_stall_kills_dead_subagent(monkeypatch):
                   'output_len': 0, 'child_sid': 'child1'}]
     frozen = [_msg(finish='tool-calls', running_tool=True, content=task_tool)]
     fake = type('F', (), {
+        '_client': property(lambda self: lambda *a, **k: self),
         'list_messages': staticmethod(lambda oc, directory='': frozen),
         'get_messages': staticmethod(lambda oc, directory='':
                                      [{'info': {'role': 'assistant', 'id': 'c0', 'parts': []}}]),
@@ -397,13 +404,15 @@ def test_batch_directive_prepended_for_fresh_children(user_id, db_conn, claim_gu
 
     monkeypatch.setattr(eng, 'opencode_client',
                         type('F', (), {
-                            'create_session': staticmethod(lambda directory, title='': 'oc_x'),
+                            'create_session': staticmethod(lambda directory, title='', **k: 'oc_x'),
                             'send_message': staticmethod(fake_send),
                             'list_messages': staticmethod(
                                 lambda oc, directory='': [_msg(finish='stop',
                                                                content=[{'type': 'text', 'text': 'ok'}])]),
                             'get_messages': staticmethod(lambda oc, directory='': []),
                             'list_agents': staticmethod(lambda directory='': []),
+                            # OC2 双栈：无人值守循环经 _client 取底层 client
+                            '_client': property(lambda self: lambda *a, **k: self),
                         })())
     worker = eng.BatchWorker()
     worker.POLL_INTERVAL_SEC = 0

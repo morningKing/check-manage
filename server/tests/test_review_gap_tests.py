@@ -2430,7 +2430,8 @@ def test_abort_subtask(db_conn, gap_internal_client, monkeypatch):
     fake_oc = MagicMock()
     fake_oc.abort_session.side_effect = lambda oc, **k: aborted.append((oc, k))
     import routes.ai_chat as _chatmod
-    monkeypatch.setattr(_chatmod, 'OpenCodeClient', lambda base_url: fake_oc)
+    # OC2 阶段二：abort 子任务经 _oc_client 按会话栈路由——桩随缝迁移
+    monkeypatch.setattr(_chatmod, '_oc_client', lambda sid: fake_oc)
     client, hdrs = gap_internal_client
     try:
         # 运行中：正常取消

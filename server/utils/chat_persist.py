@@ -73,7 +73,15 @@ def _auto_approve_if_bypass(sid, evt, parent_oc_sid, state, directory):
             row = cur.fetchone()
         if not row or row[0] != 'bypass':
             return
-        get_runtime().get_client().reply_permission(req_id, 'once', directory=directory)
+        # OC2 适配：v2 栈的应答端点是会话作用域，须传归属 OC 会话 id
+        # （evt_sid 即事件归属会话——父会话或已注册子代理）。
+        from utils.runtime import registry as _oc_registry
+        _client = _oc_registry.client_for_session(sid)
+        if _oc_registry.session_runtime_kind(sid) == 'v2':
+            _client.reply_permission(req_id, 'once', directory=directory,
+                                     oc_session_id=evt_sid)
+        else:
+            _client.reply_permission(req_id, 'once', directory=directory)
         logger.info('permission auto-approved (bypass) session=%s request=%s type=%s',
                     sid, req_id, props.get('permission') or 'unknown')
     except Exception as e:
@@ -720,7 +728,8 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             # REST 回填、持久化（含 error part）、释放订阅。幂等（按消息 id
             # upsert），即使两个信号都到也只会写同一行。
             try:
-                backfill_from_rest(state, get_runtime().get_client(),
+                from utils.runtime import registry as _oc_registry
+                backfill_from_rest(state, _oc_registry.client_for_session(sid),
                                    opencode_session_id, directory=directory)
             except Exception as e:
                 logger.warning('backfill failed session=%s: %s', sid, e)
@@ -788,7 +797,11 @@ def _listener_thread(sid, opencode_session_id, directory, known_subtasks=None):
     removes itself from the registry so a later turn can start a fresh one."""
     try:
         logger.info('persist listener start session=%s oc=%s', sid, opencode_session_id)
-        source = get_runtime().subscribe_events(
+        # OC2 适配：按会话绑定栈订阅（registry fail-closed v1——存量会话
+        # 拿到的仍是 V1 client，行为逐字节等价；v2 会话拿到 client_v2，
+        # 其 subscribe_events 内部经事件桥吐 V1 形态帧）。
+        from utils.runtime import registry as _oc_registry
+        source = _oc_registry.client_for_session(sid).subscribe_events(
             directory=directory, read_timeout=INACTIVITY_TIMEOUT,
         )
         _run_listener(sid, opencode_session_id, source, directory=directory,

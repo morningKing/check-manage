@@ -33,6 +33,7 @@ OpenCode 进程内给每一次内置工具调用挂看门狗：
 """
 import os
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,150 @@ def plugin_source(timeout_ms: int = DEFAULT_TIMEOUT_MS,
     return (_PLUGIN_TEMPLATE
             .replace('__TIMEOUT_MS__', str(int(timeout_ms)))
             .replace('__EXEMPT__', exempt))
+
+
+# ---------------------------------------------------------------------------
+# V2 版（OC2 适配阶段四）：与 V1 watchdog 同逻辑，V2 插件 API 形态。
+# 差异（按 v2.2.6 探针）：tool hook 事件 {tool, sessionID, id, input}——
+# callID 等价物是事件上的 id；超时切断 client.session.abort →
+# ctx.session.interrupt；泄漏计时器清理走 ctx.event.subscribe
+# ({types:['session.deleted']})（V1 是 event 回调）。
+# 部署：V2 目录形态（plugins_root/<name>/index.js），与 V1 文件物理隔离。
+# ---------------------------------------------------------------------------
+_PLUGIN_TEMPLATE_V2 = r"""// Baize tool timeout watchdog plugin — V2 (OpenCode 2.x plugin API).
+// 与 V1 版（baize-tool-timeout.js）逻辑等价：每个内置工具调用挂墙钟
+// 看门狗，超时 interrupt 会话；会话删除清理泄漏计时器。
+const TIMEOUT_MS = Number(process.env.OPENCODE_TOOL_TIMEOUT_MS || '__TIMEOUT_MS__') || 900000
+const EXEMPT = new Set(
+  (process.env.OPENCODE_TOOL_TIMEOUT_EXEMPT || '__EXEMPT__')
+    .split(',').map(s => s.trim()).filter(Boolean))
+const SLOW_COMPLETION_MS = 30000
+
+const pending = new Map() // `${sessionID}:${callID}` -> { timer, startedAt, args, tool }
+const ts = () => new Date().toISOString()
+const ARG_VALUE_MAX = 1000
+const ARGS_MAX = 4000
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…(+${s.length - n})` : s)
+const oneLine = (v) => {
+  try {
+    const s = typeof v === 'string'
+      ? v
+      : (JSON.stringify(v) === undefined ? String(v) : JSON.stringify(v))
+    return String(s).replace(/\r?\n/g, '\\n')
+  } catch { return '[unserializable]' }
+}
+const argsSummary = (args) => {
+  try {
+    if (args == null) return ''
+    if (typeof args === 'string') return clip(oneLine(args), ARGS_MAX)
+    return clip(Object.keys(args)
+      .map(k => `${k}=${clip(oneLine(args[k]), ARG_VALUE_MAX)}`)
+      .join(' '), ARGS_MAX)
+  } catch { return '' }
+}
+
+export default {
+  id: 'baize-tool-timeout',
+  async setup(ctx) {
+    // 会话删除/清理 → 在途工具不会再触发 after，计时器泄漏会误杀——
+    // V2 经事件订阅清理（V1 是 event 回调）。
+    const ctrl = new AbortController()
+    void (async () => {
+      try {
+        for await (const ev of ctx.event.subscribe(
+            { types: ['session.deleted'], signal: ctrl.signal })) {
+          const sid = (ev.data || {}).sessionID || ''
+          if (!sid) continue
+          for (const [key, entry] of [...pending]) {
+            if (!key.startsWith(sid + ':')) continue
+            clearTimeout(entry.timer)
+            pending.delete(key)
+            console.error(`[baize-tool-timeout] ${ts()} session=${sid} deleted ` +
+              `→ cleared watchdog tool=${entry.tool} args=[${entry.args}]`)
+          }
+        }
+      } catch { /* 清理流失败不阻断 */ }
+    })()
+    await ctx.tool.hook('execute.before', (event) => {
+      try {
+        if (!event || !event.sessionID || !event.id) return
+        if (EXEMPT.has(event.tool)) return
+        const key = `${event.sessionID}:${event.id}`
+        const entry = { timer: null, startedAt: Date.now(),
+                        args: argsSummary(event && event.input), tool: event.tool }
+        entry.timer = setTimeout(async () => {
+          const cur = pending.get(key)
+          if (!cur || cur.timer !== entry.timer) return  // 已结束：after 已清理
+          pending.delete(key)
+          console.error(`[baize-tool-timeout] ${ts()} tool=${entry.tool} ` +
+            `session=${event.sessionID} args=[${entry.args}] ` +
+            `exceeded ${Date.now() - entry.startedAt}ms → interrupt`)
+          try {
+            await ctx.session.interrupt({ sessionID: event.sessionID })
+          } catch (e) {
+            console.error(`[baize-tool-timeout] ${ts()} interrupt failed: ${e && e.message}`)
+          }
+        }, TIMEOUT_MS)
+        pending.set(key, entry)
+      } catch { /* 看门狗自身故障不阻断工具执行 */ }
+    })
+    await ctx.tool.hook('execute.after', (event) => {
+      try {
+        if (!event || !event.sessionID || !event.id) return
+        const key = `${event.sessionID}:${event.id}`
+        const entry = pending.get(key)
+        if (!entry) return
+        clearTimeout(entry.timer)
+        pending.delete(key)
+        const dur = Date.now() - entry.startedAt
+        if (dur > SLOW_COMPLETION_MS) {
+          console.error(`[baize-tool-timeout] ${ts()} tool=${entry.tool} ` +
+            `session=${event.sessionID} args=[${entry.args}] completed in ${dur}ms (slow)`)
+        }
+      } catch { /* 清理失败无碍 */ }
+    })
+    console.error(`[baize-tool-timeout] v2 plugin loaded (timeout=${TIMEOUT_MS}ms ` +
+      `exempt=[${[...EXEMPT].join(',')}])`)
+    return () => ctrl.abort()   // 插件卸载清理：停订阅流
+  },
+}
+"""
+
+
+def plugin_source_v2(timeout_ms: int = DEFAULT_TIMEOUT_MS,
+                     exempt: str = DEFAULT_EXEMPT) -> str:
+    return (_PLUGIN_TEMPLATE_V2
+            .replace('__TIMEOUT_MS__', str(int(timeout_ms)))
+            .replace('__EXEMPT__', exempt))
+
+
+PLUGIN_NAME_V2 = 'baize-tool-timeout'
+
+
+def ensure_tool_timeout_plugin_v2(plugins_root: str,
+                                  timeout_ms: int = DEFAULT_TIMEOUT_MS,
+                                  exempt: str = DEFAULT_EXEMPT) -> str | None:
+    """写入 <V2 plugins_root>/baize-tool-timeout/index.js（幂等）。
+    V2 目录形态部署，与 V1 文件物理隔离；部署后需重启 V2 serve。"""
+    if not plugins_root:
+        return None
+    try:
+        root = os.path.realpath(plugins_root)
+        pdir = os.path.realpath(os.path.join(root, PLUGIN_NAME_V2))
+        if os.path.commonpath([pdir, root]) != root:
+            raise ValueError('plugin path escapes plugins root')
+        os.makedirs(pdir, exist_ok=True)
+        path = os.path.join(pdir, 'index.js')
+        source = plugin_source_v2(timeout_ms, exempt)
+        current = Path(path).read_text(encoding='utf-8') \
+            if os.path.isfile(path) else ''
+        if current != source:
+            Path(path).write_text(source, encoding='utf-8')
+            logger.info('tool timeout plugin (v2) installed: %s', path)
+        return path
+    except Exception as e:  # noqa: BLE001 —— 插件部署失败不阻断启动
+        logger.warning('tool timeout plugin (v2) deploy failed: %s', e)
+        return None
 
 
 def ensure_tool_timeout_plugin(global_dir: str,

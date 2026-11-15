@@ -78,7 +78,8 @@ def test_chat_sse_pings_while_upstream_idle(client, admin_headers, monkeypatch):
     fake = _QuietUpstream()
     monkeypatch.setattr(m, 'SSE_PING_SEC', 0.2)
     monkeypatch.setattr(m, '_load_session_for_user', _fake_sess)
-    monkeypatch.setattr(m, 'get_runtime', lambda: fake)
+    # OC2 阶段二：SSE pump 的上游经 routes.ai_chat._oc_client 按会话栈路由
+    monkeypatch.setattr(m, '_oc_client', lambda sid: fake)
 
     resp = client.get('/ai/chat/sessions/s-ping/events', headers=admin_headers)
     assert resp.status_code == 200
@@ -105,7 +106,7 @@ def test_chat_sse_ends_promptly_when_upstream_dies(client, admin_headers,
     import routes.ai_chat as m
     monkeypatch.setattr(m, 'SSE_PING_SEC', 0.2)
     monkeypatch.setattr(m, '_load_session_for_user', _fake_sess)
-    monkeypatch.setattr(m, 'get_runtime', lambda: _DeadUpstream())
+    monkeypatch.setattr(m, '_oc_client', lambda sid: _DeadUpstream())
 
     resp = client.get('/ai/chat/sessions/s-dead/events', headers=admin_headers)
     assert resp.status_code == 200

@@ -114,7 +114,60 @@ def _external_mcp():
 # OpenCode 内部系统 agent（mode=primary 但不应出现在用户选择器）。
 # 这是按名字硬编码的假设（OpenCode 未给内部 agent 单独标识字段）；
 # 升级 OpenCode 时如新增内部 primary agent 需在此补充。verified: opencode v1.2.x
+# （OC2 真机实测：V2 内置 hidden 集合仍为这三者，名单继续正确）
 INTERNAL_AGENTS = {'compaction', 'title', 'summary'}
+
+
+def _oc_client(platform_sid: str):
+    """会话绑定栈的 OC 客户端（OC2 适配阶段二接线）。
+
+    v1 → OpenCodeClient（V1 serve :4096）；v2 → OpenCodeClientV2（V2 serve
+    :4196）。栈由 ai_chat_sessions.oc_runtime 决定，registry fail-closed：
+    行缺失/NULL/未知值/DB 异常一律回 V1——存量会话行为逐字节等价。
+    批子任务等子会话沿用父会话的栈（委派发生在同一栈内）。"""
+    from utils.runtime import registry
+    return registry.client_for_session(platform_sid)
+
+
+def _oc_default_client():
+    """默认栈的 OC 客户端——无会话上下文的全局端点用（模型/agent 目录）。"""
+    from utils.runtime import registry
+    return registry.client_for_default()
+
+
+def _oc_reply_permission(client, sid, request_id, reply, directory,
+                         owning_oc_sid=''):
+    """权限应答（OC2 适配）：v2 的应答端点是会话作用域，必须传归属 OC
+    会话 id——父会话自己的询问传 sess[2]，子代理的传子会话 id（即
+    list_permissions 项里的 sessionID）；v1 签名与行为不变。"""
+    from utils.runtime import registry
+    if registry.session_runtime_kind(sid) == 'v2':
+        client.reply_permission(request_id, reply, directory=directory,
+                                oc_session_id=owning_oc_sid)
+    else:
+        client.reply_permission(request_id, reply, directory=directory)
+
+
+def _oc_reply_question(client, sid, request_id, answers, directory,
+                       owning_oc_sid=''):
+    """问答应答（OC2 适配）：v2 form reply 会话作用域，同上。"""
+    from utils.runtime import registry
+    if registry.session_runtime_kind(sid) == 'v2':
+        client.reply_question(request_id, answers, directory=directory,
+                              oc_session_id=owning_oc_sid)
+    else:
+        client.reply_question(request_id, answers, directory=directory)
+
+
+def _oc_reject_question(client, sid, request_id, directory,
+                        owning_oc_sid=''):
+    """问答拒绝（OC2 适配）：v2 form cancel 会话作用域，同上。"""
+    from utils.runtime import registry
+    if registry.session_runtime_kind(sid) == 'v2':
+        client.reject_question(request_id, directory=directory,
+                               oc_session_id=owning_oc_sid)
+    else:
+        client.reject_question(request_id, directory=directory)
 
 # Nudge the model to emit file content as fenced code blocks so the frontend can
 # lift it into a previewable/downloadable artifact (Claude-style). Kept terse and
@@ -153,15 +206,20 @@ def create_session():
     )
 
     # 1) insert row (need a row before session_token utility can UPDATE it)
+    # OC2 适配：创建即钉栈（AI_OC_RUNTIME_DEFAULT 灰度开关；默认 'v1' 行为
+    # 不变）。全生命周期（发送/继续/压缩/撤销/删除）绑定该栈，不跨栈迁移。
+    from utils.runtime import registry as _oc_registry
+    _oc_kind = _oc_registry.default_kind()
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO ai_chat_sessions "
             "(id, user_id, title, workspace_path, session_token, "
-            " token_expires_at, project_menu_id, status) "
-            "VALUES (%s, %s, %s, %s, %s, NOW() + INTERVAL '1 hour', %s, 'active')",
+            " token_expires_at, project_menu_id, status, oc_runtime) "
+            "VALUES (%s, %s, %s, %s, %s, NOW() + INTERVAL '1 hour', %s, "
+            "'active', %s)",
             (session_id, user['userId'], '新会话', workspace_path,
-             '_pending_', project_menu_id),
+             '_pending_', project_menu_id, _oc_kind),
         )
     # 2) overwrite the token via the dedicated utility (single source of truth for TTL math)
     token = generate_token(session_id, AI_SESSION_TTL_HOURS)
@@ -182,7 +240,8 @@ def create_session():
         pass  # best-effort
 
     # 4) ask OpenCode to start a session bound to this workspace (directory query param)
-    client = get_runtime().get_client()
+    # OC2 适配：按刚落库的栈取 client（v2 时 create_session 打到 V2 serve）
+    client = _oc_registry.runtime_for(_oc_kind).get_client()
     opencode_session_id = client.create_session(directory=workspace_path, title='新会话')
 
     # 5) persist opencode_session_id
@@ -216,8 +275,12 @@ def list_models():
     Only connected providers are surfaced. `default` is the server-side
     get_default_chat_model() config; the picker uses it as the "Default" option label.
     """
+    # OC2 双栈：可选 ?sid= 按会话栈取目录（混合栈期 v2 会话的模型选择器
+    # 需要看到 V2 栈的 provider/model）；无 sid 时行为不变（默认栈）。
+    _sid_arg = (request.args.get('sid') or '').strip()
     try:
-        provider_info = OpenCodeClient(OPENCODE_BASE_URL).list_providers()
+        provider_info = (_oc_client(_sid_arg) if _sid_arg
+                         else _oc_default_client()).list_providers()
     except Exception as e:
         return jsonify({'error': f'OpenCode unreachable: {e}', 'models': []}), 502
 
@@ -263,8 +326,11 @@ def list_agents():
               "default": "<name>"|null }.
     Filters to mode=='primary'/'subagent' and excludes OpenCode's internal agents.
     """
+    # OC2 双栈：可选 ?sid= 按会话栈取 agent 目录（同 list_models 说明）
+    _sid_arg = (request.args.get('sid') or '').strip()
     try:
-        raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()
+        raw = (_oc_client(_sid_arg) if _sid_arg
+               else _oc_default_client()).list_agents()
     except Exception as e:
         return jsonify({'error': f'OpenCode unreachable: {e}', 'agents': [], 'subagents': [], 'default': None}), 502
 
@@ -978,7 +1044,7 @@ def compact_session(sid):
 
     def _run():
         try:
-            OpenCodeClient(OPENCODE_BASE_URL).summarize_session(
+            _oc_client(sid).summarize_session(
                 sess[2], provider_id, model_id, directory=sess[4])
             logger.info('compact done session=%s model=%s', sid, model)
             try:
@@ -1129,7 +1195,7 @@ def send_message(sid):
     if not isinstance(agent_mentions, list):
         agent_mentions = []
     import requests as _requests
-    client = get_runtime().get_client()
+    client = _oc_client(sid)
     oc_sid = sess[2]
     logger.info('send_message session=%s oc=%s user=%s model=%s agent=%s attachments=%d',
                 sid, oc_sid, user['userId'], effective_model or 'default',
@@ -1685,7 +1751,7 @@ def compact_subtask(sid, subtask_id):
 
     def _run():
         try:
-            OpenCodeClient(OPENCODE_BASE_URL).summarize_session(
+            _oc_client(sid).summarize_session(
                 subtask_id, provider_id, model_id, directory=sess[4])
             logger.info('subtask compact done session=%s subtask=%s model=%s',
                         sid, subtask_id, model)
@@ -1759,7 +1825,7 @@ def abort_subtask(sid, subtask_id):
     # 父会话的 workspace_path 作为 directory；NULL 时传空串（与上游 abort 一致，
     # abort_session 只在非空时带 directory 参数）
     try:
-        OpenCodeClient(OPENCODE_BASE_URL).abort_session(
+        _oc_client(sid).abort_session(
             subtask_id, directory=(sess[4] or ''))
     except Exception as e:
         logger.warning('abort_subtask no-op session=%s subtask=%s: %s',
@@ -1912,7 +1978,7 @@ def sse_events(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
     opencode_session_id = sess[2]
-    client = get_runtime()
+    client = _oc_client(sid)
 
     def generate():
         # OpenCode text parts arrive as full snapshots keyed by part id; track the
@@ -2050,7 +2116,7 @@ def lsp_formatter_status(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     out = {'lsp': [], 'formatters': []}
     try:
         out['lsp'] = client.list_lsp(directory=sess[4])
@@ -2253,7 +2319,7 @@ def list_mcp_services(sid):
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     try:
-        servers_raw = OpenCodeClient(OPENCODE_BASE_URL).list_mcp(sess[4])
+        servers_raw = _oc_client(sid).list_mcp(sess[4])
     except Exception:
         return jsonify({'servers': [], 'error': 'opencode unavailable'})
     try:
@@ -2283,7 +2349,7 @@ def list_session_commands(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     try:
         commands = [{'name': c['name'], 'description': c.get('description', '')}
                     for c in client.list_commands(sess[4])]
@@ -2334,7 +2400,7 @@ def run_session_command(sid):
     # turn has already been emitted and lost. ensure_listener is a no-op if a
     # live listener is already running for this session.
     ensure_listener(sid, sess[2], sess[4])
-    OpenCodeClient(OPENCODE_BASE_URL).run_command(
+    _oc_client(sid).run_command(
         sess[2], command, arguments, model=get_default_chat_model(), directory=sess[4],
     )
     # undo-redo spec §2.4：新回合已被 OC 接受（OC prompt 开头自动提交撤销，
@@ -2365,7 +2431,7 @@ def abort_session(sid):
     stopped = False
     if sess[2]:
         try:
-            OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
+            _oc_client(sid).abort_session(sess[2], directory=sess[4])
             stopped = True
         except requests.RequestException as e:
             logger.warning('abort_session no-op session=%s: %s', sid, e)
@@ -2415,7 +2481,7 @@ def get_pending_question(sid):
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     try:
-        pending = OpenCodeClient(OPENCODE_BASE_URL).list_questions(directory=sess[4])
+        pending = _oc_client(sid).list_questions(directory=sess[4])
     except Exception:
         logger.exception('list_questions failed session=%s', sid)
         return jsonify({'data': None}), 200
@@ -2439,11 +2505,15 @@ def reply_question(sid, request_id):
     answers = body.get('answers')
     if not isinstance(answers, list) or not answers:
         return jsonify({'error': 'answers is required'}), 400
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     pending = client.list_questions(directory=sess[4])
-    if not any(q.get('id') == request_id and q.get('sessionID') == sess[2] for q in pending):
+    match_q = next((q for q in pending
+                    if q.get('id') == request_id
+                    and q.get('sessionID') == sess[2]), None)
+    if not match_q:
         return jsonify({'error': 'question not found', 'code': 'QUESTION_NOT_FOUND'}), 404
-    client.reply_question(request_id, answers, directory=sess[4])
+    _oc_reply_question(client, sid, request_id, answers, sess[4],
+                       match_q.get('sessionID') or '')
     return jsonify({'ok': True}), 200
 
 
@@ -2455,11 +2525,15 @@ def reject_question(sid, request_id):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     pending = client.list_questions(directory=sess[4])
-    if not any(q.get('id') == request_id and q.get('sessionID') == sess[2] for q in pending):
+    match_q = next((q for q in pending
+                    if q.get('id') == request_id
+                    and q.get('sessionID') == sess[2]), None)
+    if not match_q:
         return jsonify({'error': 'question not found', 'code': 'QUESTION_NOT_FOUND'}), 404
-    client.reject_question(request_id, directory=sess[4])
+    _oc_reject_question(client, sid, request_id, sess[4],
+                        match_q.get('sessionID') or '')
     return jsonify({'ok': True}), 200
 
 
@@ -2519,7 +2593,7 @@ def get_pending_permission(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     try:
         pending = client.list_permissions(directory=sess[4])
     except Exception:
@@ -2556,7 +2630,8 @@ def get_pending_permission(sid):
         failed = []
         for q in matches:
             try:
-                client.reply_permission(q.get('id'), 'once', directory=sess[4])
+                _oc_reply_permission(client, sid, q.get('id'), 'once',
+                                     sess[4], q.get('sessionID') or '')
                 logger.info('permission auto-approved (bypass rehydrate) '
                             'session=%s request=%s type=%s',
                             sid, q.get('id'), q.get('permission') or 'unknown')
@@ -2582,7 +2657,7 @@ def reply_permission(sid, request_id):
     response = body.get('response')
     if response not in ('once', 'always', 'reject'):
         return jsonify({'error': 'response must be once/always/reject'}), 400
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     pending = client.list_permissions(directory=sess[4])
     # 归属：父会话自己的请求，或本会话委派出去的子代理（子会话）的请求——
     # 子代理的询问阻塞的是父回合的 task 工具，父会话 UI 是唯一能答的地方。
@@ -2593,9 +2668,11 @@ def reply_permission(sid, request_id):
             return False
         return q.get('sessionID') == sess[2] or q.get('sessionID') in kids
 
-    if not any(_owned(q) for q in pending):
+    match_q = next((q for q in pending if _owned(q)), None)
+    if not match_q:
         return jsonify({'error': 'permission not found', 'code': 'PERMISSION_NOT_FOUND'}), 404
-    client.reply_permission(request_id, response, directory=sess[4])
+    _oc_reply_permission(client, sid, request_id, response, sess[4],
+                         match_q.get('sessionID') or '')
     return jsonify({'ok': True}), 200
 
 
@@ -2632,13 +2709,14 @@ def set_permission_mode(sid):
                     (mode, sid))
     if mode == 'bypass':
         try:
-            client = OpenCodeClient(OPENCODE_BASE_URL)
+            client = _oc_client(sid)
             kids = _child_session_agents(client, sess)
             for q in client.list_permissions(directory=sess[4]):
                 if q.get('sessionID') != sess[2] and q.get('sessionID') not in kids:
                     continue
                 try:
-                    client.reply_permission(q.get('id'), 'once', directory=sess[4])
+                    _oc_reply_permission(client, sid, q.get('id'), 'once',
+                                         sess[4], q.get('sessionID') or '')
                     logger.info('permission auto-approved (bypass toggle backfill) '
                                 'session=%s request=%s type=%s',
                                 sid, q.get('id'), q.get('permission') or 'unknown')
@@ -2805,7 +2883,7 @@ def close_session(sid):
     stopped_turn = False
     if sess[2] and has_listener(sid):
         try:
-            OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
+            _oc_client(sid).abort_session(sess[2], directory=sess[4])
             stopped_turn = True
         except requests.RequestException:
             logger.warning('close_session: abort in-flight turn failed session=%s', sid,
@@ -2868,7 +2946,7 @@ def clear_session(sid):
     old_oc = sess[2]
     # 1) 停监听 + 删旧 OpenCode 会话（先删以释放工作区句柄，Windows 上尤为重要）
     stop_listener(sid)
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     if old_oc:
         try:
             client.delete_session(old_oc)
@@ -2930,14 +3008,14 @@ def delete_session(sid):
     # 往一个已删除的会话里执行（abort 幂等、best-effort）。
     if opencode_session_id:
         try:
-            OpenCodeClient(OPENCODE_BASE_URL).abort_session(
+            _oc_client(sid).abort_session(
                 opencode_session_id, directory=sess[4])
         except Exception:
             pass
     stop_listener(sid)
     if opencode_session_id:
         try:
-            OpenCodeClient(OPENCODE_BASE_URL).delete_session(opencode_session_id)
+            _oc_client(sid).delete_session(opencode_session_id)
         except Exception:
             pass  # 404 from OpenCode = already gone
     # Security-critical first: kill the token + mark dead so a failed file cleanup
