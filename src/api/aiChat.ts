@@ -260,7 +260,7 @@ export function getMessages(id: string, opts?: { since?: string; before?: string
   if (opts?.before) q.set('before', opts.before)
   if (opts?.limit) q.set('limit', String(opts.limit))
   const qs = q.toString()
-  return get<{ messages: AiMessage[]; hasMore?: boolean }>(
+  return get<{ messages: AiMessage[]; hasMore?: boolean; revert?: RevertState | null }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages${qs ? '?' + qs : ''}`)
 }
 
@@ -536,6 +536,48 @@ export function deleteFromMessage(id: string, msgId: string) {
   )
 }
 
+/** 撤销态（undo-redo spec）：GET /messages 的 revert 块与 undo 响应共用。 */
+export interface RevertState {
+  mode: 'native' | 'rebuild'
+  messageCount: number
+  fileCount: number
+  fileNames?: string[]
+  createdAt?: string
+  /* 后端 get_revert_state 同键返回：native 模式记录 oc 消息锚点，供重做/续传对齐 */
+  ocMessageId?: string | null
+  fromSeq?: number | null
+  opencodeSessionId?: string | null
+  /* rebuild 模式：撤销前的旧 OC 会话 id（重做切回目标，spec §2.2d） */
+  prevOpencodeSessionId?: string | null
+}
+
+export interface UndoPreview {
+  messageCount: number
+  files: string[]
+  fileCapability: 'full' | 'none' | 'stale'
+  mode: 'native' | 'rebuild'
+  reason?: string | null
+}
+
+/** 撤销预览（挂撤销菜单/确认框用）：silent — 预览失败不打扰用户。 */
+export function undoPreview(id: string, msgId: string) {
+  return get<UndoPreview>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/undo-preview`,
+    { messageId: msgId }, { silent: true })
+}
+
+// undo/redo 响应携带 hasMore（批次 B1）：服务端整窗重算时一并给出
+// 「是否还有更早历史」，前端据此校正「加载更早」分页游标（终审 M1）
+export function undoToMessage(id: string, msgId: string) {
+  return post<{ deleted: number; revert: RevertState | null; messages: AiMessage[]; hasMore: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/undo`, { messageId: msgId })
+}
+
+export function redoSession(id: string) {
+  return post<{ deleted: number; messages: AiMessage[]; hasMore: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/redo`)
+}
+
 // 触发上下文压缩（TUI 的 /compact）：后端在后台线程调 OpenCode summarize，
 // 压缩过程与结果经 SSE 推送。`model` 可选（"provider/model"），缺省用后端配置
 // 的默认对话模型。
@@ -644,6 +686,8 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
       // 权限门（external_directory ask）：漏登记 → 帧到了浏览器被静默丢弃，
       // 授权气泡在真实链路永不出现（2026-10-14 实测，回合静默挂起）。
       'permission.asked', 'permission.replied', 'permission.rejected',
+      // 平台侧撤销/重做/提交广播，漏登记 → 其他标签页永不收敛
+      'session.revert',
     ]) {
       es.addEventListener(name, (e: MessageEvent) => {
         try {

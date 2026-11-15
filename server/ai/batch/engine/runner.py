@@ -261,7 +261,11 @@ class WorkerRunnerMixin:
                         session_row, False,
                         elapsed=time.monotonic() - turn_start, error=agent_err)
                     return
-                oc_session_id = opencode_client.create_session(directory=ws)
+                _child_kind = ''
+                if isinstance(session_row, dict):
+                    _child_kind = session_row.get('oc_runtime') or ''
+                oc_session_id = opencode_client.create_session(directory=ws,
+                                                               kind=_child_kind)
                 self._set_opencode_id(sid, oc_session_id, ws)
                 _boot_mark('create_session')
 
@@ -1284,7 +1288,20 @@ class WorkerRunnerMixin:
             if q.get('sessionID') not in accepted or not q.get('id'):
                 continue
             try:
-                opencode_client.reject_question(q['id'], directory=directory)
+                # OC2 双栈：v2 会话的 form cancel 端点是会话作用域——按归属
+                # 会话的绑定栈分流（V1 客户端不收 oc_session_id 形参）
+                _own_sid = q.get('sessionID') or ''
+                _client_q = opencode_client._client(oc_session_id=_own_sid)
+                try:
+                    from ai.runtime import registry as _reg
+                    _is_v2 = _reg.runtime_kind_by_oc_id(_own_sid) == 'v2'
+                except Exception:
+                    _is_v2 = False
+                if _is_v2:
+                    _client_q.reject_question(q['id'], directory=directory,
+                                              oc_session_id=_own_sid)
+                else:
+                    _client_q.reject_question(q['id'], directory=directory)
                 logger.info('batch auto-rejected question oc=%s qid=%s',
                             oc_session_id, q['id'])
             except Exception:
@@ -1310,8 +1327,22 @@ class WorkerRunnerMixin:
             if q.get('sessionID') not in accepted or not q.get('id'):
                 continue
             try:
-                opencode_client.reply_permission(q['id'], 'reject',
-                                                 directory=directory)
+                # OC2 双栈：v2 的权限 reply 端点会话作用域——按归属会话绑定
+                # 栈分流（V1 客户端不收 oc_session_id 形参）
+                _own_sid = q.get('sessionID') or ''
+                _client_p = opencode_client._client(oc_session_id=_own_sid)
+                try:
+                    from ai.runtime import registry as _reg
+                    _is_v2 = _reg.runtime_kind_by_oc_id(_own_sid) == 'v2'
+                except Exception:
+                    _is_v2 = False
+                if _is_v2:
+                    _client_p.reply_permission(q['id'], 'reject',
+                                               directory=directory,
+                                               oc_session_id=_own_sid)
+                else:
+                    _client_p.reply_permission(q['id'], 'reject',
+                                               directory=directory)
                 logger.info('batch auto-rejected permission oc=%s pid=%s (%s)',
                             oc_session_id, q['id'], q.get('permission'))
             except Exception:

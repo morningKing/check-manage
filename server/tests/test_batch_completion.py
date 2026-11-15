@@ -22,7 +22,7 @@ class _FakeClient:
 
 def _facade(msgs, monkeypatch):
     f = eng._OpenCodeFacade()
-    monkeypatch.setattr(f, '_client', lambda: _FakeClient(msgs))
+    monkeypatch.setattr(f, '_client', lambda *a, **k: _FakeClient(msgs))
     return f
 
 
@@ -75,7 +75,7 @@ def test_request_error_returns_not_finished(monkeypatch):
             raise requests.RequestException('boom')
 
     f = eng._OpenCodeFacade()
-    monkeypatch.setattr(f, '_client', lambda: _BoomClient())
+    monkeypatch.setattr(f, '_client', lambda *a, **k: _BoomClient())
     out = f.list_messages('s')
     assert out == [{'role': 'assistant', 'finished': False, 'content': [],
                     'poll_error': 'rest'}]

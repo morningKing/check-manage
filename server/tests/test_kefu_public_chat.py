@@ -16,6 +16,8 @@ def test_send_message_dispatches(client, mock_cursor):
     with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
          patch('routes.kefu_public.kefu_repo.get_instance', return_value=INST), \
          patch('routes.kefu_public.OpenCodeClient') as OC, \
+         patch('ai.runtime.registry.client_for_session',
+               return_value=OC.return_value), \
          patch('routes.kefu_public.ensure_listener') as el:
         resp = client.post('/kefu/sessions/sess_1/messages',
                            json={'content': '价格多少'},
@@ -56,6 +58,8 @@ def test_send_message_publishes_instance_event(client, mock_cursor):
     with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
          patch('routes.kefu_public.kefu_repo.get_instance', return_value=INST), \
          patch('routes.kefu_public.OpenCodeClient'), \
+         patch('ai.runtime.registry.client_for_session',
+               return_value=MagicMock()), \
          patch('routes.kefu_public.ensure_listener'), \
          patch('routes.kefu_public.kefu_event_bus.publish') as P:
         client.post('/kefu/sessions/sess_1/messages', json={'content': '价格'},
@@ -125,7 +129,9 @@ def test_events_sse_release_called_on_stream_end(client):
          patch('routes.kefu_public._sse_acquire_ip', return_value=True), \
          patch('routes.kefu_public._sse_release', release_mock), \
          patch('routes.kefu_public._sse_release_ip'), \
-         patch('routes.kefu_public.OpenCodeClient') as MockOC:
+         patch('routes.kefu_public.OpenCodeClient') as MockOC, \
+         patch('ai.runtime.registry.client_for_session',
+               return_value=MockOC.return_value):
         MockOC.return_value.subscribe_events.return_value = iter([])
         resp = client.get('/kefu/sessions/sess_1/events?visitor_id=v1')
         _ = resp.data   # consume the streaming response so the generator runs to completion

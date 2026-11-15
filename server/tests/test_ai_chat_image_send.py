@@ -66,6 +66,16 @@ def setup(mock_conn, mock_cursor, tmp_path):
         patch('routes.ai_chat.OpenCodeClient', return_value=fake_client),
         patch('routes.ai_chat.get_runtime',
               lambda: _RuntimeStub(fake_client)),
+        # OC2 阶段二：客户端经 registry 按会话栈路由（同 test_routes_ai_chat
+        # fixture 的迁桩说明——旧 patch 保留无害）。
+        patch('ai.runtime.registry.client_for_session',
+              lambda sid: fake_client),
+        patch('ai.runtime.registry.client_for_oc_id',
+              lambda oc_sid: fake_client),
+        patch('ai.runtime.registry.client_for_default',
+              lambda: fake_client),
+        patch('ai.runtime.registry.runtime_for',
+              lambda kind: _RuntimeStub(fake_client)),
         patch('config.AI_WORKSPACE_ROOT', str(tmp_path)),
         patch('routes.ai_chat.AI_WORKSPACE_ROOT', str(tmp_path)),
     ]

@@ -1216,7 +1216,9 @@ def test_list_messages_maps_reasoning_parts(monkeypatch):
         'info': {'id': 'm1', 'role': 'assistant', 'time': {}},
         'parts': [{'type': 'reasoning', 'text': 'pondering...'}],
     }]
-    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    # OC2 双栈：facade._client 现按 (oc_session_id, kind) 路由——桩容参
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client',
+                        lambda self, *a, **k: client)
     out = eng._OpenCodeFacade().list_messages('oc')
     assert out[0]['content'] == [{'type': 'reasoning', 'text': 'pondering...'}]
 
@@ -1409,7 +1411,9 @@ def test_list_messages_counts_open_steps(monkeypatch):
         {'type': 'step-start'},
         {'type': 'reasoning', 'text': ''},       # 思考中文本尚未可见
     ])
-    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    # OC2 双栈：facade._client 现按 (oc_session_id, kind) 路由——桩容参
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client',
+                        lambda self, *a, **k: client)
     out = eng._OpenCodeFacade().list_messages('oc')
     assert out[0]['step_active'] is True
 
@@ -1457,7 +1461,9 @@ def test_list_messages_flags_rest_failure(monkeypatch):
     from ai.batch import engine as eng
     from unittest.mock import MagicMock
     client = MagicMock()
-    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    # OC2 双栈：facade._client 现按 (oc_session_id, kind) 路由——桩容参
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client',
+                        lambda self, *a, **k: client)
 
     import requests as _requests
     client.get_messages.side_effect = _requests.ConnectionError('proxy down')
@@ -1489,7 +1495,9 @@ def test_await_finished_rest_outage_reports_unreachable_not_stalled(monkeypatch)
 
     client = MagicMock()
     client.get_messages.side_effect = _requests.ConnectionError('proxy down')
-    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    # OC2 双栈：facade._client 现按 (oc_session_id, kind) 路由——桩容参
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client',
+                        lambda self, *a, **k: client)
 
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.3
@@ -1515,7 +1523,9 @@ def test_await_finished_empty_message_list_reports_unreachable(monkeypatch):
 
     client = MagicMock()
     client.get_messages.return_value = []
-    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    # OC2 双栈：facade._client 现按 (oc_session_id, kind) 路由——桩容参
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client',
+                        lambda self, *a, **k: client)
 
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.3
@@ -1547,7 +1557,9 @@ def test_await_finished_transient_rest_blip_does_not_kill(monkeypatch):
             raise _requests.ConnectionError('blip')
         return ok
     client.get_messages.side_effect = flaky
-    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    # OC2 双栈：facade._client 现按 (oc_session_id, kind) 路由——桩容参
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client',
+                        lambda self, *a, **k: client)
 
     w = eng.BatchWorker()
     w.STALL_TIMEOUT_SEC = 0.3
@@ -1779,7 +1791,9 @@ def test_facade_surfaces_opencode_error(monkeypatch):
     from unittest.mock import MagicMock
     client = MagicMock()
     client.get_messages.return_value = [_raw_errored_msg()]
-    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    # OC2 双栈：facade._client 现按 (oc_session_id, kind) 路由——桩容参
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client',
+                        lambda self, *a, **k: client)
 
     out = eng._OpenCodeFacade().list_messages('oc')
 

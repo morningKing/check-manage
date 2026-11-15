@@ -13,6 +13,7 @@ OpenCode 进程内拦截 task 工具：
 注意：OC serve 进程在启动时加载 plugin 目录——部署后需重启 serve 生效。
 """
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,207 @@ export const BaizeSubagentReusePlugin = async () => ({
 def plugin_source(endpoint: str, token: str) -> str:
     return _PLUGIN_TEMPLATE.replace('__ENDPOINT__', endpoint) \
                            .replace('__TOKEN__', token or '')
+
+
+# ---------------------------------------------------------------------------
+# V2 版（OC2 适配阶段四）：OpenCode 2.x 插件 API全重写——V1 函数入口插件
+# 在 V2 不加载，V2 要求 {id, setup(ctx)} 对象 + 目录形态部署
+# （<plugins_root>/<name>/index.js）。本模板与 V1 版逻辑等价，差异按 V2
+# 真机实测（v2.2.6 探针）：tool hook 事件 {tool, sessionID, agent,
+# messageID, id, input, status?, result?}——sessionID/agent 直接在事件上
+# （V1 要从 input.subagent_type 取），工具名 task→subagent，input 可变
+# （直接改 event.input 注入 task_id）。
+# 部署策略：与 V1 版双文件物理隔离（V1 文件一行不动——生产 V1 稳定优先），
+# 各自部署到各自 serve 的全局目录。
+# ---------------------------------------------------------------------------
+_PLUGIN_TEMPLATE_V2 = r"""// Baize subagent session reuse plugin — V2 (OpenCode 2.x plugin API).
+// 逻辑与 V1 版（baize-subagent-reuse.js）等价；事件形状见模块 docstring。
+const ENDPOINT = process.env.BAIZE_SUBAGENT_REUSE_URL || '__ENDPOINT__'
+const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
+const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN }
+const FETCH_TIMEOUT_MS = 3000
+// (sessionID) → { agents:Set, pins:Map, at } —— 后端瞬断时的兜底判定
+const _cache = new Map()
+const CACHE_TTL_MS = 120000
+// (callID → { agent, at }) —— after 阶段 pin 的 agent 兜底（与 V1 同源）
+const _callAgents = new Map()
+const CALL_AGENT_TTL_MS = 2 * 60 * 60 * 1000
+
+function _rememberCallAgent(callID, agent) {
+  if (!callID || !agent) return
+  const now = Date.now()
+  for (const [k, v] of _callAgents)
+    if (now - v.at > CALL_AGENT_TTL_MS) _callAgents.delete(k)
+  _callAgents.set(callID, { agent, at: now })
+}
+
+function _takeCallAgent(callID) {
+  const v = callID ? _callAgents.get(callID) : null
+  if (v) _callAgents.delete(callID)
+  return v ? v.agent : ''
+}
+
+const _ts = () => new Date().toISOString()
+const _err = (e) => {
+  if (!e) return 'unknown'
+  const code = e.code || (e.cause && (e.cause.code || e.cause.message)) || ''
+  const msg = e.message || String(e)
+  return code ? `${msg} (${code})` : msg
+}
+function _log(...a) { console.error('[baize-subagent-reuse]', _ts(), ...a) }
+
+async function _fetchJson(url, opts) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+    try {
+      const res = await fetch(url, { ...opts, signal: ctrl.signal, headers: HEADERS })
+      clearTimeout(timer)
+      if (!res.ok) return { ok: false, status: res.status }
+      return { ok: true, body: await res.json() }
+    } catch (e) {
+      clearTimeout(timer)
+      if (attempt === 1) { _log('fetch failed', url, _err(e)); return { ok: false, error: String(e && e.message) } }
+      await new Promise(r => setTimeout(r, 300))
+    }
+  }
+}
+
+function _cacheGet(sessionID) {
+  const c = _cache.get(sessionID)
+  if (!c || Date.now() - c.at > CACHE_TTL_MS) { _cache.delete(sessionID); return null }
+  return c
+}
+
+async function lookup(sessionID, agent, callID) {
+  const cached = _cacheGet(sessionID)
+  if (cached && !cached.agents.has(agent)) {
+    if (cached.negative && cached.negative.has(agent)) return { enabled: false }
+  }
+  const r = await _fetchJson(
+    `${ENDPOINT}/reuse?session=${encodeURIComponent(sessionID)}&agent=${encodeURIComponent(agent)}&callId=${encodeURIComponent(callID || '')}`)
+  if (!r.ok) {
+    if (cached) {
+      const taskId = cached.pins.get(agent) || null
+      if (taskId || cached.agents.has(agent)) return { enabled: cached.agents.has(agent), taskId }
+    }
+    return null
+  }
+  const body = r.body || {}
+  const c = _cacheGet(sessionID) || { agents: new Set(), negative: new Set(), pins: new Map(), at: 0 }
+  if (body.enabled) {
+    c.agents.add(agent); c.at = Date.now()
+    c.negative && c.negative.delete(agent)
+    if (body.taskId) c.pins.set(agent, body.taskId)
+  } else if (body.reason === 'not_enabled' || body.reason === 'no_agent') {
+    c.agents.add(agent); c.negative.add(agent); c.at = Date.now()
+  } else {
+    return body
+  }
+  _cache.set(sessionID, c)
+  return body
+}
+
+async function pinByCall(sessionID, callID, taskId, agent) {
+  const body = { session: sessionID, callId: callID, taskId }
+  if (agent) body.agent = agent
+  const r = await _fetchJson(`${ENDPOINT}/pins`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) _log('pin FAILED (本次 pin 缺失，下次委派将新建；后端恢复后自愈)',
+                  `url=${ENDPOINT}/pins`, sessionID, taskId,
+                  r.status ? `http=${r.status}` : `err=${r.error || 'unknown'}`)
+  return r.ok
+}
+
+// V2 result 形状：after 事件带 result——task_id 正则与 V1 同源；拿不到时
+// 无 metadata.sessionId 兜底（V2 子会话 id 在 tool.progress 事件 metadata，
+// 不在 after result），只能靠正则或放弃本次登记（下次新建，自愈）。
+function _extractTaskId(result) {
+  const text = typeof result === 'string' ? result
+    : JSON.stringify(result || {})
+  const m = /task_id:\s*(\S+)/.exec(String(text))
+  return m ? m[1] : null
+}
+
+export default {
+  id: 'baize-subagent-reuse',
+  async setup(ctx) {
+    _log('v2 plugin loaded')
+    await ctx.tool.hook('execute.before', async (event) => {
+      try {
+        if (!event || event.tool !== 'subagent') return
+        const agent = event.agent || (event.input && event.input.agent) || ''
+        if (!agent) return
+        _rememberCallAgent(event.id || '', agent)
+        const data = await lookup(event.sessionID || '', agent, event.id || '')
+        const desc = `parent=${event.sessionID} agent=${agent} call=${(event.id || '').slice(0, 12)}`
+        if (data && data.enabled && data.taskId) {
+          const via = event.input && event.input.task_id
+                      && event.input.task_id !== data.taskId
+                      ? 'override(model-specified)' : 'injected'
+          _log(`reuse ${via}: task_id=${data.taskId} ${desc}`)
+          if (event.input) event.input.task_id = data.taskId
+          return
+        }
+        if (event.input && event.input.task_id) {
+          _log(`reuse model-specified (no platform pin): task_id=${event.input.task_id} ${desc}`)
+          return
+        }
+        _log(`reuse MISS → new session ${desc} reason=${(data && data.reason) || (data ? 'no-pin' : 'lookup-failed')}`)
+      } catch { /* 平台不可达 → 放行新建，不阻断委派 */ }
+    })
+    await ctx.tool.hook('execute.after', async (event) => {
+      try {
+        if (!event || event.tool !== 'subagent' || !event.sessionID) return
+        if (event.status && event.status !== 'completed') return
+        const taskId = _extractTaskId(event.result)
+        if (!taskId) return
+        await pinByCall(event.sessionID, event.id || '', taskId,
+                        _takeCallAgent(event.id || ''))
+      } catch { /* 登记失败不影响委派 */ }
+    })
+  },
+}
+"""
+
+
+def plugin_source_v2(endpoint: str, token: str) -> str:
+    return _PLUGIN_TEMPLATE_V2.replace('__ENDPOINT__', endpoint) \
+                              .replace('__TOKEN__', token or '')
+
+
+PLUGIN_NAME_V2 = 'baize-subagent-reuse'
+
+
+def ensure_subagent_reuse_plugin_v2(plugins_root: str, endpoint: str,
+                                    token: str = '') -> str | None:
+    """写入 <V2 plugins_root>/baize-subagent-reuse/index.js（幂等）。
+
+    plugins_root = <OPENCODE2_XDG_ROOT>/config/opencode/plugins（V2 目录
+    形态——单文件会被 V2 跳过，官方 plugins 指南）。部署后需重启 V2 serve
+    才被加载。与 V1 版双文件物理隔离：V1 模板/部署函数一行不动。"""
+    import os
+    if not plugins_root or not endpoint:
+        return None
+    try:
+        root = os.path.realpath(plugins_root)
+        pdir = os.path.realpath(os.path.join(root, PLUGIN_NAME_V2))
+        if os.path.commonpath([pdir, root]) != root:
+            raise ValueError('plugin path escapes plugins root')
+        os.makedirs(pdir, exist_ok=True)
+        path = os.path.join(pdir, 'index.js')
+        source = plugin_source_v2(endpoint, token)
+        current = Path(path).read_text(encoding='utf-8') \
+            if os.path.isfile(path) else ''
+        if current != source:
+            Path(path).write_text(source, encoding='utf-8')
+            logger.info('subagent reuse plugin (v2) installed: %s', path)
+        return path
+    except Exception as e:  # noqa: BLE001 —— 插件部署失败不阻断启动
+        logger.warning('subagent reuse plugin (v2) deploy failed: %s', e)
+        return None
 
 
 def ensure_subagent_reuse_plugin(global_dir: str, endpoint: str,

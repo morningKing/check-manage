@@ -487,6 +487,13 @@ def test_persist_subtasks_writes_rows_and_messages():
                         "session_token, token_expires_at) VALUES "
                         "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
                         (sid, uid, 'tok-' + uuid.uuid4().hex))
+            # 跨运行残留清理：本测试用固定子任务 id（ses_child_persist），
+            # 上一轮留下的行带着旧 root_session_id（upsert 不回写该列），
+            # 会毒化下面的行断言——先清两表保证断言看到本轮状态。
+            cur.execute("DELETE FROM ai_chat_subtask_messages "
+                        "WHERE subtask_id = %s", ('ses_child_persist',))
+            cur.execute("DELETE FROM ai_chat_subtasks WHERE id = %s",
+                        ('ses_child_persist',))
         conn.commit()
     try:
         s = new_state()

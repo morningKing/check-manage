@@ -35,7 +35,7 @@ def parse_profile(raw: dict | None) -> dict:
 
 class _Session:
     __slots__ = ('messages', 'pending_until', 'outcome', 'done',
-                 'hang_until', 'directory')
+                 'hang_until', 'directory', 'revert')
     def __init__(self):
         self.messages = []          # raw OpenCode 形状
         self.pending_until = None
@@ -43,6 +43,7 @@ class _Session:
         self.done = False
         self.hang_until = 0.0
         self.directory = ''
+        self.revert = None
 
 
 class StubClient:
@@ -97,6 +98,29 @@ class StubClient:
     def delete_session(self, sid: str) -> None:
         with self._lock:
             self._sessions.pop(sid, None)
+
+    # ---- 撤销/重做（undo-redo spec §2.5）：内存模拟软撤销语义。
+    # 四方法面与 OpenCodeClient 对齐（stage/clear 薄别名 + 底层 session 形），
+    # parity 守护见 test_opencode_client_undo.test_revert_surface_parity。 ----
+    def revert_session(self, sid: str, message_id: str, directory: str = '') -> dict:
+        return self.revert_stage(sid, message_id, directory=directory)
+
+    def revert_stage(self, sid: str, message_id: str, directory: str = '') -> dict:
+        with self._lock:
+            s = self._sessions[sid]
+            s.revert = {'messageID': message_id}
+            return {'id': sid, 'revert': dict(s.revert)}
+
+    def unrevert_session(self, sid: str, directory: str = '') -> None:
+        with self._lock:
+            self._sessions[sid].revert = None
+
+    def revert_clear(self, sid: str, directory: str = '') -> None:
+        self.unrevert_session(sid, directory=directory)
+
+    def get_project(self, directory: str = '') -> dict:
+        # stub 无 git 语义 → 文件能力恒 none（上下文回退仍有效）
+        return {'vcs': None, 'worktree': ''}
 
     # ---- 事件总线 ----
     def subscribe_events(self, directory: str = '', read_timeout=None):
@@ -229,7 +253,7 @@ class StubRuntime(AgentRuntime):
 
     def capabilities(self) -> dict:
         return {'kind': 'stub', 'checkpoint': False, 'pause': False,
-                'network_isolation': True}
+                'revert': True, 'network_isolation': True}
 
     def create_session(self, directory: str, title: str = '') -> str:
         return self._client.create_session(directory=directory, title=title)
@@ -248,6 +272,14 @@ class StubRuntime(AgentRuntime):
 
     def abort(self, oc_session_id: str, directory: str = '') -> None:
         self._client.abort_session(oc_session_id, directory=directory)
+
+    def revert_stage(self, oc_session_id: str, oc_message_id: str,
+                     directory: str = '') -> dict:
+        return self._client.revert_stage(oc_session_id, oc_message_id,
+                                         directory=directory)
+
+    def revert_clear(self, oc_session_id: str, directory: str = '') -> None:
+        self._client.unrevert_session(oc_session_id, directory=directory)
 
     def health(self) -> dict:
         return {'ok': True, 'kind': 'stub'}

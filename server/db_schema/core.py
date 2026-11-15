@@ -439,6 +439,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_sess_token
     ON ai_chat_sessions(session_token);
 -- 会话级权限模式：ask=弹卡 / bypass=自动放行（2026-10-31 bypass spec）
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS permission_mode VARCHAR(10) DEFAULT 'ask';
+-- 会话绑定 OC 栈（OC2 适配阶段一）：v1=OpenCode 1.x（默认） / v2=OpenCode 2.x。
+-- 全生命周期钉死创建时所在栈；路由 fail-closed 回 v1（ai.runtime.registry）。
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS oc_runtime VARCHAR(10) DEFAULT 'v1';
 
 CREATE TABLE IF NOT EXISTS ai_chat_messages (
     id          VARCHAR(100) PRIMARY KEY,
@@ -464,6 +467,38 @@ CREATE TABLE IF NOT EXISTS ai_chat_message_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_feedback_sess
     ON ai_chat_message_feedback(session_id);
+
+-- AI 会话撤销/重做（2026-11-10 undo-redo spec §2.1）
+CREATE TABLE IF NOT EXISTS ai_chat_message_stash (
+    message_id  VARCHAR(100) PRIMARY KEY,
+    session_id  VARCHAR(100) NOT NULL
+        REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    role        VARCHAR(20) NOT NULL,
+    content     JSONB NOT NULL,
+    meta        JSONB,
+    created_at  TIMESTAMPTZ NOT NULL,
+    seq         BIGINT NOT NULL,
+    rating      SMALLINT,
+    stashed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_msg_stash_session
+    ON ai_chat_message_stash(session_id, seq);
+CREATE TABLE IF NOT EXISTS ai_chat_session_reverts (
+    session_id  VARCHAR(100) PRIMARY KEY
+        REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    mode        VARCHAR(10) NOT NULL,
+    opencode_session_id VARCHAR(200) NOT NULL,
+    oc_message_id VARCHAR(200),
+    from_seq    BIGINT NOT NULL,
+    message_count INT NOT NULL,
+    file_count  INT NOT NULL DEFAULT 0,
+    file_names  JSONB,
+    prev_opencode_session_id VARCHAR(200),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS
+    context_replay_pending BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ==================== 子代理（subtask/subagent 委托）执行轨迹 ====================
 -- id 就是 OpenCode 自己的子会话 sessionID（ses... 格式），不发明并行的合成 id——

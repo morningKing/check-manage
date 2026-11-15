@@ -294,6 +294,53 @@ class OpenCodeClient:
                              json={"reply": reply}, timeout=self.timeout)
         resp.raise_for_status()
 
+    def get_project(self, directory: str = "") -> dict:
+        """GET /project/current：{'id','vcs','worktree',...}。文件撤销能力分级
+        用（vcs != 'git' 或 worktree ≠ 会话工作区 → 快照不保护文件，spec E9）。
+        非 directory-scoped 的读端点，参数仅用于 OC 解析对应 project。"""
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/project/current"), params=params,
+                            timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def revert_session(self, opencode_session_id: str, message_id: str,
+                       directory: str = "") -> dict:
+        """软撤销（undo-redo spec §2.5，v1 API；OC2 迁移点：
+        POST /api/session/:id/revert/stage {messageID}）。返回会话信息，
+        撤销态在 ['revert']（{messageID, partID, snapshot, diff}）。
+        回合运行中 → 409 SessionBusyError（requests.HTTPError，E5）。
+        不存在的 messageID → 200 且无 revert 态（E6，调用方必须校验）。"""
+        params = {"directory": directory} if directory else None
+        resp = requests.post(
+            self._url(f"/session/{opencode_session_id}/revert"),
+            params=params, json={"messageID": message_id},
+            timeout=max(self.timeout, 20))
+        resp.raise_for_status()
+        return resp.json()
+
+    def unrevert_session(self, opencode_session_id: str,
+                         directory: str = "") -> None:
+        """撤销重做（v1 API；OC2 迁移点：DELETE /api/session/:id/revert）。
+        还原文件 + 清撤销标记；无撤销态时 no-op（E4）。"""
+        params = {"directory": directory} if directory else None
+        resp = requests.post(
+            self._url(f"/session/{opencode_session_id}/unrevert"),
+            params=params, timeout=max(self.timeout, 20))
+        resp.raise_for_status()
+
+    # ---- runtime 抽象同形别名（undo-redo T7 接线缺口修复）：编排层经
+    # get_runtime().get_client() 拿到的是本类，调的是 stage/clear 形；
+    # StubClient 侧同名方法由 T3 提供。 ----
+    def revert_stage(self, opencode_session_id: str, oc_message_id: str,
+                     directory: str = "") -> dict:
+        return self.revert_session(opencode_session_id, oc_message_id,
+                                   directory=directory)
+
+    def revert_clear(self, opencode_session_id: str,
+                     directory: str = "") -> None:
+        self.unrevert_session(opencode_session_id, directory=directory)
+
     def list_mcp(self, directory: str = "") -> dict:
         """Return configured MCP servers + connection status for `directory`, e.g.
         {"check-manage": {"status": "connected"}}. The un-scoped /mcp returns {}.

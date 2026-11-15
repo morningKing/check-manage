@@ -432,7 +432,8 @@ def _rebind_module_get_db_to_real():
                      'ai.batch.engine.lifecycle', 'ai.batch.engine.worker',
                      'ai.batch.engine.runner', 'ai.batch.engine.gates',
                      'ai.batch.engine.subtasks', 'ai.batch.engine.transitions',
-                     'ai.batch.subtask_repo'):
+                     'ai.batch.subtask_repo',
+                     'ai.sessions.ai_revert'):
         try:
             mod = importlib.import_module(mod_name)
             if hasattr(mod, 'get_db'):

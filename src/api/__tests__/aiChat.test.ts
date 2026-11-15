@@ -76,6 +76,8 @@ describe('createEventStream', () => {
       // 只有切会话/刷新时的 REST 重水化才补得出来（store 单测走 _handleEvent
       // 直达，遮住了这个洞）。与 question.* 同因，故同表守护。
       'permission.asked', 'permission.replied', 'permission.rejected',
+      // 平台侧撤销/重做/提交广播帧，漏登记 → 其他标签页不收敛
+      'session.revert',
     ]))
   })
 })

@@ -21,7 +21,8 @@ import {
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
   getMessages, sendMessage, setMessageFeedback, uploadFile, uploadSkill, listFiles, getChanges,
   getMcpServices,
-  getCommands, postCommand, abortSession, deleteFromMessage, compactSession as apiCompactSession,
+  getCommands, postCommand, abortSession, undoToMessage, redoSession as apiRedoSession,
+  compactSession as apiCompactSession,
   getSubtaskMessages,
   getLspFormatter,
   getPendingQuestion, replyQuestion, rejectQuestion,
@@ -33,7 +34,7 @@ import {
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
   type LspServerStatus, type FormatterStatus,
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
-  type PermissionRequest, type SessionToolCall, type SessionTurn,
+  type PermissionRequest, type SessionToolCall, type SessionTurn, type RevertState,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
 import { latestTodosFromMessages, type TodoItem } from '@/utils/todos'
@@ -177,6 +178,10 @@ interface State {
   aborting: Record<string, boolean>
   /** P0 §12.3：会话级操作进行中标记（close/delete 等防重复触发）。 */
   sessionOpBusy: Record<string, string | null>
+  /** 撤销态（重做横幅数据源）：null = 无挂起撤销。服务端权威，本地只缓存。 */
+  revertState: Record<string, RevertState | null>
+  /** /undo 命令的输入框回填：视图 watch 后取走并置 null。 */
+  composerRefill: Record<string, string | null>
   _stream: { close(): void } | null
   /** 当前 SSE 订阅所属的会话 id(批子会话 live-poll 的让位依据) */
   streamSid: string | null
@@ -208,6 +213,8 @@ const _childSids: Record<string, Set<string>> = {}
 // 平台会话 id → { 子会话 id: agent 名 }。授权气泡要标注来源（子代理发起的
 // 询问浮到父会话 UI 时，用户得知道这条不是父级发起的）。同样不随回合清空。
 const _childAgentBySid: Record<string, Record<string, string>> = {}
+// session.revert 防抖定时器（撤销/重做/提交在爆发期会连发多帧，只重载一次）。
+const _revertReloadTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
 /** 从事件 payload 提取该事件所属的 OpenCode sessionID（与后端
  * chat_persist.event_session_id 同构：props.sessionID / part / info）。 */
@@ -283,6 +290,8 @@ export const useAiChatStore = defineStore('aiChat', {
     turnFailure: {} as Record<string, TurnFailure | null>,
     aborting: {} as Record<string, boolean>,
     sessionOpBusy: {} as Record<string, string | null>,
+    revertState: {},
+    composerRefill: {},
     _stream: null,
     streamSid: null,
   }),
@@ -561,6 +570,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.messages[id] = history.messages
       this.hasMoreMessages[id] = !!history.hasMore
       this.oldestLoadedSeq[id] = history.messages[0]?.seq ?? null
+      this.revertState[id] = (history as { revert?: RevertState | null }).revert ?? null
     },
 
     /** 把服务端最新窗口合并进内存：保留窗口之前已加载的更早历史。 */
@@ -629,6 +639,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.outputs[id] = []
       this.uploads[id] = []
       this.toolCalls[id] = []
+      this.revertState[id] = null
       this._resetStreamState(id)
     },
 
@@ -651,6 +662,8 @@ export const useAiChatStore = defineStore('aiChat', {
       this.thinking[id] = true
       this._resetStreamState(id)
       await postCommand(id, name, args)
+      // 命令提交成功 → 撤销/重做窗口关闭（与发送同一提交点语义）
+      this.revertState[id] = null
     },
 
     async abortStreaming() {
@@ -843,7 +856,8 @@ export const useAiChatStore = defineStore('aiChat', {
       if (!sid || !failure) return
       this.turnFailure[sid] = null
       if (failure.messageId) {
-        try { await deleteFromMessage(sid, failure.messageId) } catch { /* best-effort */ }
+        // 失败清理同样走 undo 核心（服务端拒绝即保留现场，不本地硬裁）
+        try { await this.undoFromMessage(sid, failure.messageId) } catch { /* best-effort */ }
         const arr = this.messages[sid] ?? []
         const idx = arr.findIndex(m => m.id === failure.messageId)
         if (idx >= 0) this.messages[sid] = arr.slice(0, idx)
@@ -867,6 +881,8 @@ export const useAiChatStore = defineStore('aiChat', {
       const known = new Set(this.subagents.map((a) => a.name))
       const agentMentions = parseAgentMentions(content, known)
       const { messageId } = await sendMessage(sid, content, paths, model, agent, agentMentions)
+      // 新回合提交成功 → 撤销/重做窗口关闭（服务端已在提交点清撤销态）
+      this.revertState[sid] = null
       // adopt the real DB id so Edit/Retry can target this row server-side
       const msg = this.messages[sid].find((m) => m.id === localId)
       if (msg && messageId) msg.id = messageId
@@ -889,14 +905,78 @@ export const useAiChatStore = defineStore('aiChat', {
         })
     },
 
-    async deleteFromMessage(id: string, msgId: string) {
-      try { await deleteFromMessage(id, msgId) } catch { /* still trim locally */ }
-      const arr = this.messages[id] ?? []
-      const idx = arr.findIndex((m) => m.id === msgId)
-      if (idx >= 0) this.messages[id] = arr.slice(0, idx)
-      this._recomputeUsage(id)  // 被删回合的 token 不再计入累计
+    /** 真撤销到某条用户消息之前（服务端权威：以响应窗口为准）。失败上抛。
+     *  响应载荷顶层即 { deleted, revert, messages }（request 拦截器已解包
+     *  axios data，与 sendMessage 的消费形态一致，无 data 包装层）。 */
+    async undoFromMessage(id: string, msgId: string) {
+      const res = await undoToMessage(id, msgId)
+      this.messages[id] = res.messages
+      // 整窗替换后同步分页游标（批次 B1，终审 M1）：撤销会搬走整段历史，
+      // hasMore/oldestLoadedSeq 必须按服务端权威窗口重算，否则 >limit 条
+      // 的会话撤销后「加载更早」游标错位
+      this.hasMoreMessages[id] = res.hasMore
+      this.oldestLoadedSeq[id] = res.messages[0]?.seq ?? null
+      this.revertState[id] = res.revert
+      this._recomputeUsage(id)
       this.streaming[id] = false
       this.thinking[id] = false
+      void this.loadChanges(id)    // 文件可能已被物理还原
+      void this.loadFiles(id)
+    },
+
+    /** 兼容名：编辑/重试/失败清理全部走 undo 核心。失败即不裁剪（旧实现
+     *  吞错照样裁——服务端拒绝时视图与 DB 分叉，undo-redo 一并修掉）。 */
+    async deleteFromMessage(id: string, msgId: string) {
+      await this.undoFromMessage(id, msgId)
+    },
+
+    async redoSession(id: string) {
+      const res = await apiRedoSession(id)
+      this.messages[id] = res.messages
+      // 重做恢复同理：stash 搬回会改变窗口两端，游标按响应重算（批次 B1）
+      this.hasMoreMessages[id] = res.hasMore
+      this.oldestLoadedSeq[id] = res.messages[0]?.seq ?? null
+      this.revertState[id] = null
+      this._recomputeUsage(id)
+      void this.loadChanges(id)
+      void this.loadFiles(id)
+    },
+
+    /** /undo：撤销最后一个用户轮，文本装回输入框（对齐 OC TUI）。 */
+    async undoLastTurn(): Promise<string | null> {
+      const sid = this.activeSessionId
+      if (!sid) return null
+      const arr = this.messages[sid] ?? []
+      for (let i = arr.length - 1; i >= 0; i--) {
+        const m = arr[i]
+        if (m.role === 'user' && !m.id.startsWith('local_')) {
+          const text = m.content.find((p) => p.type === 'text')?.text ?? ''
+          await this.undoFromMessage(sid, m.id)
+          this.composerRefill[sid] = text
+          return text
+        }
+      }
+      return null
+    },
+
+    /** 其他标签页发来的 session.revert：防抖后强一致重载。
+     *  专用路径绕过 _reloadPersisted 的「拒收变短列表」守卫——列表变短
+     *  正是撤销的正常形态（undo-redo spec §2.6）。 */
+    _applyRemoteRevert(sid: string) {
+      const t = _revertReloadTimers[sid]
+      if (t) clearTimeout(t)
+      _revertReloadTimers[sid] = setTimeout(async () => {
+        delete _revertReloadTimers[sid]
+        try {
+          const history = await getMessages(sid, { limit: 200 })
+          if (!this.streaming[sid]) {
+            this._adoptHistory(sid, history)
+            this._recomputeUsage(sid)
+            void this.loadChanges(sid)
+            void this.loadFiles(sid)
+          }
+        } catch { /* keep current */ }
+      }, 300)
     },
 
     async retryUserMessage(msgId: string) {
@@ -1104,6 +1184,8 @@ export const useAiChatStore = defineStore('aiChat', {
       // 请求立即返回；压缩 agent 的总结作为普通 assistant 回合经 SSE 流式到达，
       // 结束时 session.idle 走既有收尾（loadFiles/_reloadPersisted/_drainQueue）。
       const res = await apiCompactSession(id, model)
+      // 压缩提交成功 → 撤销/重做窗口关闭
+      this.revertState[id] = null
       this._beginTurn(id)
       return res
     },
@@ -1236,6 +1318,12 @@ export const useAiChatStore = defineStore('aiChat', {
           if (typeof data?.sessionID === 'string' && data.sessionID) {
             _ocSidBySession[sid] = data.sessionID
           }
+          break
+        }
+        case 'session.revert': {
+          // 平台侧权威变更：撤销/重做/提交（properties 含 sessionId/revert）
+          if (_isForeignEvent(sid, _eventSessionId(data))) break
+          this._applyRemoteRevert(sid)
           break
         }
         case 'message.updated': {

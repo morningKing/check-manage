@@ -54,7 +54,7 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, getBatchOfSession, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile, type SessionTurn } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, getBatchOfSession, undoPreview, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile, type SessionTurn } from '@/api/aiChat'
 import SessionOutlinePanel from '@/components/ai-chat/SessionOutlinePanel.vue'
 import { nearestUserTurnSeq, previewOfParts, lastUserTurnSeq } from '@/components/ai-chat/outlineUtils'
 import { previewKind } from '@/utils/filePreview'
@@ -1337,15 +1337,60 @@ function onApplyTemplate(t: AiChatPromptTemplate) {
   ElMessage.success('模板已插入输入框，可继续编辑后发送')
 }
 
+// ---- 撤销/重做（undo-redo spec §2.7） ----
+const revertBanner = computed(() =>
+  store.revertState[activeId.value ?? ''] ?? null)
+const bannerDismissed = ref(false)
+watch(activeId, () => { bannerDismissed.value = false })
+
+// /undo 命令把被撤文本装回输入框（store 不持有 DOM，经 composerRefill 中转）
+watch(() => store.composerRefill[activeId.value ?? ''], (t) => {
+  if (t && activeId.value) {
+    input.value = t
+    store.composerRefill[activeId.value] = null
+  }
+})
+
+async function onRedo() {
+  if (!activeId.value || streaming.value) return
+  try {
+    await store.redoSession(activeId.value)
+    ElMessage.success('已恢复被撤销的对话')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error?.message || '重做失败')
+  }
+}
+
+/** 确认文案按预览数据生成（文件能力/模式如实披露）。预览失败退化为通用文案。 */
+async function undoConfirmText(m: AiMessage): Promise<string> {
+  try {
+    const data = await undoPreview(activeId.value!, m.id)
+    const files = data.fileCapability === 'full' && data.files.length
+      ? `，并把工作区约 ${data.files.length} 个文件还原到该消息之前`
+      : '（文件不会还原）'
+    const mode = data.mode === 'native' ? '' : '（将重建会话上下文）'
+    return `将撤销该消息及之后 ${data.messageCount} 条对话${files}${mode}。` +
+      '发送新消息后将无法重做。继续？'
+  } catch {
+    return '将撤销该消息及其之后的全部对话。继续？'
+  }
+}
+
 async function editMessage(m: AiMessage) {
   const text = messageText(m)
   if (!activeId.value) return
   if (m.id.startsWith('local_')) { ElMessage.warning('消息还未保存，请稍后重试'); return }
   try {
-    await ElMessageBox.confirm('将删除该消息及其之后的全部对话，然后把文本载入输入框便于修改。继续？',
-      '编辑这条消息', { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
+    await ElMessageBox.confirm(await undoConfirmText(m), '编辑这条消息',
+      { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
   } catch { return }
-  await store.deleteFromMessage(activeId.value, m.id)
+  try {
+    await store.undoFromMessage(activeId.value, m.id)
+  } catch (e: any) {
+    // undo 失败上抛语义（T11）：服务端拒绝时不静默——提示并中止，不回填输入框
+    ElMessage.error(e?.response?.data?.error?.message || '撤销失败')
+    return
+  }
   input.value = text
 }
 
@@ -1353,7 +1398,7 @@ async function retryMessage(m: AiMessage) {
   if (!activeId.value) return
   if (m.id.startsWith('local_')) { ElMessage.warning('消息还未保存，请稍后重试'); return }
   try {
-    await ElMessageBox.confirm('将删除该消息及其之后的全部对话，然后重新发送。继续？',
+    await ElMessageBox.confirm(await undoConfirmText(m),
       '重新生成回答', { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
   } catch { return }
   try { await store.retryUserMessage(m.id) } catch { ElMessage.error('重新发送失败') }
@@ -1377,7 +1422,7 @@ async function retryAssistantMessage(m: AiMessage) {
   if (!userMsg) { ElMessage.warning('找不到对应的用户消息'); return }
   if (userMsg.id.startsWith('local_')) { ElMessage.warning('消息还未保存，请稍后重试'); return }
   try {
-    await ElMessageBox.confirm('将删除该回答及其之后的对话，然后重新生成。继续？',
+    await ElMessageBox.confirm(await undoConfirmText(userMsg),
       '重新生成回答', { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
   } catch { return }
   try { await store.retryUserMessage(userMsg.id) } catch { ElMessage.error('重新发送失败') }
@@ -1452,7 +1497,13 @@ async function send() {
   const parsed = parseCommandLine(text)
   if (parsed) {
     const fc = findFrontendCommand(parsed.name)
-    if (fc) { await fc.run(store); return }
+    if (fc) {
+      // /undo /redo 等前端命令：失败时 request 拦截器已全局 toast，
+      // 这里吞掉异常保持输入不变（与 editMessage 的显式 catch 对齐），
+      // 不放任 unhandled rejection（终审 M2）
+      try { await fc.run(store) } catch { /* 拦截器已全局 toast；/undo 失败保持输入不变 */ }
+      return
+    }
     if (store.isOpencodeCommand(sid, parsed.name)) {
       try { await store.runCommand(sid, parsed.name, parsed.args) } catch { ElMessage.error('执行失败') }
       return
@@ -2148,6 +2199,16 @@ function onKey(e: Event) {
         <CommandPalette :items="activePalette" :active-index="activeIndex" :prefix="mentionToken ? '@' : '/'" @select="acceptItem" />
         <div class="composer-inner">
           <div class="composer-card" @dragover.prevent @drop="onDrop">
+            <div v-if="revertBanner && !bannerDismissed" class="composer-revert"
+                 data-test="revert-banner">
+              <span class="composer-revert__text">已撤销 {{ revertBanner.messageCount }}
+                条消息<template v-if="revertBanner.fileCount">（还原约
+                {{ revertBanner.fileCount }} 个文件）</template>，发送新消息后不可重做</span>
+              <button class="composer-revert__btn" type="button" data-test="redo-btn"
+                      :disabled="streaming" @click="onRedo">重做</button>
+              <button class="composer-revert__close" type="button" aria-label="关闭"
+                      @click="bannerDismissed = true">✕</button>
+            </div>
             <div v-if="attachments.length" class="composer-attachments">
               <span v-for="a in attachments" :key="a.path" class="attach-chip">
                 <ElIcon v-if="isImagePath(a.path)"><Picture /></ElIcon>
@@ -2926,6 +2987,23 @@ function onKey(e: Event) {
   resize: none;
   font-size: 15px;
   line-height: 1.6;
+}
+/* 撤销重做横幅（undo-redo spec §2.7）：置顶提示 + 重做/关闭 */
+.composer-revert {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; font-size: 12px;
+  color: var(--el-text-color-secondary);
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+/* reset 浏览器按钮默认样式（T12 minor）：原生 button 自带灰底/边框，
+   横幅内联按钮需显式抹掉，仅保留文本色与布局声明 */
+.composer-revert__btn {
+  color: var(--el-color-primary);
+  background: none; border: none; cursor: pointer;
+}
+.composer-revert__close {
+  margin-left: auto; opacity: .6;
+  background: none; border: none; cursor: pointer;
 }
 .composer-attachments { margin-bottom: 4px; }
 /* bypass 自动放行 chip 行（spec 2026-10-31 §2.4） */

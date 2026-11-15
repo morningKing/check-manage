@@ -103,6 +103,10 @@ AI_BATCH_EVENT_RETENTION_DAYS = _to_int(os.getenv('AI_BATCH_EVENT_RETENTION_DAYS
 # least this many seconds, the session owner gets a notification-center entry
 # on completion (even if the tab was closed). 0 disables.
 AI_CHAT_NOTIFY_MIN_SECONDS = _to_int(os.getenv('AI_CHAT_NOTIFY_MIN_SECONDS'), 30)
+# undo/redo 文件还原的快照时效上限（天）：OC 快照对象 gc --prune=7.days，
+# 更早轮次的文件还原不可靠 → 撤销自动降级 rebuild（undo-redo spec E10）。
+AI_UNDO_FILE_SNAPSHOT_MAX_AGE_DAYS = _to_int(
+    os.getenv('AI_UNDO_FILE_SNAPSHOT_MAX_AGE_DAYS'), 7)
 # Default OpenCode model id, "<providerID>/<modelID>". Used by:
 #   - single chat: when the user picks "default" (or doesn't pick anything)
 #     in the composer's model dropdown,
@@ -129,6 +133,20 @@ OPENCODE_GLOBAL_DIR    = os.getenv('OPENCODE_GLOBAL_DIR', '').strip() or os.path
 OPENCODE_RESTART_POLICY = os.getenv('OPENCODE_RESTART_POLICY', 'manual').strip().lower()
 # Health probe window after a restart before we give up reporting failure.
 OPENCODE_RESTART_TIMEOUT_SEC = _to_int(os.getenv('OPENCODE_RESTART_TIMEOUT_SEC'), 60)
+
+# ---- OpenCode 2.x 双栈（OC2 适配阶段一）----
+# V2 serve 独立落位：独立端口 + 独立数据根，与 V1 栈并存互不感知。
+# 会话经 ai_chat_sessions.oc_runtime 绑定栈（默认 'v1'，路由 fail-closed 回 V1）。
+OPENCODE2_BASE_URL = os.getenv('OPENCODE2_BASE_URL', 'http://127.0.0.1:4196')
+# V2 全局数据根（XDG 家目录父级）：V2 没有 OPENCODE_GLOBAL_DIR，serve 启动时
+# 由 opencode_launch 展开为 XDG_CONFIG/DATA/STATE/CACHE_HOME 四件套整组钉死；
+# 只设 config 一项会让 data/state 落到用户家目录默认位置（与手工安装冲突）。
+OPENCODE2_XDG_ROOT = os.getenv('OPENCODE2_XDG_ROOT', '').strip()
+# 新会话默认落哪套栈：'v1'（默认，行为不变）| 'v2'（灰度开关入口）。
+AI_OC_RUNTIME_DEFAULT = (os.getenv('AI_OC_RUNTIME_DEFAULT', 'v1').strip().lower()
+                         or 'v1')
+if AI_OC_RUNTIME_DEFAULT not in ('v1', 'v2'):
+    AI_OC_RUNTIME_DEFAULT = 'v1'
 
 
 def get_default_chat_model() -> str:

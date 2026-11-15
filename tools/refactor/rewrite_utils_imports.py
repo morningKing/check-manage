@@ -162,6 +162,13 @@ MAPPING = {
     'runtime.base': 'ai.runtime.base',
     'runtime.opencode_local': 'ai.runtime.opencode_local',
     'runtime.stub': 'ai.runtime.stub',
+    # ---- Task 16：main OC2 双栈 + undo/redo 新增模块归位 ----
+    'ai_revert': 'ai.sessions.ai_revert',
+    'events_bridge_v2': 'ai.sessions.events_bridge_v2',
+    'session_event_bus': 'ai.sessions.session_event_bus',
+    'opencode_client_v2': 'ai.opencode.opencode_client_v2',
+    'runtime.registry': 'ai.runtime.registry',
+    'runtime.opencode_v2_local': 'ai.runtime.opencode_v2_local',
 }
 
 SCAN_FILES = ('app.py', 'proxy.py', 'init_db.py', 'auth.py')

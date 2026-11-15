@@ -95,7 +95,7 @@ def test_lease_lost_drops_without_abort(db_conn, user_id, claim_guard,
     monkeypatch.setenv('AI_BATCH_LEASE_TTL_SEC', '3')
     abort_calls = []
     monkeypatch.setattr('ai.batch.engine.runner.opencode_client', type('F', (), {
-        'create_session': staticmethod(lambda directory='', title='': 'oc-hb'),
+        'create_session': staticmethod(lambda directory='', title='', **k: 'oc-hb'),
         'send_message': staticmethod(lambda *a, **k: None),
         'list_messages': staticmethod(lambda oc, directory='': [
             {'role': 'assistant', 'finished': False, 'finish': None,
@@ -145,7 +145,7 @@ def test_heartbeat_keeps_lease_through_slow_dispatch(db_conn, user_id,
         time.sleep(slow_sec)               # dispatch 阶段阻塞 > 租约 TTL
 
     monkeypatch.setattr('ai.batch.engine.runner.opencode_client', type('F', (), {
-        'create_session': staticmethod(lambda directory='', title='': 'oc-hb'),
+        'create_session': staticmethod(lambda directory='', title='', **k: 'oc-hb'),
         'send_message': staticmethod(slow_send),
         'list_messages': staticmethod(lambda oc, directory='': finished_msg),
         'get_messages': staticmethod(lambda oc, directory='': []),

@@ -50,7 +50,13 @@ def env(monkeypatch):
             return fake_client
 
     monkeypatch.setattr(chat_persist, 'get_db', fake_get_db)
-    monkeypatch.setattr(chat_persist, 'get_runtime', lambda: _FakeRuntime())
+    # OC2 阶段二：放行走 registry.client_for_session（按会话栈路由）——
+    # 打桩点从 chat_persist.get_runtime 迁到 registry；栈 kind 默认桩回
+    # 'v1'（V1 签名分支），v2 分支用例单独覆写。
+    monkeypatch.setattr('ai.runtime.registry.client_for_session',
+                        lambda sid: fake_client)
+    monkeypatch.setattr('ai.runtime.registry.session_runtime_kind',
+                        lambda sid: state.get('kind', 'v1'))
     return {'state': state, 'client': fake_client}
 
 
@@ -93,3 +99,24 @@ def test_reply_failure_swallowed(env, monkeypatch):
     # 不抛异常即通过（fail-open：回落手动权限卡）
     chat_persist._auto_approve_if_bypass(
         'sess_x', _evt(), 'oc_parent', {'subtasks': {}}, '/ws')
+
+
+# ---------------------------------------------------------------------------
+# OC2 阶段二：v2 会话的放行走会话作用域端点（须传归属 OC 会话 id）
+# ---------------------------------------------------------------------------
+
+def test_bypass_v2_parent_ask_passes_owning_sid(env):
+    env['state']['kind'] = 'v2'
+    chat_persist._auto_approve_if_bypass(
+        'sess_x', _evt(), 'oc_parent', {'subtasks': {}}, '/ws')
+    env['client'].reply_permission.assert_called_once_with(
+        'req1', 'once', directory='/ws', oc_session_id='oc_parent')
+
+
+def test_bypass_v2_child_ask_passes_child_sid(env):
+    env['state']['kind'] = 'v2'
+    chat_persist._auto_approve_if_bypass(
+        'sess_x', _evt(oc_sid='oc_child1'), 'oc_parent',
+        {'subtasks': {'oc_child1': {}}}, '/ws')
+    env['client'].reply_permission.assert_called_once_with(
+        'req1', 'once', directory='/ws', oc_session_id='oc_child1')

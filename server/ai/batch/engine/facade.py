@@ -19,13 +19,26 @@ class _OpenCodeFacade:
     wholesale in unit tests.
     """
 
-    def _client(self):
-        # P2 §8.1 / P3-A8 Runtime Adapter 生产接线：OC 访问经 AgentRuntime
-        # 抽象的公开取客户端方法 get_client()（OpenCodeLocalRuntime 包装同一
-        # client，行为不变，AI_AGENT_RUNTIME 可切换实现）。runtime 不可用
-        # （get_runtime() 返回 None / 抛异常 / 无 get_client）时逐级回退：
-        # adapter 私有 _client → 既有直连。测试对 eng.opencode_client 的
-        # 整体替换不受影响。
+    def _client(self, oc_session_id: str = '', kind: str = ''):
+        # OC2 双栈（阶段四）：按会话绑定栈路由——查到 oc_runtime 绑定才分流
+        # （'v2' → OpenCodeClientV2 + 事件桥）；查不到绑定/异常时走原有
+        # get_runtime() 链（保持既有测试打桩点与 v1 单栈行为逐字节等价）。
+        # P2 §8.1 / P3-A8 Runtime Adapter 生产接线：runtime 不可用时逐级
+        # 回退（adapter get_client → _client → 直连），语义不变。
+        if kind:
+            try:
+                from ai.runtime import registry
+                return registry.runtime_for(kind).get_client()
+            except Exception:
+                pass
+        if oc_session_id:
+            try:
+                from ai.runtime import registry as _reg
+                _k = _reg.runtime_kind_by_oc_id(oc_session_id)
+                if _k:
+                    return _reg.runtime_for(_k).get_client()
+            except Exception:
+                pass
         try:
             from ai.runtime import get_runtime
             rt = get_runtime()
@@ -42,9 +55,14 @@ class _OpenCodeFacade:
         from config import OPENCODE_BASE_URL
         return OpenCodeClient(OPENCODE_BASE_URL)
 
-    def create_session(self, directory: str, title: str = '') -> str:
-        """Create an OpenCode session bound to `directory`; return its id."""
-        return self._client().create_session(directory=directory, title=title)
+    def create_session(self, directory: str, title: str = '',
+                       kind: str = '') -> str:
+        """Create an OpenCode session bound to `directory`; return its id.
+
+        `kind`：批子会话创建时由子会话行携带的绑定栈（oc_runtime 列）；
+        空串走原兜底链（v1 单栈行为不变）。"""
+        return self._client(kind=kind).create_session(directory=directory,
+                                                      title=title)
 
     def send_message(self, oc_session_id: str, prompt: str,
                      directory: str = '', agent: str = '', model: str = '') -> dict:
@@ -56,7 +74,7 @@ class _OpenCodeFacade:
         choice to OpenCode / the agent default).
         """
         from config import get_default_chat_model
-        self._client().send_prompt_async(
+        self._client(oc_session_id).send_prompt_async(
             oc_session_id, prompt,
             model=model or get_default_chat_model(),
             directory=directory,
@@ -89,7 +107,7 @@ class _OpenCodeFacade:
         不可达 ≠ 会话无进展——此前两者同形，网络故障会被伪装成 stalled).
         """
         try:
-            raw = self._client().get_messages(oc_session_id, directory=directory) or []
+            raw = self._client(oc_session_id).get_messages(oc_session_id, directory=directory) or []
         except requests.RequestException:
             return [{'role': 'assistant', 'finished': False, 'content': [],
                      'poll_error': 'rest'}]
@@ -177,7 +195,7 @@ class _OpenCodeFacade:
     def get_messages(self, oc_session_id: str, directory: str = '') -> list:
         """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by
         _persist_conversation to store the FULL conversation incl. tool parts."""
-        return self._client().get_messages(oc_session_id, directory=directory) or []
+        return self._client(oc_session_id).get_messages(oc_session_id, directory=directory) or []
 
     def list_agents(self, directory: str = '') -> list:
         """OpenCode agents available in `directory`'s scope (global + project),
@@ -188,7 +206,7 @@ class _OpenCodeFacade:
         """Best-effort abort of a running OpenCode session — used by the
         cooperative-cancel check in _await_finished. Same underlying call as
         routes/ai_chat.py's interactive abort endpoint."""
-        self._client().abort_session(oc_session_id, directory=directory)
+        self._client(oc_session_id).abort_session(oc_session_id, directory=directory)
 
     def list_questions(self, directory: str = '') -> list:
         """Pending QuestionRequest objects (OpenCode's interactive question
@@ -196,10 +214,24 @@ class _OpenCodeFacade:
         questions the unattended run can never get answered."""
         return self._client().list_questions(directory=directory)
 
-    def reject_question(self, request_id: str, directory: str = '') -> None:
+    def reject_question(self, request_id: str, directory: str = '',
+                        oc_session_id: str = '') -> None:
         """Reject a pending QuestionRequest: OpenCode resolves the underlying
-        tool call as rejected and the model continues without an answer."""
-        self._client().reject_question(request_id, directory=directory)
+        tool call as rejected and the model continues without an answer.
+
+        `oc_session_id`：询问归属的 OC 会话 id（V2 可选）——绑定栈为 v2 时
+        须传（V2 form cancel 端点是会话作用域）；v1 路径忽略该参数。"""
+        client = self._client(oc_session_id=oc_session_id)
+        if oc_session_id:
+            try:
+                from ai.runtime import registry
+                if registry.runtime_kind_by_oc_id(oc_session_id) == 'v2':
+                    client.reject_question(request_id, directory=directory,
+                                           oc_session_id=oc_session_id)
+                    return
+            except Exception:
+                pass
+        client.reject_question(request_id, directory=directory)
 
 
 # The module-level name that tests monkeypatch.

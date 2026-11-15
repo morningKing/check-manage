@@ -12,6 +12,13 @@ from collab import kefu_repo as kefu_repo
 from collab import kefu_event_bus as kefu_event_bus
 from common.rate_limit import RateLimiter
 from ai.opencode.opencode_client import OpenCodeClient
+
+
+def _oc_client(platform_sid: str):
+    """会话绑定栈的 OC 客户端（OC2 适配阶段二接线，与 routes/ai_chat._oc_client
+    同义：registry fail-closed v1，存量客服会话行为不变）。"""
+    from ai.runtime import registry
+    return registry.client_for_session(platform_sid)
 from ai.sessions.chat_persist import (
     ensure_listener, new_state, apply_event, persist_turn,
     event_session_id, has_listener,
@@ -251,7 +258,7 @@ def send_message(sid):
     if sess[6]:  # human_takeover：不派 AI，等人工回复（访客轮询取回复）
         return jsonify({'messageId': msg_id, 'humanTakeover': True}), 202
 
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = _oc_client(sid)
     oc_sid = sess[2]
     model = inst.get('model') or get_default_chat_model()
     agent = inst.get('agent') or ''
@@ -315,7 +322,7 @@ def events(sid):
 
     try:
         oc_sid = sess[2]
-        client = OpenCodeClient(OPENCODE_BASE_URL)
+        client = _oc_client(sid)
 
         def generate():
             logger.info('kefu sse open session=%s oc=%s', sid, oc_sid)

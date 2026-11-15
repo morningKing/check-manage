@@ -17,7 +17,9 @@ vi.mock('@/api/aiChat', () => ({
   getCommands: vi.fn().mockResolvedValue({ commands: [], skills: [] }),
   postCommand: vi.fn(),
   abortSession: vi.fn(),
-  deleteFromMessage: vi.fn(),
+  // store 已改走 undo/redo 核心（原 deleteFromMessage api 导入移除）
+  undoToMessage: vi.fn(),
+  redoSession: vi.fn(),
   createEventStream: vi.fn().mockReturnValue({ close: vi.fn() }),
   runScript: vi.fn(),
   listModels: vi.fn(),

@@ -148,7 +148,7 @@ def test_requeued_standalone_reruns_with_original_prompt(db_conn, user_id,
     worker = _worker(monkeypatch)
     sent = []
 
-    def create_session(directory='', title=''):
+    def create_session(directory='', title='', **k):
         return 'oc-recovered'
 
     def send_message(oc, prompt, directory='', agent=None, model=None, **k):
@@ -188,7 +188,7 @@ def test_fresh_standalone_claim_does_not_use_continue_mode(db_conn, user_id,
     worker = _worker(monkeypatch)
     seen = {}
 
-    def create_session(directory='', title=''):
+    def create_session(directory='', title='', **k):
         seen['directory'] = directory
         return 'oc-fresh'
 

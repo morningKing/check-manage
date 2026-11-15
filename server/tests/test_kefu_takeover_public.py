@@ -11,6 +11,8 @@ def test_send_message_takeover_skips_opencode(client):
          patch('routes.kefu_public.kefu_repo.get_instance',
                return_value={'id': 'kf_1', 'model': None, 'agent': None, 'rate_limit': {}}), \
          patch('routes.kefu_public.OpenCodeClient') as OC, \
+         patch('ai.runtime.registry.client_for_session',
+               return_value=OC.return_value), \
          patch('routes.kefu_public.ensure_listener') as EL:
         resp = client.post('/kefu/sessions/sess_1/messages',
                            json={'content': '你好'}, headers=_H)
@@ -24,6 +26,8 @@ def test_send_message_normal_calls_opencode(client):
          patch('routes.kefu_public.kefu_repo.get_instance',
                return_value={'id': 'kf_1', 'model': None, 'agent': None, 'rate_limit': {}}), \
          patch('routes.kefu_public.OpenCodeClient') as OC, \
+         patch('ai.runtime.registry.client_for_session',
+               return_value=OC.return_value), \
          patch('routes.kefu_public.ensure_listener'):
         resp = client.post('/kefu/sessions/sess_1/messages',
                            json={'content': '你好'}, headers=_H)
