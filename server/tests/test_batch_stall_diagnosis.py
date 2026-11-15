@@ -66,6 +66,9 @@ def _diag_worker(monkeypatch, list_messages, list_questions=None,
         'send_message': staticmethod(lambda *a, **k: None),
         'list_messages': staticmethod(
             lambda oc, directory='': list_messages()),
+        # OC2 双栈：无人值守循环经 _client 取底层 client——property 返回可
+        # 调用对象，调用后得到 F 自身（methods 即底层方法）
+        '_client': property(lambda self: lambda *a, **k: self),
     }
     if list_questions is not None:
         methods['list_questions'] = staticmethod(

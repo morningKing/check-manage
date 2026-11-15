@@ -121,6 +121,7 @@ def _patch_oc(monkeypatch, **methods):
     # OC2 双栈：无人值守循环新增 _client(oc_session_id=...) 取底层 client——
     # 假 facade 用 property 返回自身（methods 里的方法即底层方法）
     methods.setdefault('_client', property(lambda self: lambda *a, **k: self))
+    methods.setdefault('abort_session', staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(eng, 'opencode_client', type('F', (), methods)())
 
 
@@ -200,7 +201,8 @@ def test_provider_auth_never_retries(db_conn, user_id, claim_guard,
     _patch_oc(monkeypatch,
               create_session=staticmethod(lambda directory='', title='', **k: 'oc-auth'),
               send_message=staticmethod(lambda *a, **k: None),
-              list_messages=staticmethod(lambda oc, directory='': auth_err))
+              list_messages=staticmethod(lambda oc, directory='': auth_err),
+              abort_session=staticmethod(lambda *a, **k: None))
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
     # P0 CAS：终态写回要求 status='running'（真实 claim 后的状态）
     with db_conn.cursor() as cur:
@@ -295,7 +297,7 @@ def test_stall_retry_reason_in_prompt_event_attempt(
     worker = _stall_worker(monkeypatch)
     _patch_oc(monkeypatch,
               create_session=staticmethod(
-                  lambda directory='', title='': 'oc-stall'),
+                  lambda directory='', title='', **k: 'oc-stall'),
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(
                   lambda oc, directory='': [_idle_msg()]))
@@ -336,7 +338,7 @@ def test_turn_failed_retry_carries_provider_error(
                           'data': {'message': 'upstream 503'}}}]
     _patch_oc(monkeypatch,
               create_session=staticmethod(
-                  lambda directory='', title='': 'oc-api'),
+                  lambda directory='', title='', **k: 'oc-api'),
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(lambda oc, directory='': api_err))
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
