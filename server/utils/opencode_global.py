@@ -85,6 +85,38 @@ def global_dir() -> str:
     return config.OPENCODE_GLOBAL_DIR
 
 
+def _oc2_mirror(relpath: str, content: str | None) -> None:
+    """OC2 双写（阶段四遗留清理）：OPENCODE2_XDG_ROOT 已配置时，把全局
+    skill/agent 文件变更镜像到 V2 XDG 根（<xdg>/config/opencode/<relpath>）。
+    content None = 删除镜像（文件或目录）。best-effort：镜像失败只落日志，
+    绝不影响 V1 主路径；未配置 OC2 时零动作、零开销。"""
+    xdg = (os.environ.get('OPENCODE2_XDG_ROOT', '') or '').strip()
+    if not xdg:
+        return
+    try:
+        from pathlib import Path as _Path
+        dst_root = _Path(xdg) / 'config' / 'opencode'
+        dst = dst_root / relpath
+        resolved = os.path.realpath(str(dst))
+        if not resolved.startswith(os.path.realpath(str(dst_root)) + os.sep):
+            raise ValueError('mirror path escapes oc2 root')
+        if content is None:
+            if dst.is_dir() and not dst.is_symlink():
+                shutil.rmtree(dst)
+            elif dst.exists():
+                dst.unlink()
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(content, encoding='utf-8')
+    except Exception as e:  # noqa: BLE001
+        logger.warning('oc2 mirror %s failed: %s', relpath, e)
+
+
+def _rel_to_global(path: str) -> str:
+    return os.path.relpath(os.path.realpath(path),
+                           os.path.realpath(global_dir()))
+
+
 def skills_dir() -> str:
     """主技能目录（OpenCode 官方文档的 skill/，单数）。新建技能落在这里。"""
     return os.path.join(global_dir(), 'skill')
@@ -361,6 +393,7 @@ def write_skill(name: str, description: str | None = None, body: str | None = No
     if os.path.isfile(md) and _read_text(md) == content:
         return {'name': name, 'changed': False}
     _atomic_write(md, content)
+    _oc2_mirror(_rel_to_global(md), content)   # OC2 双写（best-effort）
     return {'name': name, 'changed': True}
 
 
@@ -369,7 +402,9 @@ def delete_skill(name: str) -> None:
     d = find_skill_dir(name)
     if not d:
         raise OpenCodeGlobalError('NOT_FOUND', f'全局 skill「{name}」不存在', 404)
+    rel = _rel_to_global(d)
     shutil.rmtree(d)
+    _oc2_mirror(rel, None)   # OC2 双写镜像删除
 
 
 def install_skill_zip_bytes(data: bytes, zip_filename: str,
@@ -656,6 +691,13 @@ def write_agent(name: str, fields: dict | None = None,
         if fields is None:
             raise OpenCodeGlobalError('BAD_REQUEST', '缺少 fields 或 content')
         meta = _agent_frontmatter(name, fields)
+        # OC2 告警：agent 级 temperature/top_p 在 OpenCode 2.x 被忽略
+        # （request.body 不再发给模型）——采样参数要走 model variant。
+        # V1 行为不变；此处仅留痕提醒该配置在 v2 会话上静默失效。
+        if any(k in (meta or {}) for k in ('temperature', 'top_p')):
+            logger.warning(
+                'agent %s 配置了 temperature/top_p——OC2 (v2) 会话上该参数'
+                '无效（官方移除 agent 级采样；需走 model variant）', name)
         content = serialize_frontmatter(meta, body or '')
     _check_content_size(content)
     _check_dir_size(agents_dir(), extra_bytes=len(content.encode('utf-8')))
@@ -664,6 +706,7 @@ def write_agent(name: str, fields: dict | None = None,
     if os.path.isfile(md) and _read_text(md) == content:
         return {'name': name, 'changed': False}
     _atomic_write(md, content)
+    _oc2_mirror(_rel_to_global(md), content)   # OC2 双写（best-effort）
     return {'name': name, 'changed': True}
 
 
@@ -715,6 +758,7 @@ def delete_agent(name: str) -> None:
     if not os.path.isfile(md):
         raise OpenCodeGlobalError('NOT_FOUND', f'全局 agent「{name}」不存在', 404)
     os.remove(md)
+    _oc2_mirror(_rel_to_global(md), None)   # OC2 双写镜像删除
 
 
 def set_agent_disabled(name: str, disabled: bool) -> dict:
@@ -738,6 +782,7 @@ def set_agent_disabled(name: str, disabled: bool) -> dict:
             content = serialize_frontmatter(
                 {'name': name, 'description': f'禁用 {name}', 'disable': True}, '')
             _atomic_write(md, content)
+        _oc2_mirror(_rel_to_global(md), _read_text(md))   # OC2 双写
         return {'name': name, 'disable': True}
     if not os.path.isfile(md):
         raise OpenCodeGlobalError('NOT_FOUND', f'全局 agent「{name}」没有禁用文件', 404)
@@ -748,6 +793,8 @@ def set_agent_disabled(name: str, disabled: bool) -> dict:
     else:
         meta.pop('disable', None)
         _atomic_write(md, serialize_frontmatter(meta, body))
+    _oc2_mirror(_rel_to_global(md),
+                _read_text(md) if os.path.isfile(md) else None)   # OC2 双写
     return {'name': name, 'disable': False}
 
 

@@ -26,6 +26,10 @@ def test_create_kefu_session_inserts_row_with_visitor(mock_conn, mock_cursor):
          patch('utils.kefu_repo.write_opencode_config'), \
          patch('utils.kefu_repo.generate_token', return_value='tok123'), \
          patch('utils.kefu_repo.OpenCodeClient') as OC, \
+         patch('utils.runtime.registry.default_kind', return_value='v1'), \
+         patch('utils.runtime.registry.runtime_for',
+               return_value=MagicMock(
+                   get_client=lambda: OC.return_value)), \
          patch('utils.kefu_repo._inject_system_prompt') as inj:
         OC.return_value.create_session.return_value = 'oc_sid_1'
         out = repo.create_kefu_session(instance, 'visitor-abc')
@@ -53,6 +57,10 @@ def test_create_kefu_session_injects_guardrail(mock_conn, mock_cursor):
          patch('utils.kefu_repo.write_opencode_config'), \
          patch('utils.kefu_repo.generate_token', return_value='tok456'), \
          patch('utils.kefu_repo.OpenCodeClient') as OC, \
+         patch('utils.runtime.registry.default_kind', return_value='v1'), \
+         patch('utils.runtime.registry.runtime_for',
+               return_value=MagicMock(
+                   get_client=lambda: OC.return_value)), \
          patch('utils.kefu_repo._inject_system_prompt') as inj:
         OC.return_value.create_session.return_value = 'oc_sid_2'
         out = repo.create_kefu_session(instance, 'visitor-xyz')
@@ -73,6 +81,10 @@ def test_create_kefu_session_calls_ensure_bot_user(mock_conn, mock_cursor):
          patch('utils.kefu_repo.write_opencode_config'), \
          patch('utils.kefu_repo.generate_token', return_value='tok_spot'), \
          patch('utils.kefu_repo.OpenCodeClient') as OC, \
+         patch('utils.runtime.registry.default_kind', return_value='v1'), \
+         patch('utils.runtime.registry.runtime_for',
+               return_value=MagicMock(
+                   get_client=lambda: OC.return_value)), \
          patch('utils.kefu_repo._inject_system_prompt'), \
          patch('utils.kefu_repo.ensure_bot_user') as mock_ensure:
         OC.return_value.create_session.return_value = 'oc_spot'

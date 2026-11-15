@@ -60,6 +60,17 @@ def setup(mock_conn, mock_cursor, tmp_path):
         patch('routes.ai_chat.OpenCodeClient', return_value=fake_client),
         patch('routes.ai_chat.get_runtime',
               lambda: _RuntimeStub(fake_client)),
+        # OC2 阶段二：客户端经 registry 按会话栈路由（fail-closed v1——mock db
+        # 查询结果亦兜到 v1），打桩点从 routes.ai_chat 两缝迁到 registry；
+        # 旧 patch 保留（导入名仍在，无害）。
+        patch('utils.runtime.registry.client_for_session',
+              lambda sid: fake_client),
+        patch('utils.runtime.registry.client_for_oc_id',
+              lambda oc_sid: fake_client),
+        patch('utils.runtime.registry.client_for_default',
+              lambda: fake_client),
+        patch('utils.runtime.registry.runtime_for',
+              lambda kind: _RuntimeStub(fake_client)),
         # 撤销/重做编排器（utils/ai_revert）持有独立的 get_db/get_runtime
         # 引用（模块顶层 from-import），必须单独打补丁才能与路由共用同一
         # 套 mock 连接与 fake_client
@@ -1851,3 +1862,58 @@ def test_messages_response_carries_revert_state(setup):
     resp = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
     assert resp.status_code == 200
     assert resp.get_json()['revert']['ocMessageId'] == 'msg_o3'
+
+
+# ---------------------------------------------------------------------------
+# OC2 适配阶段二接线：create 即钉栈（oc_runtime 列）
+# ---------------------------------------------------------------------------
+
+def test_create_session_stamps_oc_runtime_v1_default(setup):
+    """默认灰度开关（'v1'）下新建会话落列 'v1'——存量行为不变。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    resp = client.post('/ai/chat/sessions', json={}, headers=dev_h)
+    assert resp.status_code == 201
+    stamps = [(c.args[0], c.args[1] if len(c.args) > 1 else ())
+              for c in cursor.execute.call_args_list
+              if 'oc_runtime' in (c.args[0] if c.args else '')]
+    assert stamps, 'INSERT 必须显式写 oc_runtime 列'
+    assert any('v1' in [str(p) for p in params] for _, params in stamps)
+
+
+def test_create_session_stamps_oc_runtime_v2_when_configured(setup):
+    """灰度开关翻到 'v2'：新会话落列 'v2'，且 create 打到 v2 栈 client
+    （fixture 已把 registry.runtime_for 钉到 _RuntimeStub——这里换回
+    client_v2 实例以证明栈选择生效）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    from utils.opencode_client_v2 import OpenCodeClientV2
+    v2_client = OpenCodeClientV2('http://127.0.0.1:4196')
+    # create_session 打成实例桩（真方法会打到隔离 V2 实例——这里只验栈选择）
+    v2_client.create_session = MagicMock(return_value='oc_v2_smoke')
+    with patch('utils.runtime.registry.default_kind', return_value='v2'), \
+            patch('utils.runtime.registry.runtime_for',
+                  return_value=MagicMock(get_client=lambda: v2_client)):
+        resp = client.post('/ai/chat/sessions', json={}, headers=dev_h)
+    assert resp.status_code == 201
+    stamps = [(c.args[0], c.args[1] if len(c.args) > 1 else ())
+              for c in cursor.execute.call_args_list
+              if 'oc_runtime' in (c.args[0] if c.args else '')]
+    assert stamps, 'INSERT 必须显式写 oc_runtime 列'
+    assert any('v2' in [str(p) for p in params] for _, params in stamps)
+    v2_client.create_session.assert_called_once()
+
+
+def test_registry_routes_v2_session_to_client_v2():
+    """会话栈→client 类联动：'v2' 返回 client_v2，'v1' 返回 V1 client。
+    （不用 setup fixture——它把 registry.runtime_for 钉到了桩，本例要真
+    registry 的栈→实例路由。）"""
+    from utils.runtime import registry
+    from utils.opencode_client import OpenCodeClient
+    from utils.opencode_client_v2 import OpenCodeClientV2
+    # fail-closed 语义细节在 test_runtime_registry 已全覆盖；此处验证
+    # registry 的栈→实例路由函数与 runtime 注册表的联动。
+    with patch('utils.runtime.registry.session_runtime_kind',
+               return_value='v2'):
+        assert isinstance(registry.client_for_session('s'), OpenCodeClientV2)
+    with patch('utils.runtime.registry.session_runtime_kind',
+               return_value='v1'):
+        assert isinstance(registry.client_for_session('s'), OpenCodeClient)

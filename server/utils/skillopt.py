@@ -25,6 +25,7 @@ import logging
 import secrets
 
 from db import get_db
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -508,6 +509,276 @@ def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '',
         return path
     except Exception as e:
         logger.warning('ensure_runtime_plugin failed: %s', e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# V2 版（OC2 适配阶段四）：与 V1 baize-trace 同逻辑，V2 插件 API + V2 事件
+# 语义。采集映射：V1 message.part.updated(tool='skill') → V2
+# session.skill.activated（data {sessionID, id, name, text}，源码实锤）；
+# V1 session.idle → V2 session.execution.succeeded（桥同款映射）。门禁
+# pre-check throw 阻断 V2 同样生效；post-check append_result → V2 改
+# event.result（多形态容错——result 真机形状 TEST-ME，待后端栈联调验证
+# 注入路径）。上报 body 形状与 V1 完全一致（后端零改动）。
+# 部署：V2 目录形态（plugins_root/<name>/index.js），与 V1 文件物理隔离。
+# ---------------------------------------------------------------------------
+_PLUGIN_JS_V2 = r"""// Baize runtime trace plugin — V2 (OpenCode 2.x plugin API).
+// 与 V1 版（baize-trace.js）逻辑等价：SkillOpt 采集（skill 激活/会话收口）
+// + 动作门禁 pre-check（deny throw）+ checkpoint after（post-check 注入）。
+// 上报 body 形状与 V1 完全一致——后端零改动。
+const ENDPOINT = process.env.BAIZE_RUNTIME_EVENT_URL || '__ENDPOINT__'
+const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
+const GATE_URL = process.env.BAIZE_GATE_PRECHECK_URL || '__GATE_ENDPOINT__'
+const GATE_POST_URL = process.env.BAIZE_GATE_POSTCHECK_URL || '__GATE_POSTCHECK__'
+const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN }
+const _ts = () => new Date().toISOString()
+const ARG_VALUE_MAX = 1000
+const ARGS_MAX = 4000
+const _clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…(+${s.length - n})` : s)
+const _flat = (v) => String(v).replace(/\r?\n/g, '\\n')
+const _err = (e) => {
+  if (!e) return 'unknown'
+  const code = e.code || (e.cause && (e.cause.code || e.cause.message)) || ''
+  const msg = e.message || String(e)
+  return code ? `${msg} (${code})` : msg
+}
+const _argsSummary = (args) => {
+  try {
+    if (args == null) return ''
+    if (typeof args === 'string') return _clip(_flat(args), ARGS_MAX)
+    return _clip(Object.keys(args).map((k) => {
+      const v = args[k]
+      const s = typeof v === 'string'
+        ? v
+        : (JSON.stringify(v) === undefined ? String(v) : JSON.stringify(v))
+      return `${k}=${_clip(_flat(s), ARG_VALUE_MAX)}`
+    }).join(' '), ARGS_MAX)
+  } catch { return '' }
+}
+{
+  const _envTok = process.env.BAIZE_INTERNAL_TOKEN
+  const _tokStr = String(TOKEN)
+  const _fp = _tokStr ? `${_tokStr.slice(0, 6)}…len=${_tokStr.length}` : '(empty)'
+  console.error(`[baize-trace] ${_ts()} gate token source=${_envTok ? 'env' : 'file'} fingerprint=${_fp}`)
+}
+const GATE_TIMEOUT_MS = 3000
+const _gateEmpty = new Map()
+const GATE_EMPTY_TTL_MS = 30000
+const _gatePostEmpty = new Map()
+
+async function report(body) {
+  if (!ENDPOINT) return
+  try {
+    await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-internal-token': TOKEN },
+      body: JSON.stringify(body),
+    })
+  } catch { /* 上报失败不影响执行 */ }
+}
+
+function gateArgsText(args) {
+  try {
+    if (args == null) return ''
+    if (typeof args === 'string') return args
+    if (typeof args === 'object') {
+      return Object.keys(args).map(k => {
+        const v = args[k]
+        if (typeof v === 'string') return `${k}=${v}`
+        try { return `${k}=${JSON.stringify(v)}` } catch { return `${k}=${String(v)}` }
+      }).join('\\n')
+    }
+    return JSON.stringify(args)
+  } catch { return String(args) }
+}
+
+async function gatePreCheck(sessionID, tool, argsText) {
+  const emptyAt = _gateEmpty.get(sessionID)
+  if (emptyAt) {
+    if (Date.now() - emptyAt <= GATE_EMPTY_TTL_MS) return { allow: true }
+    _gateEmpty.delete(sessionID)
+  }
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), GATE_TIMEOUT_MS)
+  try {
+    const res = await fetch(GATE_URL, {
+      method: 'POST',
+      headers: HEADERS,
+      signal: ctrl.signal,
+      body: JSON.stringify({ sessionId: sessionID, tool, argsText }),
+    })
+    if (!res.ok) {
+      console.error(`[baize-trace] ${_ts()} gate pre-check http ${res.status} → allow ` +
+        `url=${GATE_URL} tool=${tool}`)
+      return { allow: true }
+    }
+    const body = await res.json()
+    if (body && body.rules === 0) _gateEmpty.set(sessionID, Date.now())
+    return body || { allow: true }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function gatePostCheck(sessionID, tool, argsText) {
+  const emptyAt = _gatePostEmpty.get(sessionID)
+  if (emptyAt) {
+    if (Date.now() - emptyAt <= GATE_EMPTY_TTL_MS) return { inject: false }
+    _gatePostEmpty.delete(sessionID)
+  }
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), GATE_TIMEOUT_MS)
+  try {
+    const res = await fetch(GATE_POST_URL, {
+      method: 'POST',
+      headers: HEADERS,
+      signal: ctrl.signal,
+      body: JSON.stringify({ sessionId: sessionID, tool, argsText }),
+    })
+    if (!res.ok) {
+      console.error(`[baize-trace] ${_ts()} gate post-check http ${res.status} → skip ` +
+        `url=${GATE_POST_URL} tool=${tool}`)
+      return { inject: false }
+    }
+    const body = await res.json()
+    if (body && body.rules === 0) _gatePostEmpty.set(sessionID, Date.now())
+    return body || { inject: false }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// checkpoint after 注入（V2 result 多形态容错，TEST-ME：注入路径待后端栈
+// 联调验证）：string 直接拼；content 数组 push text 项；其余 JSON 兜底。
+function _appendResult(result, prompt) {
+  if (typeof result === 'string') return result + '\n\n' + prompt
+  if (result && Array.isArray(result.content)) {
+    result.content.push({ type: 'text', text: '\n\n' + prompt })
+    return result
+  }
+  if (result && typeof result === 'object') {
+    return { ...result, _gateHint: (result._gateHint || '') + '\n\n' + prompt }
+  }
+  return { text: '\n\n' + prompt }
+}
+
+export default {
+  id: 'baize-trace',
+  async setup(ctx) {
+    const ctrl = new AbortController()
+    void (async () => {
+      try {
+        for await (const ev of ctx.event.subscribe({ signal: ctrl.signal })) {
+          try {
+            const type = ev.type || ''
+            const data = ev.data || {}
+            if (type === 'session.skill.activated') {
+              // V2 载荷真机源码实锤：{sessionID, id, name, text}
+              await report({
+                kind: 'skill',
+                skillName: data.id || data.name || '',
+                sessionID: data.sessionID || '',
+                messageID: '',
+                partID: '',
+                status: 'loaded',
+                title: data.name || '',
+              })
+              continue
+            }
+            if (type === 'session.execution.succeeded') {
+              await report({ kind: 'session.idle',
+                             sessionID: data.sessionID || '' })
+              continue
+            }
+            if (type === 'session.execution.failed') {
+              await report({ kind: 'session.error',
+                             sessionID: data.sessionID || '',
+                             error: data.error || null })
+              continue
+            }
+          } catch { /* 单事件处理失败不影响订阅 */ }
+        }
+      } catch { /* 事件流结束（插件卸载） */ }
+    })()
+    await ctx.tool.hook('execute.before', async (event) => {
+      try {
+        if (!GATE_URL || !event || !event.tool || !event.sessionID) return
+        let body = null
+        try {
+          body = await gatePreCheck(event.sessionID, event.tool,
+                                    gateArgsText(event.input))
+        } catch (e) {
+          console.error(`[baize-trace] ${_ts()} gate pre-check unreachable → allow ` +
+            `url=${GATE_URL || '(empty)'} tool=${event.tool}: ${_err(e)}`)
+          return
+        }
+        if (body && body.allow === false) {
+          const reason = body.reason || `门禁拦截了工具 ${event.tool} 的调用`
+          console.error(`[baize-trace] ${_ts()} gate DENY tool=${event.tool} ` +
+            `session=${event.sessionID} args=[${_argsSummary(event.input)}]: ` +
+            `${_clip(_flat(reason), 500)}`)
+          throw new Error(reason)   // 抛错即阻断（V2 与 V1 同语义）
+        }
+      } catch (e) {
+        if (e && e.message && String(e.message).indexOf('门禁') >= 0) throw e
+        console.error(`[baize-trace] ${_ts()} gate pre-check error → allow: ${_err(e)}`)
+      }
+    })
+    await ctx.tool.hook('execute.after', async (event) => {
+      try {
+        if (!GATE_POST_URL || !event || !event.tool || !event.sessionID) return
+        const body = await gatePostCheck(event.sessionID, event.tool,
+                                         gateArgsText(event.input))
+        if (body && body.inject && body.prompt) {
+          event.result = _appendResult(event.result, body.prompt)
+        }
+      } catch (e) {
+        console.error(`[baize-trace] ${_ts()} gate post-check unreachable → skip ` +
+          `url=${GATE_POST_URL || '(empty)'} tool=${event && event.tool}: ${_err(e)}`)
+      }
+    })
+    return () => ctrl.abort()   // 插件卸载：停订阅流
+  },
+}
+"""
+
+
+def plugin_js_v2(endpoint: str, token: str = '', gate_endpoint: str = '',
+                 gate_post_endpoint: str = '') -> str:
+    return (_PLUGIN_JS_V2
+            .replace('__ENDPOINT__', endpoint or '')
+            .replace('__TOKEN__', token or '')
+            .replace('__GATE_ENDPOINT__', gate_endpoint or '')
+            .replace('__GATE_POSTCHECK__', gate_post_endpoint or ''))
+
+
+RUNTIME_PLUGIN_NAME_V2 = 'baize-trace'
+
+
+def ensure_runtime_plugin_v2(plugins_root: str, endpoint: str, token: str = '',
+                             gate_endpoint: str = '',
+                             gate_post_endpoint: str = '') -> str | None:
+    """写入 <V2 plugins_root>/baize-trace/index.js（幂等）。V2 目录形态部署，
+    与 V1 文件物理隔离；部署后需重启 V2 serve。上报 body 与 V1 同形状
+    （后端零改动）。"""
+    import os
+    if not plugins_root:
+        return None
+    try:
+        root = os.path.realpath(plugins_root)
+        pdir = os.path.realpath(os.path.join(root, RUNTIME_PLUGIN_NAME_V2))
+        if os.path.commonpath([pdir, root]) != root:
+            raise ValueError('plugin path escapes plugins root')
+        os.makedirs(pdir, exist_ok=True)
+        path = os.path.join(pdir, 'index.js')
+        js = plugin_js_v2(endpoint, token, gate_endpoint, gate_post_endpoint)
+        current = Path(path).read_text(encoding='utf-8') \
+            if os.path.exists(path) else ''
+        if current != js:
+            Path(path).write_text(js, encoding='utf-8')
+        return path
+    except Exception as e:
+        logger.warning('ensure_runtime_plugin (v2) failed: %s', e)
         return None
 
 

@@ -16,6 +16,15 @@ import requests
 from db import get_db
 from utils.runtime import get_runtime
 
+
+def _client_for(sid: str):
+    """会话绑定栈的 OC 客户端（OC2 适配阶段二）：撤销/重做打在会话自己的
+    栈上——registry fail-closed v1，存量会话行为不变（ai_revert 的单测
+    打桩点相应从 get_runtime 迁到 registry.client_for_session）。"""
+    from utils.runtime import registry
+    return registry.client_for_session(sid)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -316,7 +325,7 @@ def _finalize_plan(client, plan: dict, workspace_path: str, oc_messages) -> dict
 def preview_undo(sid: str, msg_id: str) -> dict:
     """撤销预览（只读，1 次 OC get_messages + 1 次 get_project）。"""
     ctx = _load_undo_context_or_raise(sid, msg_id)
-    client = get_runtime().get_client()
+    client = _client_for(sid)
     oc_messages = _fetch_oc_messages(client, ctx['oc_sid'], ctx['workspace_path'])
     plan = resolve_undo_target(ctx['rows'], ctx['target_seq'], oc_messages)
     plan = _finalize_plan(client, plan, ctx['workspace_path'], oc_messages)
@@ -466,7 +475,7 @@ def undo_from_message(sid: str, msg_id: str) -> dict:
         raise UndoError('SESSION_BUSY', '回合进行中，请先停止当前回复再撤销',
                         operation='undo')
     ctx = _load_undo_context_or_raise(sid, msg_id)
-    client = get_runtime().get_client()
+    client = _client_for(sid)
     oc_messages = _fetch_oc_messages(client, ctx['oc_sid'], ctx['workspace_path'])
     plan = resolve_undo_target(ctx['rows'], ctx['target_seq'], oc_messages)
     plan = _finalize_plan(client, plan, ctx['workspace_path'], oc_messages)
@@ -517,7 +526,7 @@ def redo(sid: str) -> dict:
     switch_back_prev = state['prevOpencodeSessionId'] \
         if state['mode'] == 'rebuild' and state.get('prevOpencodeSessionId') \
         else None
-    client = get_runtime().get_client()
+    client = _client_for(sid)
     try:
         with get_db() as conn:
             conn.cursor().execute(

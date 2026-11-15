@@ -225,7 +225,8 @@ try:
     # 子代理会话复用插件（tool.execute.before 强制注入 task_id）：与 SkillOpt
     # 插件同目录部署；OC serve 启动时加载——部署后需重启 serve 生效。
     try:
-        from utils.subagent_reuse_plugin import ensure_subagent_reuse_plugin
+        from utils.subagent_reuse_plugin import (ensure_subagent_reuse_plugin,
+                                                 ensure_subagent_reuse_plugin_v2)
         _sru_ep = f'http://127.0.0.1:{_FPORT}/ai/subagent-internal'
         ensure_subagent_reuse_plugin(_OGD, _sru_ep,
                                      _os.getenv('MCP_INTERNAL_TOKEN', ''))
@@ -245,12 +246,55 @@ try:
     # serve 启动时加载——部署后需重启 serve 生效。
     try:
         from utils.tool_timeout_plugin import (ensure_tool_timeout_plugin,
+                                               ensure_tool_timeout_plugin_v2,
                                                DEFAULT_EXEMPT, DEFAULT_TIMEOUT_MS)
         _tt_ms = int(_os.getenv('OPENCODE_TOOL_TIMEOUT_MS', '') or DEFAULT_TIMEOUT_MS)
         _tt_exempt = (_os.getenv('OPENCODE_TOOL_TIMEOUT_EXEMPT', '') or DEFAULT_EXEMPT)
         ensure_tool_timeout_plugin(_OGD, _tt_ms, _tt_exempt)
     except Exception as e4:
         logging.warning('tool timeout plugin deploy failed: %s', e4)
+
+    # OC2 启动自检护栏：灰度翻 v2 但 V2 serve 缺位/误指 → 启动即失败
+    # （报错早于任何 v2 会话创建，杜绝运行时拒连窗口）。默认 'v1' 下本段
+    # 零触发——纯 V1 部署不受影响。
+    _oc2_xdg = (_os.getenv('OPENCODE2_XDG_ROOT', '') or '').strip()
+    if _oc2_xdg:
+        from utils.opencode_launch import oc2_xdg_root
+        _v2_plugins_root = os.path.join(oc2_xdg_root(), 'config',
+                                        'opencode', 'plugins')
+        try:
+            from utils.skillopt import ensure_runtime_plugin_v2
+            ensure_runtime_plugin_v2(
+                _v2_plugins_root,
+                f'http://127.0.0.1:{_FPORT}/ai/memory/internal/runtime-events',
+                _os.getenv('MCP_INTERNAL_TOKEN', ''),
+                f'http://127.0.0.1:{_FPORT}/ai/gate/internal/pre-check',
+                f'http://127.0.0.1:{_FPORT}/ai/gate/internal/post-check')
+        except Exception as e6:
+            logging.warning('baize-trace plugin (v2) deploy failed: %s', e6)
+        try:
+            from utils.subagent_reuse_plugin import ensure_subagent_reuse_plugin_v2
+            ensure_subagent_reuse_plugin_v2(
+                _v2_plugins_root,
+                f'http://127.0.0.1:{_FPORT}/ai/subagent-internal',
+                _os.getenv('MCP_INTERNAL_TOKEN', ''))
+        except Exception as e7:
+            logging.warning('subagent reuse plugin (v2) deploy failed: %s', e7)
+        try:
+            from utils.tool_timeout_plugin import ensure_tool_timeout_plugin_v2
+            ensure_tool_timeout_plugin_v2(
+                _v2_plugins_root, _tt_ms, _tt_exempt)
+        except Exception as e8:
+            logging.warning('tool timeout plugin (v2) deploy failed: %s', e8)
+    if (_os.getenv('AI_OC_RUNTIME_DEFAULT', '') or '').strip().lower() == 'v2':
+        from utils.opencode_launch import oc2_serve_health
+        _oc2h = oc2_serve_health()
+        if not _oc2h.get('ok'):
+            raise RuntimeError(
+                'AI_OC_RUNTIME_DEFAULT=v2 但 V2 serve 不可用: %s'
+                '（启动阻止——先拉起 V2 serve（utils.opencode_launch.'
+                'spawn_oc2_serve）或将 AI_OC_RUNTIME_DEFAULT 回退 v1）'
+                % _oc2h.get('error'))
 
     def _audit_retention_daily():
         try:
@@ -702,6 +746,19 @@ try:
     _m_mf.run()
 except Exception as _e:
     logging.warning('message feedback migration on boot failed: %s', _e)
+
+# 会话绑定 OC 栈列（OC2 适配阶段一）。幂等加列；新迁移必须在此显式注册
+# （init_db 自动扫描只覆盖全新库，见护栏测试）。
+try:
+    import importlib.util as _ilu_ocrt
+    _mp_ocrt = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'migrations', '2026_11_11_session_oc_runtime.py')
+    _spec_ocrt = _ilu_ocrt.spec_from_file_location('_session_oc_runtime_boot', _mp_ocrt)
+    _m_ocrt = _ilu_ocrt.module_from_spec(_spec_ocrt)
+    _spec_ocrt.loader.exec_module(_m_ocrt)
+    _m_ocrt.run()
+except Exception as _e:
+    logging.warning('session oc_runtime migration on boot failed: %s', _e)
 
 # 会话级权限模式列（2026-10-31 bypass spec §2.1）。幂等加列；新迁移必须在此
 # 显式注册（init_db 自动扫描只覆盖全新库，见护栏测试）。

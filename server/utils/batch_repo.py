@@ -347,6 +347,9 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     """
     # 门禁策略引用（spec §8.2）：存在且 enabled 才放行；路由层有同款预检，
     # 这里兜底（开放 API/定时扫描等直达 create_batch 的路径同样拦住）。
+    # OC2 双栈（阶段四）：整批子会话钉同一栈（灰度开关，默认 'v1' 行为不变）
+    from utils.runtime.registry import default_kind as _oc2_default_kind
+    _oc_kind = _oc2_default_kind()
     if gate_policy_id:
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -393,11 +396,12 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                 cur.execute(
                     "INSERT INTO ai_chat_sessions "
                     "  (id, user_id, status, batch_id, batch_seq, batch_input_file, "
-                    "   scan_task_id, source_record_id, model) "
-                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s, %s) RETURNING *",
+                    "   scan_task_id, source_record_id, model, oc_runtime) "
+                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                     (sid, user_id, batch_id, seq, f['path'],
                      scan_task_id, f.get('recordId'),
-                     effective_models[seq % len(effective_models)] if effective_models else None),
+                     effective_models[seq % len(effective_models)] if effective_models else None,
+                     _oc_kind),
                 )
                 sessions.append(dict(cur.fetchone()))
         conn.commit()
@@ -769,6 +773,9 @@ def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
     """
     if not files:
         raise ValueError("at least one file required")
+    # OC2 双栈：append 子会话沿用创建时的灰度开关（与 create_batch 同口径）
+    from utils.runtime.registry import default_kind as _oc2_default_kind
+    _oc_kind = _oc2_default_kind()
     sql = "SELECT total FROM ai_chat_batches WHERE id=%s AND user_id=%s"
     params = [batch_id, user_id]
     if api_key_id is not None:
@@ -807,10 +814,11 @@ def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
                 seq = start + i
                 cur.execute(
                     "INSERT INTO ai_chat_sessions "
-                    "  (id, user_id, status, batch_id, batch_seq, batch_input_file, model) "
-                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s) RETURNING *",
+                    "  (id, user_id, status, batch_id, batch_seq, batch_input_file, model, oc_runtime) "
+                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s) RETURNING *",
                     (sid, user_id, batch_id, seq, f['path'],
-                     bmodels[seq % len(bmodels)] if bmodels else None),
+                     bmodels[seq % len(bmodels)] if bmodels else None,
+                     _oc_kind),
                 )
                 sessions.append(dict(cur.fetchone()))
             cur.execute("UPDATE ai_chat_batches SET total = total + %s WHERE id=%s",

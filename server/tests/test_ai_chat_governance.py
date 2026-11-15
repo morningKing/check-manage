@@ -131,7 +131,7 @@ def test_clear_session_resets_messages_workspace_and_opencode():
     oc_client.create_session.return_value = 'oc_new'
     with patch.object(ac, 'get_db', fake), \
          patch.object(ac, 'stop_listener') as stop, \
-         patch.object(ac, 'OpenCodeClient', return_value=oc_client), \
+         patch.object(ac, '_oc_client', lambda sid: oc_client), \
          patch.object(ac, 'cleanup_session_workspace') as cleanup, \
          patch.object(ac, 'create_session_workspace', return_value='/ws') as recreate, \
          patch.object(ac, 'write_opencode_config'), \
@@ -162,7 +162,7 @@ def test_clear_session_deletes_subtasks():
     oc_client.create_session.return_value = 'oc_new'
     with patch.object(ac, 'get_db', fake), \
          patch.object(ac, 'stop_listener'), \
-         patch.object(ac, 'OpenCodeClient', return_value=oc_client), \
+         patch.object(ac, '_oc_client', lambda sid: oc_client), \
          patch.object(ac, 'cleanup_session_workspace'), \
          patch.object(ac, 'create_session_workspace', return_value='/ws'), \
          patch.object(ac, 'write_opencode_config'), \
