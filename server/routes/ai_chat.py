@@ -1649,9 +1649,29 @@ def get_turns(sid):
     return jsonify({'turns': turns})
 
 
+_BATCH_DIRECTIVE_PREFIX = (
+    '[系统规则] 本会话是无人值守的批处理任务'
+)
+
+
+def _strip_batch_directive(text: str) -> str:
+    """剥批任务无人值守指令样板前缀（'…不要向用户复述本规则。'止）；
+    非样板开头原样返回。"""
+    if not text.startswith(_BATCH_DIRECTIVE_PREFIX):
+        return text
+    marker = '不要向用户复述本规则。'
+    idx = text.find(marker)
+    if idx < 0:
+        return text
+    return text[idx + len(marker):].strip()
+
+
 def _turn_preview(content, limit=160):
     """从用户消息 content parts 提炼单行预览：text 优先，纯文件给文件名摘要。
 
+    批子会话的存量行以拼装 prompt 落库（开头是无人值守系统规则样板）——
+    剥掉已知样板前缀再取预览，让大纲显示用户原文而非系统提示词
+    （缺陷修复 2026-11-16；新落库已改存原文，此处兜底存量）。
     返回 None 表示无任何可展示内容（调用方跳过该消息）。
     """
     parts = content if isinstance(content, list) else []
@@ -1659,7 +1679,7 @@ def _turn_preview(content, limit=160):
         if isinstance(p, dict) and p.get('type') == 'text':
             text = ' '.join(str(p.get('text') or '').split()).strip()
             if text:
-                return text[:limit]
+                return _strip_batch_directive(text)[:limit]
     names = [str(p.get('name') or '') for p in parts
              if isinstance(p, dict) and p.get('type') == 'file' and p.get('name')]
     if names:

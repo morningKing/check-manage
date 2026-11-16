@@ -1582,12 +1582,20 @@ class BatchWorker:
             prompt = self._with_input_hint(prompt, session_row)
             turn_label = prompt[:80]
             user_prompt_for_memory = prompt
+            # 用户原文（大纲/接管页聊天流落库口径）：hint 是派发期组装物，
+            # 不属于"用户说的话"——落库与记忆检索都用原文。
+            user_prompt_plain = prompt
             from utils.memory import search_memory, render_memory_block
             mem_block = render_memory_block(search_memory(user_id, prompt, limit=5))
             # 无人值守指令只进发给模型的 prompt（最前、最显眼的位置）：记忆检索
             # 与存档仍围绕用户原文 —— 指令是每条子任务都一样的样板，混进长期
             # 记忆是噪音。
             prompt = _BATCH_DIRECTIVE + mem_block + prompt
+        # 落库口径（缺陷修复 2026-11-16）：此前落的是拼装后的完整 prompt，
+        # 开头是无人值守系统规则样板——会话大纲/接管页全显示系统提示词，
+        # 用户原文被挤掉。continue 轮的 continue_prompt 本就是原文。
+        user_prompt_for_thread = user_prompt_plain if not is_continue \
+            else prompt
 
         # 子代理会话复用（引导层）：派发前注入 per-agent task_id 指令——
         # 新建与 continue 轮次都要带（continue 轮的委派同样必须续跑）。
@@ -1714,8 +1722,10 @@ class BatchWorker:
             _boot_mark('audit')
 
             # Persist the prompt up front so opening this child mid-run shows the
-            # question immediately.
-            self._persist_user_prompt(sid, prompt, generation=generation)
+            # question immediately.（落用户原文——系统规则/记忆块/文件提示是
+            # 派发期组装物，不该在大纲与接管页冒充用户输入）
+            self._persist_user_prompt(sid, user_prompt_for_thread,
+                                      generation=generation)
             _boot_mark('user_persist')   # ← 此刻系统提示词已可在页面上看到
             # continue 模式先拍基线：旧 assistant 消息（上一轮完成/中断的）在
             # 新回合产生首条消息之前仍是"最新一条"，不跳过的话 _await_finished
