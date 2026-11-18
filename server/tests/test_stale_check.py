@@ -78,6 +78,52 @@ def test_platform_child_cmd_patterns():
     assert not stale_check._platform_child_cmd('')
 
 
+def test_parent_alive_semantics():
+    """父存活判定（PID 复用感知）：真父必然不晚于子出生；父 pid 被更年轻
+    进程复用 = 真父已死判孤儿；created 缺失（POSIX/快照降级）保守按父存活。"""
+    procs = {
+        100: {'cmd': '', 'parent': 0, 'created': 900.0},
+        101: {'cmd': '', 'parent': 100, 'created': 1000.0},
+        200: {'cmd': '', 'parent': 0, 'created': 5000.0},
+        201: {'cmd': '', 'parent': 200, 'created': 1000.0},
+    }
+    # 子自身不在快照 / 无父 → 判父已死（走孤儿分支）
+    assert stale_check.parent_alive(102, procs) is False
+    # 真父存活
+    assert stale_check.parent_alive(101, procs) is True
+    # 父 pid 被更年轻进程顶名 = 真父已死（2026-11 生产误判的实锤形态）
+    assert stale_check.parent_alive(201, procs) is False
+    # created 缺失 → 保守按父存活（宁少勿误杀）
+    procs[300] = {'cmd': '', 'parent': 100, 'created': None}
+    assert stale_check.parent_alive(300, procs) is True
+    # +2s 容差：父比子早 1s 出生仍是真父
+    procs[400] = {'cmd': '', 'parent': 401, 'created': 1000.0}
+    procs[401] = {'cmd': '', 'parent': 0, 'created': 999.0}
+    assert stale_check.parent_alive(400, procs) is True
+    # 父比子晚 3.5s 出生 = 复用
+    procs[500] = {'cmd': '', 'parent': 501, 'created': 1000.0}
+    procs[501] = {'cmd': '', 'parent': 0, 'created': 1003.5}
+    assert stale_check.parent_alive(500, procs) is False
+
+
+def test_collect_flags_platform_orphan_with_reused_parent(monkeypatch):
+    """collect 的「上一轮遗留平台子进程」接入 PID 复用感知：父 pid 被年轻
+    无关进程顶名的 waitress 残留也要被标出（旧口径 `parent in procs` 恒真
+    → 恒漏报）。"""
+    procs = {
+        555: {'cmd': 'F:\\py\\python.exe -c '
+                     '"import app; from waitress import serve"',
+              'parent': 777, 'created': 1000.0},
+        777: {'cmd': 'chrome.exe --unrelated', 'parent': 0, 'created': 5000.0},
+    }
+    monkeypatch.setattr(stale_check, 'snapshot_processes', lambda: dict(procs))
+    monkeypatch.setattr(stale_check, 'serve_listener_pids', lambda port: [])
+
+    r = stale_check.collect(verbose=False)
+
+    assert {o['pid'] for o in r['platformOrphans']} == {555}
+
+
 def test_normalize_wmic_text_strips_leading_blank():
     """wmic 输出以 \\r\\r\\n 开头——不剥掉会让 CSV 首行空串当表头（键全 None）。"""
     t = stale_check._normalize_wmic_text('\r\r\nNode,A\r\r\nX,1\r\r\n')

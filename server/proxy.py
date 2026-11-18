@@ -84,6 +84,16 @@ SE_LOG = os.path.join(os.path.dirname(__file__), 'proxy-se.log')
 # ~13s 生效——管理员关插件不需要亚秒级，别把 DB 查询频率打太高）。
 SE_RECONCILE_INTERVAL_S = 10.0
 
+# SE 端口被无法清掉的进程占据时的降级开关（2026-11 生产卡启动修复）：置位后
+# 本轮不再拉起 SE（省一次注定 EADDRINUSE 的 spawn）、WS 隧道拒连（不把流量
+# 交给 1234 上的陌生进程），reconcile 每轮探测端口、释放即自动解除并恢复
+# 拉起——平台其余功能照常，只牺牲智能写作（该角色既定的降级语义）。
+_SE_BLOCK = {'blocked': False, 'reason': ''}
+# 快死退避：拉起后这么短时间就退出（典型 EADDRINUSE 崩溃）→ 退避一段时间再
+# 试，防 reconcile 每 10s 一次 spawn-crash 刷屏。
+SE_QUICK_DEATH_S = 10.0
+SE_CRASH_BACKOFF_S = 60.0
+
 
 def se_plugin_enabled() -> bool:
     """智能写作插件开关（隧道门与进程停启共用）。直查库（经 plugin_registry
@@ -390,6 +400,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             msg = b'{"error":{"code":"PLUGIN_DISABLED","plugin":"smart-writing"}}'
             print(f'  [WS] 隧道拒连 {self.path.split("?", 1)[0]}'
                   f'（smart-writing 插件已禁用）', flush=True)
+            self.send_response(403)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', len(msg))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
+        if _SE_BLOCK['blocked']:
+            # 启动时 SE 端口上有清不掉的进程（prestart_cleanup 置位）：拒连，
+            # 不把隧道交给 1234 上那个陌生进程。reconcile 线程探测到端口释放
+            # 会解除降级并拉起 SE，届时隧道自然恢复，无需重启 proxy。
+            msg = b'{"error":{"code":"SE_UNAVAILABLE","note":"ws port blocked; smart-writing degraded"}}'
+            print(f'  [WS] 隧道拒连 {self.path.split("?", 1)[0]}'
+                  f'（SE 端口被占，智能写作降级中）', flush=True)
             self.send_response(403)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', len(msg))
@@ -732,42 +755,73 @@ def wait_for_se(timeout=15):
     return False
 
 
+def _se_reconcile_once(se_state, procs, now=None):
+    """suggest-editor reconcile 单轮决策（从 _se_reconcile_loop 抽出，可单测）：
+    降级探测/解除 → 按插件开关与进程存活拉起/停止。
+
+    se_state 是主循环与本线程共享的可变容器：'proc'（Popen | None）外新增
+    'last_start'（本轮成功拉起时刻）与 'retry_after'（退避到期时刻），替代
+    旧版闭包局部变量。procs 只追加不摘除（见 loop docstring）。
+
+    降级中（_SE_BLOCK，prestart_cleanup 置位）：每轮探测 SE 端口，仍被占就
+    本轮不动；释放即解除降级并当轮照常决策——清不掉的进程消失后智能写作
+    自动恢复，无需重启 proxy。"""
+    if now is None:
+        now = time.time()
+    if _SE_BLOCK['blocked']:
+        if serve_listener_pids(SE_WS_PORT):
+            return   # 还占着，下轮再看
+        _SE_BLOCK['blocked'] = False
+        print(f'[SE] 端口 {SE_WS_PORT} 已释放 → 解除智能写作降级', flush=True)
+    proc = se_state.get('proc')
+    running = proc is not None and proc.poll() is None
+    action = _se_process_action(se_plugin_enabled(), running)
+    if action == 'start':
+        if now < se_state.get('retry_after', 0.0):
+            return
+        # 上一次拉起后很快退出（端口被占的 EADDRINUSE 是典型）→ 退避一轮，
+        # 防 spawn-crash 每 10s 一次无限刷屏。退避到期后照常重试。
+        if (proc is not None and se_state.get('last_start')
+                and now - se_state['last_start'] < SE_QUICK_DEATH_S):
+            se_state['retry_after'] = now + SE_CRASH_BACKOFF_S
+            print(f'[SE] suggest-editor 启动后 {SE_QUICK_DEATH_S:.0f}s 内退出'
+                  f' → 退避 {SE_CRASH_BACKOFF_S:.0f}s 再重试', flush=True)
+            return
+        new_proc = start_se()   # 依赖缺失时它自己会打 WARN
+        if new_proc is not None:
+            se_state['proc'] = new_proc
+            se_state['last_start'] = now
+            se_state.pop('retry_after', None)
+            procs.append(new_proc)
+            print(f'[SE] 插件已启用 → 拉起 suggest-editor '
+                  f'(pid {new_proc.pid})', flush=True)
+        else:
+            se_state['retry_after'] = now + SE_CRASH_BACKOFF_S
+    elif action == 'stop':
+        try:
+            _kill_tree(proc)   # terminate 的树杀形态（POSIX 即 terminate）
+            proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001 —— 已死/杀失败都不阻塞置 None
+            pass
+        se_state['proc'] = None
+        print('[SE] 插件已禁用 → 停止 suggest-editor', flush=True)
+
+
 def _se_reconcile_loop(se_state, procs, interval=SE_RECONCILE_INTERVAL_S):
     """suggest-editor 进程 reconcile 守护线程（daemon）：每 interval 秒按
-    插件开关与进程存活状态拉起/停止 se——决策走 _se_process_action（纯函数，
-    可单测），开关变更因此**无需重启 proxy**。
+    插件开关与进程存活状态拉起/停止 se——决策在 _se_reconcile_once（可单测），
+    开关变更因此**无需重启 proxy**。
 
-    se_state 是主循环与本线程共享的可变容器（{'proc': Popen | None}）。
     procs 只追加不摘除：shutdown 路径按 poll() 跳过已退出的进程，死进程
     留在表里无害，也免去跨线程的列表摘除。
 
     fail-open：循环里任何异常只记日志、绝不退出——这个线程一死，开关变更
-    就再也无人执行。拉起失败（依赖缺失）设 60s 退避，防 10s 一条 WARN 刷屏。
+    就再也无人执行。拉起失败（依赖缺失）或快死（见 SE_QUICK_DEATH_S）均设
+    60s 退避，防 10s 一条刷屏。
     """
-    retry_after = 0.0
     while True:
         try:
-            proc = se_state.get('proc')
-            running = proc is not None and proc.poll() is None
-            action = _se_process_action(se_plugin_enabled(), running)
-            if action == 'start' and time.time() >= retry_after:
-                new_proc = start_se()   # 依赖缺失时它自己会打 WARN
-                if new_proc is not None:
-                    se_state['proc'] = new_proc
-                    procs.append(new_proc)
-                    retry_after = 0.0
-                    print(f'[SE] 插件已启用 → 拉起 suggest-editor '
-                          f'(pid {new_proc.pid})', flush=True)
-                else:
-                    retry_after = time.time() + 60.0
-            elif action == 'stop':
-                try:
-                    _kill_tree(proc)   # terminate 的树杀形态（POSIX 即 terminate）
-                    proc.wait(timeout=5)
-                except Exception:  # noqa: BLE001 —— 已死/杀失败都不阻塞置 None
-                    pass
-                se_state['proc'] = None
-                print('[SE] 插件已禁用 → 停止 suggest-editor', flush=True)
+            _se_reconcile_once(se_state, procs)
         except Exception as e:  # noqa: BLE001 —— fail-open：任何异常不停轮
             print(f'[SE] reconcile 异常（忽略，下一轮重试）：{e}', flush=True)
         time.sleep(interval)
@@ -893,9 +947,15 @@ def prestart_cleanup():
          不会在②被误判成"父存活的陌生进程"。非 proxy.py 的陌生占用 → 不杀，
          报错退出（换端口/手动释放）。
       ② BACKEND_URL / MCP / SE 端口上**父进程已死**的监听者 → 树杀（孤儿
-         形态，命令行认不出也杀——这些端口本来就是本进程要占的）。
-         **父还活着**的身份不明监听者 → 不杀，报错退出：继续启动就是让新
-         backend bind 失败、流量被陌生进程接走，等于把要防的事故再演一遍。
+         形态，命令行认不出也杀——这些端口本来就是本进程要占的）；taskkill
+         失败可见并重试一次，仍失败按角色分流（见下）。**父还活着**的判定
+         走 _stale_check.parent_alive（感知 Windows PID 复用——真父退出后
+         pid 被无关进程顶了名不算父存活，2026-11 生产实锤这种误判把残留 SE
+         拦成「身份不明进程」、启动被拒每次卡同一处）。判定父存活时：
+         BACKEND_URL / MCP（关键端口，bind 失败=流量被接走）→ 不杀，报错
+         退出；智能写作(SE) 是可降级角色 → 置 _SE_BLOCK 降级放行，端口释放
+         后 reconcile 自动恢复。孤儿树杀仍失败的关键端口同样报错退出——
+         静默放行等于把「启动成功实为旧代码」再演一遍。
          FLASK_PORT（dev 后端，与 BACKEND_URL 不同端口时）不碰——那是另一条
          开发栈的端口；OC serve 永不碰（可达即复用是既有契约，别人的不归
          本进程管）。
@@ -903,14 +963,17 @@ def prestart_cleanup():
          → 树杀（历史强杀遗留、无端口可循，无条件清）。
 
     清理模块缺失（部署包不含 scripts/）→ 打 WARN 跳过，绝不阻断启动。
+
+    返回 {'se_block_reason': str | None}——SE 端口被占降级的原因（同时已
+    置 _SE_BLOCK）；其余路径不影响返回值。
     """
     if os.environ.get('PROXY_AUTOCLEAN', '1').strip() == '0':
         print('[0/5] 残留清理已关闭（PROXY_AUTOCLEAN=0），跳过', flush=True)
-        return
+        return {'se_block_reason': None}
     if _stale_check is None or _stack_stop is None:
         print('[0/5] 残留清理：scripts/ 快照模块不可用，跳过（不阻断启动）',
               flush=True)
-        return
+        return {'se_block_reason': None}
     print('[0/5] 清理上一轮残留进程…', flush=True)
     backend_port = _backend_port()
     mcp_port = urlparse(MCP_HEALTH_URL).port or 3003
@@ -931,9 +994,14 @@ def prestart_cleanup():
             sys.exit(1)
     time.sleep(1.0)   # 树杀后端口释放/子进程随之退场，下一轮快照才反映得出
 
-    # ② 所需端口：父已死 → 杀孤儿；父存活且身份不明 → 拦下启动
+    # ② 所需端口：父已死 → 杀孤儿（失败重试一次，仍失败按角色分流）；
+    # 父存活且身份不明 → 关键端口拦下启动，SE 降级放行。父存活判定走
+    # parent_alive（PID 复用感知）：真父退出后 pid 被无关进程复用时不再误判
+    # 成「陌生进程」——2026-11 生产实锤，残留 SE 因此被 sys.exit 拦得每次
+    # 重启都卡在同一处。
     procs = _stale_check.snapshot_processes()
-    foreign = []
+    foreign = []          # 关键端口（backend/MCP）：陌生占用/杀不掉 → 拒启
+    se_block = None       # SE 端口同类占用 → 降级放行（智能写作不可用）
     for name, port in (('BACKEND_URL', backend_port), ('MCP', mcp_port),
                        ('智能写作(SE)', SE_WS_PORT)):
         if port in (PROXY_PORT, oc_port):   # 端口配置串角色也绝不越界杀 proxy/OC
@@ -941,22 +1009,59 @@ def prestart_cleanup():
         for pid in serve_listener_pids(port):
             if pid == os.getpid():
                 continue
-            parent = (procs.get(pid) or {}).get('parent') or 0
-            if parent and parent in procs:
-                cmd = (procs.get(pid) or {}).get('cmd') \
-                    or _stale_check._cmdline_one(pid)
-                foreign.append((name, port, pid, cmd))
+            cmd = (procs.get(pid) or {}).get('cmd') \
+                or _stale_check._cmdline_one(pid)
+            if _stale_check.parent_alive(pid, procs):
+                # 宁少勿误杀：父真活着的不碰。关键端口继续启动等于让新子进程
+                # bind 失败、流量被陌生进程接走（405 事故形态）→ 拒启；SE 是
+                # 可降级角色（「失败只降级写作功能」）→ 只牺牲智能写作。
+                if port == SE_WS_PORT:
+                    se_block = (f':{port} 被父进程存活的进程占用 pid={pid}：'
+                                f'{(cmd or "?")[:120]}')
+                else:
+                    foreign.append((name, port, pid, (cmd or '?')[:120],
+                                    'stranger'))
                 continue
             print(f'       清理孤儿残留 pid={pid} :{port}'
                   f'（{name}，父进程已退出）', flush=True)
-            _stack_stop._kill_tree(pid, procs)
+            ok, err = _stack_stop._kill_tree(pid, procs)
+            if not ok:
+                # 杀失败不再静默（旧实现忽略返回值——taskkill 拒绝访问时端口
+                # 继续被占：SE 场景智能写作悄悄坏掉，backend 场景演变成
+                # 「启动成功实为旧代码」的 405 事故）。
+                print(f'       [WARN] taskkill pid={pid} 失败：{err or "未知原因"}'
+                      f'；2s 后重试一次', flush=True)
+                time.sleep(2.0)
+                ok, err = _stack_stop._kill_tree(pid, procs)
+            if not ok and serve_listener_pids(port):
+                if port == SE_WS_PORT:
+                    se_block = (f':{port} 残留 pid={pid} 清理失败'
+                                f'（taskkill：{err or "未知原因"}）且端口仍被占')
+                else:
+                    foreign.append((name, port, pid,
+                                    err or '未知原因', 'unkillable'))
+    if se_block:
+        _SE_BLOCK['blocked'] = True
+        _SE_BLOCK['reason'] = se_block
+        print(f'[WARN] 智能写作降级：{se_block}', flush=True)
+        print('        平台照常启动，仅智能写作暂不可用。人工清理（管理员 '
+              'shell）：taskkill /F /T /PID <占用pid>；端口释放后 reconcile '
+              '线程自动恢复拉起，无需重启。', flush=True)
     if foreign:
-        for name, port, pid, cmd in foreign:
-            print(f'[ERROR] :{port}（{name}）被父进程存活的身份不明进程占用 '
-                  f'pid={pid}：{(cmd or "?")[:120]}', flush=True)
-            print(f'        新拉起的子进程会 bind 失败、流量可能被它接走'
-                  f'（405 事故形态）。请确认后手动释放'
-                  f'（taskkill /F /PID {pid}）再重启。', flush=True)
+        for name, port, pid, desc, kind in foreign:
+            if kind == 'stranger':
+                print(f'[ERROR] :{port}（{name}）被父进程存活的身份不明进程占用 '
+                      f'pid={pid}：{desc}', flush=True)
+                print('        新拉起的子进程会 bind 失败、流量可能被它接走'
+                      '（405 事故形态）。请确认后手动释放'
+                      f'（taskkill /F /PID {pid}；拒绝访问时用管理员 shell）'
+                      '再重启。', flush=True)
+            else:
+                print(f'[ERROR] :{port}（{name}）残留 pid={pid} 清理失败且端口'
+                      f'仍被占：{desc}', flush=True)
+                print('        新拉起的子进程会 bind 失败、探测会命中旧进程'
+                      '（「启动成功实为旧代码」的 405 事故形态）。请用管理员 '
+                      f'shell 手动 taskkill /F /T /PID {pid} 后重启。', flush=True)
         sys.exit(1)
 
     # ③ 孤儿 multiprocessing 子进程
@@ -972,6 +1077,7 @@ def prestart_cleanup():
     if n:
         print(f'       清理孤儿 multiprocessing 子进程 {n} 个', flush=True)
     print('       残留清理完成', flush=True)
+    return {'se_block_reason': se_block}
 
 
 def main():
@@ -1049,10 +1155,16 @@ def main():
                   f'see {OPENCODE_LOG}', flush=True)
 
     # 智能写作（suggest-editor）Node 服务：Yjs 协作 WebSocket。失败只降级写作功能。
-    # 插件禁用时启动即不拉起（reconcile 线程待开关打开后自动补启）。
+    # 插件禁用时启动即不拉起（reconcile 线程待开关打开后自动补启）；SE 端口
+    # 被清不掉的进程占据时同样不拉起（prestart_cleanup 已置 _SE_BLOCK 并打
+    # 印原因——硬 spawn 只会 EADDRINUSE 崩溃；端口释放后 reconcile 自动补启）。
     print('[4/5] Starting suggest-editor (Yjs collaboration) ...', flush=True)
     se_state = {'proc': None}   # 主循环与 reconcile 线程共享的 se 进程容器
-    if se_plugin_enabled():
+    if _SE_BLOCK['blocked']:
+        se_proc = None
+        print('       智能写作降级中（SE 端口被占）：suggest-editor 本轮不启动，'
+              '端口释放后自动恢复', flush=True)
+    elif se_plugin_enabled():
         se_proc = start_se()
         se_state['proc'] = se_proc
     else:

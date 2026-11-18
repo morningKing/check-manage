@@ -261,6 +261,28 @@ def _platform_child_cmd(cmd: str) -> bool:
     return any(p in c for p in _ORPHAN_CMD_PATTERNS)
 
 
+def parent_alive(pid: int, procs: dict) -> bool:
+    """pid 的父进程是否**真的**还活着（感知 Windows PID 复用）。
+
+    快照里父 pid 存在 ≠ 真父还活着：真父退出后 pid 被无关进程复用时，
+    `parent in procs` 恒真——2026-11 生产实锤，残留 SE 因此被误判成
+    「父存活的身份不明进程」，启动被拒（sys.exit）每次重启卡同一处。
+    Windows 快照带 CreationDate：真父必然不晚于子出生，父比子年轻 = 该
+    pid 已易主 → 判父已死。任一侧 created 缺失（POSIX /proc 无此信息、
+    或快照降级）→ 保守按父存活（宁少勿误杀的既有口径）。"""
+    info = procs.get(pid) or {}
+    parent = info.get('parent') or 0
+    if not parent:
+        return False
+    pinfo = procs.get(parent)
+    if not pinfo:
+        return False
+    created, pcreated = info.get('created'), pinfo.get('created')
+    if created is None or pcreated is None:
+        return True
+    return pcreated <= created + 2   # +2s 时钟/取数容差
+
+
 def _kill_hint(pids: list[int]) -> str:
     if sys.platform == 'win32':
         return ' ; '.join(f'taskkill /F /PID {p}' for p in pids)
@@ -422,7 +444,9 @@ def collect(*, verbose: bool = True) -> dict:
                 or pid in platform_listener_pids):
             continue
         parent = info['parent']
-        if parent and parent not in procs:
+        # 父不在快照 = 父已死；父在快照但比子年轻 = pid 被复用，真父同样已死
+        # （parent_alive 统一口径，见其 docstring 的生产误判案例）。
+        if parent and not parent_alive(pid, procs):
             platform_orphans.append({'pid': pid, 'parent': parent,
                                      'cmd': info['cmd'][:120]})
     if platform_orphans:
