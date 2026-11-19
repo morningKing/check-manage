@@ -12,7 +12,7 @@
 | 职责 | 文件 | 前缀 | 端点数 | 鉴权 |
 | --- | --- | --- | --- | --- |
 | 数据面：公开集合 CRUD/批量/文件 | `server/routes/open_api.py`（782 行） | `/v1` | 11 | `api_key_required` |
-| AI 批任务全家桶 | `server/routes/open_api_batches.py`（1257 行） | `/v1/ai-batches` | 28 | `api_key_required`+`require_bound_key` |
+| AI 批任务全家桶 | `server/routes/open_api_batches.py`（1290+ 行） | `/v1/ai-batches` | 30 | `api_key_required`+`require_bound_key` |
 | AI 单会话（不拆子任务） | `server/routes/open_api_ai_sessions.py`（121 行） | `/v1/ai-sessions` | 3 | 同上 |
 | 编排对外契约 | `server/routes/open_api_orchestrations.py`（128 行） | `/v1/ai-orchestrations` | 5 | 仅 `api_key_required`（观测，见 §7-7） |
 | 行操作触发 | `server/routes/open_api_row_actions.py`（106 行） | `/v1/collections` | 1 | `api_key_required`+`require_bound_key` |
@@ -28,7 +28,7 @@
 ### 2.1 后端
 
 - `server/routes/open_api.py`（782 行）——蓝图 `open_api`，前缀 `/v1`（`:14`），注册 `app.py:99`。数据面 11 端点（§5.1）。安全边界三件套：`check_collection_public :61-69`（`page_configs.api_public`）、`check_collection_writable :95-103`（公开 + `api_writable` 双闸）、`file_in_public_collection :34-44`（文件仅当被某个公开集合的记录引用才可见）。分支模型：`get_request_branch_id :84-92` 校验 `branchId` 参数（默认 `config.OPEN_API_BRANCH`，`config.py:75`，默认 `'main'`；非默认分支须为 `project_versions` 中 `status='active'`，`validate_branch_id :72-81`）。
-- `server/routes/open_api_batches.py`（1257 行）——蓝图 `open_api_batches`，前缀 `/v1/ai-batches`（`:39-40`），注册 `app.py:100`。28 端点（§5.2）。蓝图级 `before_request` `_guard_request_body_size :49-81` 按 Content-Length 在 Werkzeug 解析 body 之前卡超大请求；常量 `:43-46`：单文件 20MB、暂存 TTL 24h、`MAX_PROMPT_CHARS=20000`、`TERMINAL_STATUSES=('completed','partial','failed')`。暂存安全：`_validate_staged_path :95-112`（路径必须落在 `batch-staging/<本人userId>/` 下、禁绝对路径与 `..`）、`_sweep_stale_staging :115-144`（上传时顺带清 TTL 过期暂存）、`_validate_files :193-215`（创建/追加/单会话三处共用的形状+归属+存在性校验）。出参白名单 `_batch_out :218-251`（`callbackSecret` 刻意不回显，`:221-222`）。
+- `server/routes/open_api_batches.py`（1290+ 行）——蓝图 `open_api_batches`，前缀 `/v1/ai-batches`（`:39-40`），注册 `app.py:100`。28 端点（§5.2）。蓝图级 `before_request` `_guard_request_body_size :49-81` 按 Content-Length 在 Werkzeug 解析 body 之前卡超大请求；常量 `:43-46`：单文件 20MB、暂存 TTL 24h、`MAX_PROMPT_CHARS=20000`、`TERMINAL_STATUSES=('completed','partial','failed')`。暂存安全：`_validate_staged_path :95-112`（路径必须落在 `batch-staging/<本人userId>/` 下、禁绝对路径与 `..`）、`_sweep_stale_staging :115-144`（上传时顺带清 TTL 过期暂存）、`_validate_files :193-215`（创建/追加/单会话三处共用的形状+归属+存在性校验）。出参白名单 `_batch_out :218-251`（`callbackSecret` 刻意不回显，`:221-222`）。
 - `server/routes/open_api_ai_sessions.py`（121 行）——蓝图 `open_api_ai_sessions`，前缀 `/v1/ai-sessions`（`:28-29`），注册 `app.py:106`。3 端点（§5.3）：创建/查状态/cancel。复用批任务的 `MAX_PROMPT_CHARS` 与 `_validate_files`（`import` 于 `:21`，一处实现两处调用）与 `/v1/ai-batches/uploads` 上传端点（文件落在哪个用户的暂存目录下才是校验边界，模块头 `:12-16`）；底层 `server/utils/ai_session_repo.py`（124 行）：`create_session :18-50`（prompt 暂存 `continue_prompt` 列 + `api_key_id` + `input_files` JSONB）、`get_session_for_owner :53-74`（user_id+api_key_id **双重归属校验**）、`cancel_session :95-124`。
 - `server/routes/open_api_orchestrations.py`（128 行）——蓝图 `open_api_orchestrations`，前缀 `/v1/ai-orchestrations`（`:18-19`），注册 `app.py:105`。5 端点（§5.4）：definitions 只读两端点 + runs 三端点。`create_run` 以密钥 owner 身份发起（`requested_by_kind='api_key'`，`:82-84`），创建后 `get_worker().notify()` 唤醒批 worker（`:87-91`）；归属隔离：`run.requested_by != 密钥 owner` 一律 404 不泄漏存在性（`:103-104,115-116`）。引擎侧（run 创建冻结/step 展开/推进）归分册 04。
 - `server/routes/open_api_row_actions.py`（106 行）——蓝图 `open_api_row_actions`，前缀 `/v1/collections`（`:25-26`），注册 `app.py:101`。1 端点（§5.5）。独立成文件的理由：直接透传 `row_action_engine.RowActionError.message`（中文），与 open-api.md 的全英文 error 惯例冲突（模块头 `:1-13`）。行操作上下文 `_load_row_action_context :35-51` 独立一份而不跨路由文件 import（改生产路由的风险高于复制十来行 SQL，`:36-38`）。
@@ -185,6 +185,8 @@ HMAC 口径（`webhook_engine.py`）：`_compute_signature :393-405` 对 `${time
 | 26 | POST `/<batch_id>/commands` | `submit_command` `:1122` | 命令平面：`Idempotency-Key` 必填；pause/resume/cancel/retry/force_stop |
 | 27 | GET `/<id>/commands/<command_id>` | `get_command` `:1208` | 命令状态轮询 |
 | 28 | GET `/<batch_id>/events` | `events` `:1223` | afterSeq 增量 + `CURSOR_EXPIRED` 410（§4.5） |
+| 29 | POST `/<id>/sessions/<cid>/takeover-link` | `issue_takeover_link` | 签发对外接管令牌：可选 ttlHours / **mode**（`full` 默认｜`readonly` 只读——发送/中断 403，仅查看）；响应 {token, path, mode, expiresAt}（2026-11-19 只读模式） |
+| 30 | POST `/<id>/sessions/<cid>/takeover-link/revoke` | `revoke_takeover_link` | 吊销令牌（三元组全匹配） |
 
 子会话定位 `_resolve_child :680-699` 三级尝试：纯数字→batch_seq、basename、子会话 id（opaque childId）。
 

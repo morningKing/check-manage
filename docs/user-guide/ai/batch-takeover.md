@@ -17,6 +17,7 @@ POST /api/v1/ai-batches/{batch_id}/sessions/{child_id}/takeover-link
 - 鉴权：`X-API-Key` 请求头（批任务 Open API 同一套密钥，密钥须已绑定用户）。
 - `{child_id}` 支持三种写法：**子任务序号**（如 `3`）、**子会话名称**、**会话 id**。
 - 可选请求体 `{"ttlHours": N}`——不传则用部署级默认（环境变量 `TAKEOVER_TTL_DEFAULT_HOURS`），上限受 `TAKEOVER_TTL_MAX_HOURS` 约束。
+- 可选请求体 `{"mode": "full" | "readonly"}`——**只读接管模式**（2026-11-19 新增）：`readonly` 签发只读链接，访客可查看会话与大纲，但**无法发消息、无法中断**；不传或传 `full` 为完整接管（默认，存量行为不变）。
 
 响应（201）：
 
@@ -24,9 +25,12 @@ POST /api/v1/ai-batches/{batch_id}/sessions/{child_id}/takeover-link
 {
   "token": "tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE",
   "path": "/takeover/session?t=tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE",
+  "mode": "full",
   "expiresAt": "2026-11-03T12:00:00+00:00"
 }
 ```
+
+`mode` 字段回显签发时的模式，供调用方在把链接发给外部人员时附说明（例如"此链接为只读，仅供查看进度"）。
 
 令牌格式为 `tk_` + 43 字符随机串；数据库**只存 SHA-256 哈希**，不落明文；令牌绑定「签发密钥所属用户 + 批任务 + 子会话」三元组，换批换人皆不可用。
 
@@ -52,7 +56,7 @@ http://localhost:5173/takeover/session?t=tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXa
 http://your-host:8080/takeover/session?t=tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE
 ```
 
-> 把链接发给外部人员时请走私密渠道（令牌即凭证，持有者即可发消息与中断任务）；链接过期或被吊销后，页面会显示「链接无效或已过期，请确认链接是否完整，或联系任务发起人重新获取」。
+> 把链接发给外部人员时请走私密渠道（令牌即凭证，**full 模式**持有者即可发消息与中断任务）；链接过期或被吊销后，页面会显示「链接无效或已过期，请确认链接是否完整，或联系任务发起人重新获取」。
 
 ### 吊销
 
@@ -74,6 +78,17 @@ POST /api/v1/ai-batches/{batch_id}/sessions/{child_id}/takeover-link/revoke
 | 发送消息 | 文本框 + Enter / 发送按钮；单条上限 **20000 字符**；发消息会续跑**同一个子会话**（AI 上下文保留，不是新开会话） |
 | 中断任务 | 子任务运行中（pending/running）时输入框禁用并出现「中断任务」按钮——先点一次武装、再点一次确认的两段式防误触；中断为**协作式**（由后台 Worker 收口），中断后可用纠正消息继续 |
 | 失效兜底 | 令牌无效 / 过期 / 被吊销 → 错误卡片，提示联系任务发起人重新获取 |
+| **只读模式**（readonly 令牌） | 输入框与发送按钮冻结（占位文案「只读模式，无法输入消息」）、**不显示中断按钮**，页面顶部出现蓝色提示条「只读模式：本链接仅支持查看会话内容，无法接管操作」；**会话查看与大纲跳转不受影响**。后端同步拒绝：只读令牌的发消息/中断请求一律 403 `READONLY_MODE`（冻结不依赖前端） |
+
+### 只读接管模式（readonly）
+
+适用场景：向外部干系人（客户、审计、管理层）**同步任务进度**而不授予接管能力——例如把「任务执行过程」作为可 externally 观察的窗口。
+
+- 签发：`{"mode": "readonly"}`；未传 / `full` 为完整接管；
+- 只读访客可见：会话信息头、对话历史（同 3s 轮询）、状态徽标；
+- 只读访客不可见/不可做：发送输入区（冻结）、中断按钮（不渲染）、两个写侧 API（后端 403 兜底）；
+- 只读链接的限速走**读桶**（发送/中断本就会被 403 拦截，不消耗写桶预算）；
+- 只读模式同样可吊销（revoke 语义一致）。
 
 ### 发消息的状态约束
 
