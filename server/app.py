@@ -760,6 +760,19 @@ try:
 except Exception as _e:
     logging.warning('session oc_runtime migration on boot failed: %s', _e)
 
+# OC2 后台管理表（阶段五）：failed_models 列 + ai_oc_endpoints 端点表。
+# 幂等；新迁移必须在此显式注册（init_db 自动扫描只覆盖全新库）。
+try:
+    import importlib.util as _ilu_oc2m
+    _mp_oc2m = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'migrations', '2026_11_16_oc2_admin_tables.py')
+    _spec_oc2m = _ilu_oc2m.spec_from_file_location('_oc2_admin_tables_boot', _mp_oc2m)
+    _m_oc2m = _ilu_oc2m.module_from_spec(_spec_oc2m)
+    _spec_oc2m.loader.exec_module(_m_oc2m)
+    _m_oc2m.run()
+except Exception as _e:
+    logging.warning('oc2 admin tables migration on boot failed: %s', _e)
+
 # 会话级权限模式列（2026-10-31 bypass spec §2.1）。幂等加列；新迁移必须在此
 # 显式注册（init_db 自动扫描只覆盖全新库，见护栏测试）。
 try:

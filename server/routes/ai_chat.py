@@ -228,9 +228,11 @@ def create_session():
     #    connects to our MCP server with this session's token. OpenCode has no
     #    per-session MCP API — config is per-directory (see spec §12).
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
+    from utils.oc_endpoints import enabled_endpoints, provider_config_v1
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
                           model=get_default_chat_model(), extra_mcp=_external_mcp(),
-                          include_internal=internal_mcp_enabled())
+                          include_internal=internal_mcp_enabled(),
+                          providers=provider_config_v1(enabled_endpoints()))
 
     # 3.5) Inject global skills into the workspace
     try:
@@ -2978,9 +2980,11 @@ def clear_session(sid):
     # 3) 重新签发 token（新 TTL）+ 用新 token 重写 opencode.json 的 MCP url
     token = generate_token(sid, AI_SESSION_TTL_HOURS)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
+    from utils.oc_endpoints import enabled_endpoints, provider_config_v1
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
                           model=get_default_chat_model(), extra_mcp=_external_mcp(),
-                          include_internal=internal_mcp_enabled())
+                          include_internal=internal_mcp_enabled(),
+                          providers=provider_config_v1(enabled_endpoints()))
     # 4) 新建 OpenCode 会话（绑定重建后的工作区）= 上下文重置
     new_oc = client.create_session(directory=workspace_path, title='新会话')
     # 5) 删历史 + 重绑 opencode_session_id + 置 active

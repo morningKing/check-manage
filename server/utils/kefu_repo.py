@@ -205,12 +205,14 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
 
     token = generate_token(session_id, AI_SESSION_TTL_HOURS)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
+    from utils.oc_endpoints import enabled_endpoints, provider_config_v1
     write_opencode_config(
         workspace_path,
         mcp_name=MCP_NAME,
         mcp_url=mcp_url,
         model=(instance.get('model') or get_default_chat_model()),
         include_internal=internal_mcp_enabled(),
+        providers=provider_config_v1(enabled_endpoints()),
     )
 
     client = _oc_registry.runtime_for(_oc_kind).get_client()

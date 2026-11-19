@@ -407,6 +407,7 @@ def _prepare_workspace(user_id: str, session_id: str,
         INTERNAL_MCP_NAME as MCP_NAME
     from utils.session_token import generate_token
     from utils.workspace import write_opencode_config
+    from utils.oc_endpoints import enabled_endpoints, provider_config_v1
     _mcp_name = MCP_NAME
     write_opencode_config(
         ws, mcp_name=_mcp_name,
@@ -414,7 +415,8 @@ def _prepare_workspace(user_id: str, session_id: str,
                  f'{generate_token(session_id, AI_SESSION_TTL_HOURS)}'),
         model=get_default_chat_model(),
         extra_mcp=enabled_mcp_config(reserved_names=[_mcp_name]),
-        include_internal=internal_mcp_enabled())
+        include_internal=internal_mcp_enabled(),
+        providers=provider_config_v1(enabled_endpoints()))
     # 绑定批任务的外部目录读取（2026-09-30）：无人值守会话读工作区外的文件
     # 会触发 OpenCode external_directory=ask 授权询问，无人应答 → 工具挂起
     # （生产实测 read 挂 900s 被看门狗 abort）。派发时写项目级 allow——
@@ -900,6 +902,12 @@ class BatchWorker:
     # 主动中断）、ContextOverflowError（上下文超限，续跑只会更大）不在列。
     RETRYABLE_TURN_FAILED = {'APIError', 'UnknownError',
                              'MessageOutputLengthError', 'StructuredOutputError'}
+    # 多模型故障切换（OC2 阶段五）：这些 provider 错误意味着「当前模型/
+    # 渠道不可用」——同模型重试必然再炸或大概率再炸，应切换到批配置的
+    # 其他模型重试（failover）。全败（failed_models 覆盖批 models 全表）
+    # 才落终态 failed。ProviderAuthError：该模型的密钥/渠道鉴权失效；
+    # APIError：该模型上游不可用（5xx/超时等）。
+    MODEL_FAILOVER_TURN_FAILED = {'ProviderAuthError', 'APIError'}
     # 自动续跑时注入的提示词：与 resume 同语义——从原会话上下文继续。
     # 带原因版由 _auto_retry_prompt 组合（对齐 _maybe_gate_retry 的定向修复
     # 范式）——原因不随重试丢失是 2026-11-03 取证缺口修复的三渠道之一。
@@ -1922,6 +1930,15 @@ class BatchWorker:
                            sid, generation, fencing_token)
             return
         except (_SessionTimeout, _TurnFailed) as e:
+            # OC2 阶段五 多模型故障切换（优先于同模型重试）：模型不可用类
+            # 错误（ProviderAuthError/APIError）先尝试切换到批配置的下一个
+            # 未试模型全新派发；切换不可行（单模型/全败/行不可重排）才落入
+            # 既有分类（APIError 同模型重试 / ProviderAuthError 直接失败）。
+            if isinstance(e, _TurnFailed) \
+                    and e.name in BatchWorker.MODEL_FAILOVER_TURN_FAILED \
+                    and self._failover_model(sid, batch_id, reason=str(e)[:300],
+                                             generation=generation):
+                return
             # 可重试类失败（停滞/工具卡死/部分 provider 错误）先自动重新排队；
             # 预算用尽或不属于白名单才落 failed。原因透传给重排（提示词/事件/
             # attempt 三渠道留痕）——异常文本两者都已自带可读中文/错误名。
@@ -3901,6 +3918,85 @@ class BatchWorker:
                        reason or 'unknown',
                        ', continue on same opencode session' if oc else '')
         self.notify()  # 立刻唤醒调度器接续
+        return True
+
+    def _failover_model(self, session_id: str, batch_id: str | None,
+                        reason: str, generation: int | None = None) -> bool:
+        """多模型故障切换（OC2 阶段五）：当前模型不可用（ProviderAuthError/
+        APIError——同模型重试必然/大概率再炸）时，切换到批配置里的下一个
+        未试模型重新派发。
+
+        策略：
+        - failed_models（子会话行 JSONB）记录已判死的模型，单调增长——
+          切换次数有界（≤ len(models)），不会无限循环；
+        - 全部模型都试过（failed_models 覆盖批 models 全表）→ 返回 False，
+          由调用方落终态 failed（reason 注明「所有模型均不可用」）；
+        - 切换 = 新 OpenCode 会话 + 新模型全新派发（旧会话是用旧模型建的，
+          会话内切模型在 V1 不可行；fresh 派发对两栈语义一致），retry_count
+          归零——新模型享有完整自动重试预算；continue_prompt 清空；
+        - 三渠道留痕：child.retry 事件（reason=model_failover）+ attempt
+          收口 + 日志。
+
+        批无 models 配置（单模型）或子会话无 batch_id → 不切换返回 False。
+        """
+        if not batch_id:
+            return False
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT b.models, s.model, s.failed_models "
+                    "FROM ai_chat_sessions s "
+                    "JOIN ai_chat_batches b ON s.batch_id = b.id "
+                    "WHERE s.id = %s", (session_id,))
+                row = cur.fetchone()
+                if row is None:
+                    return False
+                models = row[0] or []
+                current = row[1] or ''
+                tried = [m for m in (row[2] or []) if m]
+                # 当前模型入已试清单（单调；重复入无碍——按序取首个未试）
+                if current and current not in tried:
+                    tried.append(current)
+                remaining = [m for m in models if m not in tried]
+                if not remaining:
+                    logger.warning('batch model failover exhausted sid=%s '
+                                   '(all %d models tried)', session_id,
+                                   len(models))
+                    return False
+                next_model = remaining[0]
+                cur.execute(
+                    "UPDATE ai_chat_sessions "
+                    "SET model = %s, failed_models = %s::jsonb, "
+                    "    status='pending', retry_count = 0, "
+                    "    error_message=NULL, cancel_requested=false, "
+                    "    pause_requested=false, active_turn_id=NULL, "
+                    "    opencode_session_id = NULL, "
+                    "    execution_generation = execution_generation + 1, "
+                    "    continue_prompt = NULL "
+                    "WHERE id = %s AND status = 'running' "
+                    "  AND NOT cancel_requested AND NOT pause_requested",
+                    (next_model, json.dumps(tried), session_id))
+                requeued = cur.rowcount > 0
+        if not requeued:
+            logger.info('batch model failover skipped sid=%s '
+                        '(row no longer requeueable)', session_id)
+            return False
+        self._close_attempt_for_requeue(session_id, 'MODEL_FAILOVER',
+                                        error_message=reason)
+        if batch_id:
+            from utils import batch_events as _batch_events
+            _batch_events.append_event(
+                batch_id, 'child.retry', aggregate_type='session',
+                aggregate_id=session_id, execution_generation=generation,
+                payload={'session_id': session_id,
+                         'reason': f'model_failover: {reason}',
+                         'from': current, 'to': next_model,
+                         'tried': tried})
+        logger.warning('batch model failover sid=%s %s→%s reason=%s '
+                       '(fresh dispatch; tried=%s)',
+                       session_id, current, next_model, reason or 'unknown',
+                       tried)
+        self.notify()
         return True
 
     def _start_lease_heartbeat(self, session_id: str,

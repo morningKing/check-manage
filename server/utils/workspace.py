@@ -288,7 +288,8 @@ def cleanup_batch_workspaces(workspace_root: str, user_id: str, sessions: list) 
 
 def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
                           model: str = "", extra_mcp: dict | None = None,
-                          include_internal: bool = True) -> str:
+                          include_internal: bool = True,
+                          providers: dict | None = None) -> str:
     """Write opencode.json into the workspace so OpenCode (scoped to this dir)
     connects to our MCP server at `mcp_url` (which carries the session token)
     and, when given, uses `model` ("<providerID>/<modelID>").
@@ -319,6 +320,11 @@ def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
     }
     if model:
         cfg["model"] = model
+    if providers:
+        # 自定义端点（OC2 阶段五）：V1 格式 provider map——V1 直读；V2 对
+        # 受支持的 V1 字段做内存规范化（provider.npm→package、api→
+        # settings.baseURL），同一份配置两栈通吃（官方迁移指南承诺）。
+        cfg["provider"] = providers
     cfg_path = Path(workspace_path) / "opencode.json"
     cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return str(cfg_path)

@@ -28,6 +28,7 @@ import os
 from flask import Blueprint, g, jsonify, request
 
 from auth import require_permission
+from db import get_db as _ep_get_db
 from utils import opencode_global as ocg
 from utils.operation_log import log_operation
 
@@ -419,3 +420,92 @@ def _do_restart(force: bool):
     except ocg.OpenCodeGlobalError as e:
         return _err_response(e)
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# 自定义模型端点（OC2 阶段五）：后台管理 → 写入会话工作区 opencode.json 的
+# provider 段（V1 格式，官方迁移指南承诺 V2 内存规范化兼容——两栈通吃）。
+# 数据表 ai_oc_endpoints（migrations/2026_11_16_oc2_admin_tables）。
+# 权限：admin.ai_settings（设置管理域）。派发新会话时由
+# utils.workspace.write_opencode_config(providers=...) 合并生效；既有工作区
+# 不重写（与 MCP 配置同口径），管理变更对新会话生效。
+# ---------------------------------------------------------------------------
+import re as _re
+
+
+def _ep_row(r) -> dict:
+    return {'id': r[0], 'providerId': r[1], 'displayName': r[2],
+            'baseUrl': r[3], 'apiKey': r[4], 'models': r[5] or [],
+            'enabled': r[6], 'updatedAt': r[7].isoformat() if r[7] else None}
+
+
+def _ep_safe_id(pid: str) -> bool:
+    return bool(_re.fullmatch(r'[a-z0-9][a-z0-9_-]*', pid or ''))
+
+
+@ai_opencode_admin_bp.route('/oc-endpoints', methods=['GET'])
+@require_permission('admin.ai_settings')
+def oc_endpoints_list():
+    with _ep_get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, provider_id, display_name, base_url, api_key, "
+                    "models, enabled, updated_at FROM ai_oc_endpoints "
+                    "ORDER BY id")
+        rows = cur.fetchall()
+    return jsonify({'endpoints': [_ep_row(r) for r in rows]})
+
+
+@ai_opencode_admin_bp.route('/oc-endpoints', methods=['POST'])
+@require_permission('admin.ai_settings')
+def oc_endpoints_create():
+    body = request.get_json(silent=True) or {}
+    pid = str(body.get('providerId') or '').strip()
+    base_url = str(body.get('baseUrl') or '').strip()
+    if not pid or not _ep_safe_id(pid):
+        return jsonify({'error': 'providerId 必填且只能含小写字母/数字/连字符/下划线',
+                        'code': 'BAD_PROVIDER_ID'}), 400
+    if not base_url.startswith(('http://', 'https://')):
+        return jsonify({'error': 'baseUrl 必须以 http(s):// 开头',
+                        'code': 'BAD_BASE_URL'}), 400
+    models = body.get('models') or []
+    if not isinstance(models, list):
+        return jsonify({'error': 'models 必须是数组', 'code': 'BAD_MODELS'}), 400
+    try:
+        with _ep_get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO ai_oc_endpoints "
+                "(provider_id, display_name, base_url, api_key, models, enabled) "
+                "VALUES (%s, %s, %s, %s, %s::jsonb, %s) "
+                "ON CONFLICT (provider_id) DO UPDATE SET "
+                "display_name=EXCLUDED.display_name, base_url=EXCLUDED.base_url, "
+                "api_key=EXCLUDED.api_key, models=EXCLUDED.models, "
+                "enabled=EXCLUDED.enabled, updated_at=NOW() RETURNING *",
+                (pid, str(body.get('displayName') or pid), base_url,
+                 str(body.get('apiKey') or ''), json.dumps(models),
+                 bool(body.get('enabled', True))))
+            row = cur.fetchone()
+            conn.commit()
+    except Exception as e:  # noqa: BLE001
+        return jsonify({'error': str(e)[:300], 'code': 'ENDPOINT_DB'}), 500
+    log_operation('create', 'ai_oc_endpoint', pid,
+                  str(body.get('displayName') or pid),
+                  '新增/更新自定义模型端点')
+    return jsonify({'endpoint': _ep_row(row)}), 201
+
+
+@ai_opencode_admin_bp.route('/oc-endpoints/<int:endpoint_id>', methods=['DELETE'])
+@require_permission('admin.ai_settings')
+def oc_endpoints_delete(endpoint_id):
+    with _ep_get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ai_oc_endpoints WHERE id = %s "
+                    "RETURNING provider_id", (endpoint_id,))
+        row = cur.fetchone()
+        if row is None:
+            return jsonify({'error': 'endpoint not found',
+                            'code': 'ENDPOINT_NOT_FOUND'}), 404
+        conn.commit()
+    log_operation('delete', 'ai_oc_endpoint', row[0], row[0],
+                  '删除自定义模型端点')
+    return jsonify({'ok': True})
