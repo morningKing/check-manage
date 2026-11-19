@@ -114,13 +114,16 @@
       "Bash(PGPASSWORD=casemanage psql *)",
       "Bash(sed -n '27,65p')",
       "Read(//tmp/**)",
-      "PowerShell(Get-Process *)",
       "mcp__playwright__browser_navigate",
-      "mcp__playwright__browser_run_code_unsafe",
-      "mcp__playwright__browser_find",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_type",
       "mcp__playwright__browser_click",
-      "mcp__playwright__browser_tabs",
-      "mcp__playwright__browser_take_screenshot"
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_resize",
+      "Bash(git check-ignore *)",
+      "Bash(git checkout *)",
+      "Bash([ -f \"$WS/progress.md\" ])"
     ]
   }
 }
