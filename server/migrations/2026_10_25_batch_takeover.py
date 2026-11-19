@@ -28,6 +28,11 @@ def run():
                     "ON batch_takeover_tokens (session_id)")
         cur.execute("ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS "
                     "continue_repark BOOLEAN NOT NULL DEFAULT false")
+        # 只读接管模式（2026-11-19）：'full'=可接管（默认，存量行不变）；
+        # 'readonly'=仅查看——发送/中断被路由层 403，前端冻结输入区（大纲
+        # 跳转纯读不受影响）。
+        cur.execute("ALTER TABLE batch_takeover_tokens ADD COLUMN IF NOT EXISTS "
+                    "mode VARCHAR(10) DEFAULT 'full'")
         conn.commit()
     print("batch takeover tokens migration ready.")
 

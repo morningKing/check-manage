@@ -49,10 +49,19 @@ def _hash(token: str) -> str:
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
+TAKEOVER_MODES = ('full', 'readonly')
+
+
 def create_takeover_token(owner_user_id: str, batch_id: str, session_id: str,
-                          api_key_id: str, ttl_hours: int | None = None) -> tuple[str, datetime]:
+                          api_key_id: str, ttl_hours: int | None = None,
+                          mode: str = 'full') -> tuple[str, datetime]:
     """ttl_hours=None 表示调用方未指定 → 应用部署级默认（TAKEOVER_TTL_DEFAULT_HOURS）；
-    显式指定则钳入 [TTL_MIN_H, TAKEOVER_TTL_MAX_HOURS]。"""
+    显式指定则钳入 [TTL_MIN_H, TAKEOVER_TTL_MAX_HOURS]。
+
+    mode：'full'=可接管（默认，存量行为）；'readonly'=仅查看——发送/中断
+    被路由层 403，前端冻结输入区（会话查看与大纲跳转不受影响）。"""
+    if mode not in TAKEOVER_MODES:
+        raise ValueError(f'invalid takeover mode: {mode!r}')
     max_h = ttl_max_hours()
     if ttl_hours is None:
         ttl_h = ttl_default_hours()
@@ -64,10 +73,11 @@ def create_takeover_token(owner_user_id: str, batch_id: str, session_id: str,
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO batch_takeover_tokens "
-                "(id, token_hash, api_key_id, owner_user_id, batch_id, session_id, expires_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                "(id, token_hash, api_key_id, owner_user_id, batch_id, session_id, "
+                "expires_at, mode) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                 ('tkt_' + secrets.token_urlsafe(8), _hash(token), api_key_id,
-                 owner_user_id, batch_id, session_id, expires))
+                 owner_user_id, batch_id, session_id, expires, mode))
         conn.commit()
     return token, expires
 
@@ -79,7 +89,7 @@ def resolve_takeover_token(token_plain: str | None) -> dict | None:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "SELECT t.id AS token_id, t.expires_at, t.owner_user_id,"
-                " t.batch_id, t.session_id,"
+                " t.batch_id, t.session_id, t.mode,"
                 " s.status AS child_status, s.batch_seq, s.batch_input_file, s.title,"
                 " b.name AS batch_name, b.status AS batch_status"
                 " FROM batch_takeover_tokens t"

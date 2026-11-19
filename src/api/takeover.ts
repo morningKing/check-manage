@@ -7,6 +7,8 @@ export interface TakeoverSessionInfo {
   title: string | null
   childStatus: string
   batchStatus: string
+  /** 'full'=可接管；'readonly'=只读（输入框冻结、无中断，查看/大纲保留） */
+  mode?: 'full' | 'readonly'
   expiresAt: string
 }
 export interface TakeoverMessage {

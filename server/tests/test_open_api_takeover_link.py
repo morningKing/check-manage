@@ -167,3 +167,48 @@ def test_issue_link_absent_ttl_passes_none(client, mock_conn, mock_cursor):
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR, json={})
     assert resp.status_code == 201
     assert mk.call_args.kwargs['ttl_hours'] is None
+
+
+# ---------------------------------------------------------------------------
+# 只读接管模式（2026-11-19）：签发收 mode、透传/校验、响应携带
+# ---------------------------------------------------------------------------
+
+def test_issue_link_mode_readonly_passthrough(client, mock_conn, mock_cursor):
+    """mode='readonly' 原样传仓储并在响应回显（调用方拼链接提示用）。"""
+    _auth_passes(mock_cursor)
+    fake_exp = datetime.now(timezone.utc) + timedelta(hours=24)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)),          patch('routes.open_api_batches._current_key', return_value=_key()),          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}),          patch('routes.open_api_batches._resolve_child',
+               return_value=({'id': 's1', 'batch_seq': 1}, None)),          patch('utils.takeover_repo.create_takeover_token',
+               return_value=('tk_ro', fake_exp)) as mk:
+        resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
+                           json={'mode': 'readonly'})
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body['mode'] == 'readonly'
+    assert mk.call_args.kwargs['mode'] == 'readonly'
+
+
+def test_issue_link_mode_full_is_default(client, mock_conn, mock_cursor):
+    """未传 mode → 'full'（存量调用方契约不变）。"""
+    _auth_passes(mock_cursor)
+    fake_exp = datetime.now(timezone.utc) + timedelta(hours=24)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)),          patch('routes.open_api_batches._current_key', return_value=_key()),          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}),          patch('routes.open_api_batches._resolve_child',
+               return_value=({'id': 's1', 'batch_seq': 1}, None)),          patch('utils.takeover_repo.create_takeover_token',
+               return_value=('tk_f', fake_exp)) as mk:
+        resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
+                           json={})
+    assert resp.status_code == 201
+    assert resp.get_json()['mode'] == 'full'
+    assert mk.call_args.kwargs['mode'] == 'full'
+
+
+def test_issue_link_mode_invalid_400(client, mock_conn, mock_cursor):
+    """非法 mode → 400 INVALID_MODE（仓储层 ValueError 前的路由层校验）。"""
+    _auth_passes(mock_cursor)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)),          patch('routes.open_api_batches._current_key', return_value=_key()),          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}),          patch('routes.open_api_batches._resolve_child',
+               return_value=({'id': 's1'}, None)),          patch('utils.takeover_repo.create_takeover_token') as mk:
+        resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
+                           json={'mode': 'admin'})
+    assert resp.status_code == 400
+    assert resp.get_json()['code'] == 'INVALID_MODE'
+    assert not mk.called

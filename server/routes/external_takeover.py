@@ -81,6 +81,17 @@ def _guard(kind: str):
     return None
 
 
+def _readonly_denied() -> dict | None:
+    """只读令牌的写侧守卫：resolve 成功且 mode='readonly' 时返回 403 体。
+    读侧（GET /session*、大纲）不受影响——只读模式冻结的是输入框/中断，
+    会话查看与大纲跳转保留。"""
+    r = getattr(g, 'takeover', None)
+    if r and (r.get('mode') or 'full') == 'readonly':
+        return {'error': {'code': 'READONLY_MODE',
+                          'message': '该链接为只读模式，无法接管操作'}}, 403
+    return None
+
+
 def _child_status_fresh() -> str:
     """resolve 时的状态可能陈旧，发送前重读。"""
     with get_db() as conn:
@@ -100,6 +111,7 @@ def takeover_session_info():
     return jsonify({'batchName': r['batch_name'], 'batchSeq': r['batch_seq'],
                     'inputFile': r['batch_input_file'], 'title': r['title'],
                     'childStatus': r['child_status'], 'batchStatus': r['batch_status'],
+                    'mode': r.get('mode') or 'full',
                     'expiresAt': r['expires_at'].isoformat()})
 
 
@@ -126,6 +138,9 @@ def takeover_messages():
 @external_takeover_bp.post('/session/messages')
 def takeover_send():
     denied = _guard('send')
+    if denied:
+        return denied
+    denied = _readonly_denied()
     if denied:
         return denied
     body = request.get_json(silent=True) or {}
@@ -165,8 +180,11 @@ def takeover_cancel():
     状态机全权交给 batch_repo.cancel_child（pending/running 置协作式标志由
     worker 收口、paused 同步落 cancelled、终态 ValueError→409），此处不做
     前置状态读——避免先查后改的 TOCTOU 窗口。限速消耗发送桶（写侧动作，
-    与消息同预算；人类操作 10/min 足够）。"""
+    与消息同预算；人类操作 10/min 足够）。只读令牌 403。"""
     denied = _guard('send')
+    if denied:
+        return denied
+    denied = _readonly_denied()
     if denied:
         return denied
     r = g.takeover

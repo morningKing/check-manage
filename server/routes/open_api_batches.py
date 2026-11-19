@@ -743,12 +743,20 @@ def create_takeover_link(batch_id, child_id):
         ttl_hours = None if raw_ttl is None else int(raw_ttl)
     except (TypeError, ValueError):
         return err('ttlHours 不合法', 'INVALID_TTL', 400)
+    # 只读模式（2026-11-19）：mode='readonly' 签发只读链接——访客可看会话
+    # 与大纲，发送/中断被路由层 403；未传/传 'full' 行为不变。
+    mode = body.get('mode') or 'full'
+    if mode not in takeover_repo.TAKEOVER_MODES:
+        return err('mode 不合法（full|readonly）', 'INVALID_MODE', 400)
     token, expires_at = takeover_repo.create_takeover_token(
-        key['ownerUserId'], batch_id, child['id'], key['id'], ttl_hours=ttl_hours)
+        key['ownerUserId'], batch_id, child['id'], key['id'], ttl_hours=ttl_hours,
+        mode=mode)
     log_api_operation('ai.batch_takeover_link_created', 'ai_batch', batch_id,
-                      d.get('name') or batch_id, f'签发子任务接管链接 seq={child.get("batch_seq")}')
+                      d.get('name') or batch_id,
+                      f'签发子任务接管链接 seq={child.get("batch_seq")} mode={mode}')
     return jsonify({'token': token,
                     'path': f'/takeover/session?t={token}',
+                    'mode': mode,
                     'expiresAt': expires_at.isoformat()}), 201
 
 

@@ -127,12 +127,25 @@ def test_session_info_field_shape(client, mock_conn, mock_cursor):
     assert resp.status_code == 200
     body = resp.get_json()
     assert set(body) == {'batchName', 'batchSeq', 'inputFile', 'title',
-                         'childStatus', 'batchStatus', 'expiresAt'}
+                         'childStatus', 'batchStatus', 'mode', 'expiresAt'}
     assert body == {
         'batchName': 'B1', 'batchSeq': 3, 'inputFile': 'input.xlsx',
         'title': '第3步', 'childStatus': 'completed', 'batchStatus': 'running',
+        'mode': 'full',
         'expiresAt': tok['expires_at'].isoformat(),
     }
+
+
+def test_session_info_mode_readonly_exposed(client, mock_conn, mock_cursor):
+    """readonly 令牌：/session 透出 mode='readonly'（前端据此冻结输入区）；
+    消息读取不受影响（只读只拦写侧）。"""
+    tok = _tok(mode='readonly')
+    with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+               return_value=tok), \
+         patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)):
+        resp = client.get(f'{BASE}/session?t={VALID_T}')
+    assert resp.status_code == 200
+    assert resp.get_json()['mode'] == 'readonly'
 
 
 def test_messages_passthrough_four_fields(client, mock_conn, mock_cursor):
@@ -558,3 +571,59 @@ def test_cancel_shares_send_bucket_with_messages(client, mock_conn,
                              json={'prompt': '接着做'})
     assert first.status_code == 202
     assert second.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# 只读接管模式（2026-11-19）：readonly 令牌写侧全拒（403），读侧不受影响
+# ---------------------------------------------------------------------------
+
+def test_readonly_send_403_and_no_continue(client, mock_conn, mock_cursor):
+    """只读令牌发送 → 403 READONLY_MODE；continue_child/worker 绝不被触达
+    （冻结在路由层，不依赖前端禁用）。"""
+    tok = _tok(mode='readonly')
+    mock_cursor.fetchone.side_effect = [('completed',), _owner_row()]
+    with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+               return_value=tok),          patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),          patch('routes.external_takeover.batch_repo.continue_child') as cc,          patch('utils.batch_engine.get_worker', return_value=MagicMock()):
+        resp = client.post(f'{BASE}/session/messages?t={VALID_T}',
+                           json={'prompt': '接管一下'})
+    assert resp.status_code == 403
+    assert resp.get_json()['error']['code'] == 'READONLY_MODE'
+    assert not cc.called
+
+
+def test_readonly_cancel_403(client, mock_conn, mock_cursor):
+    """只读令牌中断 → 403；cancel_child 不被触达。"""
+    tok = _tok(mode='readonly')
+    mock_cursor.fetchone.side_effect = [('running',), _owner_row()]
+    with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+               return_value=tok),          patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),          patch('routes.external_takeover.batch_repo.cancel_child') as ccancel,          patch('utils.batch_engine.get_worker', return_value=MagicMock()):
+        resp = client.post(f'{BASE}/session/cancel?t={VALID_T}')
+    assert resp.status_code == 403
+    assert resp.get_json()['error']['code'] == 'READONLY_MODE'
+    assert not ccancel.called
+
+
+def test_readonly_messages_still_ok(client, mock_conn, mock_cursor):
+    """只读令牌的消息读取正常（读桶）——冻结的是写侧，查看不受影响。"""
+    tok = _tok(mode='readonly')
+    msgs = {'messages': [{'id': 'm1', 'role': 'user', 'content': [],
+                          'created_at': None}],
+            'total': 1, 'truncated': False}
+    with patch('routes.external_takeover.takeover_repo.resolve_takeover_token',
+               return_value=tok),          patch('routes.external_takeover.get_db', lambda: _fake_db(mock_conn)),          patch('routes.external_takeover.batch_repo.get_child_messages',
+               return_value=msgs),          patch('routes.external_takeover.batch_repo.get_batch_detail',
+               return_value=None):
+        resp = client.get(f'{BASE}/session/messages?t={VALID_T}')
+    assert resp.status_code == 200
+    assert resp.get_json()['total'] == 1
+
+
+def test_full_mode_send_unaffected(client, mock_conn, mock_cursor):
+    """回归护栏：full 模式（默认/存量令牌）发送仍走原 202 路径。"""
+    p_tok, p_db, p_cc, p_gw, p_wl = _send_patches(
+        mock_conn, _tok(mode='full'), 'completed')
+    with p_tok, p_db, p_cc as cc, p_gw as gw, p_wl:
+        resp = client.post(f'{BASE}/session/messages?t={VALID_T}',
+                           json={'prompt': '继续'})
+    assert resp.status_code == 202
+    assert cc.called

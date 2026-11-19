@@ -59,6 +59,9 @@ let disarmTimer: ReturnType<typeof setTimeout> | null = null
 const status = computed(() => childStatus.value || session.value?.childStatus || '')
 const busy = computed(() => BUSY_STATUSES.includes(status.value))
 const statusMeta = computed(() => STATUS_META[status.value] || { label: status.value || '未知', cls: 'is-unknown' })
+// 只读模式（2026-11-19）：readonly 令牌——发送/中断被后端 403，前端冻结
+// 输入框并隐藏中断按钮；会话查看与大纲跳转（纯读）不受影响。
+const readonlyMode = computed(() => session.value?.mode === 'readonly')
 const visibleMessages = computed(() => messages.value.filter((m) => m.role === 'user' || m.role === 'assistant'))
 
 interface AssistantSegment { kind: 'text' | 'muted'; text: string }
@@ -168,6 +171,7 @@ function onVisibilityChange() {
 
 async function send() {
   const text = draft.value.trim()
+  if (readonlyMode.value) return   // 只读模式：输入区已禁用，此处双保险
   if (!text || busy.value || sending.value || loading.value || loadError.value) return
   conflictMsg.value = ''
   sending.value = true
@@ -203,6 +207,7 @@ function disarmCancel() {
 }
 
 async function onCancelClick() {
+  if (readonlyMode.value) return   // 只读模式：无中断按钮，双保险
   if (cancelling.value || loading.value || loadError.value) return
   if (!cancelArmed.value) {
     cancelArmed.value = true
@@ -294,10 +299,13 @@ onUnmounted(() => {
         </template>
       </div>
 
-      <div class="takeover-composer">
+      <div class="takeover-composer" :data-mode="readonlyMode ? 'readonly' : 'full'">
+        <p v-if="readonlyMode" class="takeover-composer__warning" data-test="readonly-hint">
+          只读模式：本链接仅支持查看会话内容，无法接管操作。
+        </p>
         <p v-if="conflictMsg" class="takeover-composer__warning" data-test="conflict-warning">{{ conflictMsg }}</p>
         <p v-if="cancelNotice" class="takeover-composer__notice" data-test="cancel-notice">{{ cancelNotice }}</p>
-        <div v-if="busy" class="takeover-composer__busy" data-test="busy-hint">
+        <div v-if="busy && !readonlyMode" class="takeover-composer__busy" data-test="busy-hint">
           <span class="takeover-composer__hint">任务执行中，暂不能发送新消息。</span>
           <button
             class="takeover-composer__stop"
@@ -313,15 +321,15 @@ onUnmounted(() => {
           <textarea
             v-model="draft"
             class="takeover-composer__input"
-            :disabled="busy || sending"
+            :disabled="readonlyMode || busy || sending"
             rows="2"
-            placeholder="输入消息，Enter 发送"
+            :placeholder="readonlyMode ? '只读模式，无法输入消息' : '输入消息，Enter 发送'"
             @keydown.enter.exact.prevent="onEnterKey"
           />
           <button
             class="takeover-composer__send"
             type="button"
-            :disabled="busy || sending || !draft.trim()"
+            :disabled="readonlyMode || busy || sending || !draft.trim()"
             @click="onEnterKey"
           >{{ sending ? '发送中…' : '发送' }}</button>
         </div>
@@ -529,6 +537,12 @@ onUnmounted(() => {
   background: #fef3c7;
   color: #92400e;
   font-size: 13px;
+}
+
+/* 只读模式提示条：信息性蓝（区别于冲突/中断的警示黄红） */
+.takeover-composer__warning[data-test='readonly-hint'] {
+  background: #dbeafe;
+  color: #1e40af;
 }
 
 .takeover-composer__notice {
