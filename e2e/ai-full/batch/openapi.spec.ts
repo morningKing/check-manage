@@ -15,6 +15,12 @@
  *
  * LLM 预算：
  *  - 用例 1/2：0 LLM（鉴权与路径校验在进入执行前拒绝）；
+ *  - 用例 2b（continue 带附件契约，2026-11-20）：@llm-light —— 2 次轻量轮
+ *    （首轮「只输出 ok」+ 附件续跑轮）；附件导入在 send 前发生，用 /files
+ *    实扫证明，400 探针（过期/他人路径）零消耗。
+ *    注：不能拿 bogus agent 做 0-LLM 构造——agent fail-fast 发生在
+ *    create_session 之前，未跑过的子任务没有 OC 会话，continue 会退化成
+ *    fresh 跑（continue_prompt 被忽略，既有语义）。
  *  - 用例 3（全生命周期）：@llm —— 2+1 个真实子会话，预算 ~10 分钟；
  *  - 用例 4（删除治理）：@llm-light —— sleep 长任务，1 次轻量消耗；
  *  - 用例 5（Key 隔离）：@llm-light —— 1 次轻量轮（随即 stop 删除）；
@@ -78,6 +84,79 @@ test('路径归属与穿越：绝对路径/.. /他人 staging 一律 400', async
     })
     expect(r.status, `path=${badPath}`).toBe(400)
     expect(r.json?.code, `path=${badPath}`).toBeTruthy()
+  }
+})
+
+test('continue 带附件契约（2026-11-20）：过期/他人暂存 400；附件真实导入既有工作区',
+     async ({ request }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm-light' })
+  // 两轻轮构造：首轮「只输出 ok」拿到 OC 会话（continue 模式的前提——
+  // 未跑过的子任务没有 opencode_session_id，continue 会退化成 fresh 跑）；
+  // 续跑轮带附件后同样轻量收敛。附件导入发生在 continue 轮 send 之前，
+  // 用 /files 实扫 + 消息指位提示证明端到端；400 探针零消耗。
+  const staged = await stagingUpload(request, `cont-${Date.now()}`, [
+    { name: 'in.txt', body: '首轮输入' },
+  ])
+  const created = await openApi(request, KEY, 'POST', '/v1/ai-batches', {
+    name: tag('cont-files'),
+    prompt: '请只输出一行 ok 即完成，不要做其他事。',
+    files: staged,
+  })
+  expect(created.status).toBe(201)
+  const bid = created.json.batchId as string
+  try {
+    // 首轮完成（children 是对外契约的子任务结构）
+    await waitFor(async () => {
+      const r = await openApi(request, KEY, 'GET', `/v1/ai-batches/${bid}`)
+      return r.json?.children?.[0]?.status === 'completed' ? r.json : null
+    }, { timeoutMs: 300_000, intervalMs: 3000 })
+
+    // 400 契约面（files 校验先于终态校验，子会话保持 completed 不被触碰）：
+    // ① 过期形态——同 owner 同 uploadSession、文件名不存在（24h 清扫等价形）
+    const realPath = String(staged[0].path)
+    const expiredPath = realPath.replace(/[^/]+$/, 'nonexistent.csv')
+    const expired = await openApi(request, KEY, 'POST',
+      `/v1/ai-batches/${bid}/sessions/0/continue`, {
+        prompt: '续跑',
+        files: [{ name: 'nonexistent.csv', path: expiredPath }],
+      })
+    expect(expired.status).toBe(400)
+    // ② 他人暂存路径——owner 圈层拒绝
+    const foreign = await openApi(request, KEY, 'POST',
+      `/v1/ai-batches/${bid}/sessions/0/continue`, {
+        prompt: '续跑',
+        files: [{ name: 'x.csv', path: 'batch-staging/someone-else/us/x.csv' }],
+      })
+    expect(foreign.status).toBe(400)
+    const still = await openApi(request, KEY, 'GET', `/v1/ai-batches/${bid}`)
+    expect(still.json?.children?.[0]?.status).toBe('completed')
+
+    // 带附件续跑 202 → 轻量收敛；附件在 send 前已复制进既有工作区
+    // uploads/（/files 实扫 = 导入证明），指位提示随用户消息落库
+    const extra = await stagingUpload(request, `cont-extra-${Date.now()}`, [
+      { name: '增量.txt', body: '续跑附件 MARK-CONT' },
+    ])
+    const cont = await openApi(request, KEY, 'POST',
+      `/v1/ai-batches/${bid}/sessions/0/continue`, {
+        prompt: '请只输出一行 ok 即完成，不要读取附件内容。',
+        files: extra,
+      })
+    expect(cont.status).toBe(202)
+    expect(cont.json?.status).toBe('running')
+    await waitFor(async () => {
+      const r = await openApi(request, KEY, 'GET', `/v1/ai-batches/${bid}`)
+      return BATCH_TERMINAL.includes(r.json?.status) ? r.json : null
+    }, { timeoutMs: 300_000, intervalMs: 3000 })
+    expect((still.json?.children?.[0]?.status) ?? '').not.toBe('')
+    const files = await openApi(request, KEY, 'GET',
+      `/v1/ai-batches/${bid}/sessions/0/files`)
+    expect(files.status).toBe(200)
+    expect(JSON.stringify(files.json)).toContain('增量.txt')
+    const msgs = await openApi(request, KEY, 'GET',
+      `/v1/ai-batches/${bid}/sessions/0/messages`)
+    expect(JSON.stringify(msgs.json?.messages ?? [])).toContain('uploads/增量.txt')
+  } finally {
+    await openApi(request, KEY, 'DELETE', `/v1/ai-batches/${bid}`)
   }
 })
 

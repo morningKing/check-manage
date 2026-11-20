@@ -276,6 +276,21 @@ def test_continue_batch_session():
     assert client.continue_batch_session("b1", "1", "补充一下")["status"] == "running"
 
 
+def test_continue_batch_session_with_files():
+    """2026-11-20 继续对话带附件：files 走 /uploads 返回的暂存句柄原样透传。"""
+    staged = [{"name": "增量.csv", "path": "batch-staging/u/up/增量.csv"}]
+
+    def fake_request(method, url, **kwargs):
+        assert url.endswith("/ai-batches/b1/sessions/1/continue")
+        assert kwargs["json"] == {"prompt": "结合新附件再看一遍", "files": staged}
+        return FakeResponse(202, {"batchId": "b1", "status": "running"})
+
+    client, _ = make_client(fake_request)
+    body = client.continue_batch_session(
+        "b1", "1", "结合新附件再看一遍", files=staged)
+    assert body["status"] == "running"
+
+
 def test_reexecute_batch_session():
     def fake_request(method, url, **kwargs):
         assert url.endswith("/ai-batches/b1/sessions/1/reexecute")

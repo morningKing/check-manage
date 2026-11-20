@@ -790,6 +790,120 @@ def test_run_one_continue_mode_recovers_stale_session(user_id, db_conn, monkeypa
         assert oc_id == 'oc-recovered'
 
 
+def _seed_continue_child_with_files(db_conn, user_id, ws, files):
+    """把批子会话摆进 continue 轮起点：终态后 continue_child 语义的手工种子
+    （oc 会话已存在、工作区已存在、continue_prompt/continue_files 已置）。"""
+    from psycopg2.extras import Json
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ai_chat_sessions SET status='pending', "
+            "  opencode_session_id='oc-cont', workspace_path=%s, "
+            "  continue_prompt='结合附件继续', continue_files=%s WHERE id=%s",
+            (ws, Json(files) if files else None, sids[0]),
+        )
+    db_conn.commit()
+    return bid, sids[0]
+
+
+def test_run_one_continue_mode_imports_attachments(user_id, db_conn,
+                                                    monkeypatch, tmp_path):
+    """continue 轮带附件：暂存文件复制进既有工作区 uploads/，prompt 前置
+    指位提示（区分于首轮的「本任务的输入文件」措辞），消费后 continue_files
+    与 continue_prompt 一同清空。"""
+    from psycopg2.extras import Json
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    staging = root / 'batch-staging' / user_id / 'upload-c'
+    staging.mkdir(parents=True)
+    (staging / '增量.csv').write_text('42,增量', encoding='utf-8')
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    ws = tmp_path / 'ws-cont'
+    ws.mkdir()
+    files = [{'name': '增量.csv',
+              'path': f'batch-staging/{user_id}/upload-c/增量.csv'}]
+    bid, sid = _seed_continue_child_with_files(db_conn, user_id, str(ws), files)
+
+    fake_oc = MagicMock()
+    send_calls = []
+
+    def _send(oc_sid, content, **kw):
+        send_calls.append((oc_sid, content))
+        return {'id': 'msg-1'}
+    fake_oc.send_message.side_effect = _send
+    fake_oc.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'done'}]}
+    ]
+    fake_oc.get_messages.return_value = []
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr(eng, 'render_history_block', lambda *a, **kw: '')
+
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    assert claimed[0].get('continue_files') == files  # sanity: 列随 RETURNING s.* 可见
+    w._run_one(claimed[0])
+
+    # 附件真的进了既有工作区（不是新建工作区）
+    imported = ws / 'uploads' / '增量.csv'
+    assert imported.exists()
+    assert imported.read_text(encoding='utf-8') == '42,增量'
+    # prompt 带指位提示且保留原文
+    sent = send_calls[0][1]
+    assert 'uploads/增量.csv' in sent
+    assert '本轮' in sent
+    assert sent.rstrip().endswith('结合附件继续')
+    # 消费后清空（防重发语义与 continue_prompt 对齐）
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, continue_prompt, continue_files "
+                    "FROM ai_chat_sessions WHERE id = %s", (sid,))
+        status, cp, cf = cur.fetchone()
+    assert status == 'completed'
+    assert cp is None
+    assert cf is None
+
+
+def test_run_one_continue_mode_missing_attachment_marks_failed(user_id,
+                                                               db_conn,
+                                                               monkeypatch,
+                                                               tmp_path):
+    """暂存附件在 24h TTL 清扫后消失：continue 轮落 failed 且错误信息指明
+    附件过期需重新上传——绝不静默发出无附件的 prompt（与首跑 _prepare_workspace
+    的 FileNotFoundError 语义对齐）。"""
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    root.mkdir(parents=True)
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    ws = tmp_path / 'ws-cont2'
+    ws.mkdir()
+    files = [{'name': 'gone.csv',
+              'path': f'batch-staging/{user_id}/swept/gone.csv'}]
+    bid, sid = _seed_continue_child_with_files(db_conn, user_id, str(ws), files)
+
+    fake_oc = MagicMock()
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr(eng, 'render_history_block', lambda *a, **kw: '')
+
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    w._run_one(claimed[0])
+
+    fake_oc.send_message.assert_not_called()
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, error_message FROM ai_chat_sessions "
+                    "WHERE id = %s", (sid,))
+        status, err_msg = cur.fetchone()
+    assert status == 'failed'
+    assert '附件' in (err_msg or '')
+    assert '重新上传' in (err_msg or '')
+
+
 def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_conn, monkeypatch, tmp_path):
     """恢复本身也失败（新 session 建出来了，但重发也炸了）：网络类失败先自动
     重新排队（retry_count+1）；预算用尽后再跑，恢复失败落 failed，错误信息

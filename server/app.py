@@ -773,6 +773,19 @@ try:
 except Exception as _e:
     logging.warning('session permission_mode migration on boot failed: %s', _e)
 
+# 继续对话附件列（2026-11-20 open API continue files）。幂等加列；新迁移必须
+# 在此显式注册（init_db 自动扫描只覆盖全新库，见护栏测试）。
+try:
+    import importlib.util as _ilu_cf
+    _mp_cf = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'migrations', '2026_11_20_batch_continue_files.py')
+    _spec_cf = _ilu_cf.spec_from_file_location('_batch_continue_files_boot', _mp_cf)
+    _m_cf = _ilu_cf.module_from_spec(_spec_cf)
+    _spec_cf.loader.exec_module(_m_cf)
+    _m_cf.run()
+except Exception as _e:
+    logging.warning('batch continue_files migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills

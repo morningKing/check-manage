@@ -13,6 +13,9 @@
  *  用例 4（新增）gate-failed 子任务参与 retry-failed：必败 verifier rubric
  *    （引用永不出现的内容）构造门禁拦截，重排后第二轮门禁再次拦截。
  *  用例 5（新增）continue 通道：终态子会话续跑 202、新消息落库且含 47。
+ *  用例 6（新增，2026-11-20）open API continue 带附件：X-API-Key 全链路
+ *    （/uploads 暂存 → /continue files → 附件导入 uploads/ → 输出引用附件
+ *    内容）；纯文本续跑与带附件续跑各一轮真实 LLM。
  *
  * 相对 brief 草稿的修正（已逐一对照服务端实现/实测核实）：
  *  - 用例 3 PATCH agent 由 'general' 改 'build'：本部署 OpenCode 实测
@@ -38,6 +41,7 @@
  * - 用例 3：@llm —— 2 次真实子任务轮（reexecute + retry-failed 各一）；
  * - 用例 4：@llm —— 子任务轮 + 判官轮 ×2（初跑 + 重排）；
  * - 用例 5：@llm —— sleep 轮 + 续跑轮，2 次轻量消耗。
+ * - 用例 6：@llm —— open API 首轮 + 纯文本续跑轮 + 带附件续跑轮，3 次真实消耗。
  *
  * 断言直连后端 3002（理由见 batch-helpers.ts 头注释）。
  */
@@ -49,6 +53,7 @@ import {
   messageCount, uploadStaging, waitBatchTerminal, waitFor, type CreateBatchBody,
 } from './batch-helpers'
 import { adminTokenCached, failFastBatch, sleepBatch, tag } from './toolbox'
+import { createApiKey, deleteApiKey, openApi, stagingUpload } from '../helpers'
 
 // 迁移两源 spec 的较大者（ai-reexecute 1_200_000；retry-failed 600_000 被覆盖，
 // 其内部等待均自带 180s deadline，语义不变）。新用例用 test() 第三参显式给时限。
@@ -308,3 +313,72 @@ test('continue 通道：终态子会话续跑 202 且历史上下文保留（确
     await cleanupBatch(tk, bid)
   }
 }, 300_000)
+
+test('open API continue 带附件：暂存→files→导入 uploads/→输出引用附件内容（2026-11-20）',
+     async ({ request }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm' })
+  // 独立 X-API-Key 全链路（open API 建批的 api_key_id 归属使内部 continue
+  // 通道摸不到这个批，反之亦然——续跑必须走 open API）。
+  const keyTag = `contfiles-${process.pid}-${Date.now()}`
+  const key = await createApiKey(request, keyTag)
+  try {
+    // 首轮：默认 agent 真实跑，确定性回声 prompt，快速收敛
+    const staged = await stagingUpload(request, `cf-${Date.now()}`, [
+      { name: 'in.txt', body: '首轮输入 E2E-CONT-FILES' },
+    ])
+    const created = await openApi(request, key, 'POST', '/v1/ai-batches', {
+      name: tag('cont-files'),
+      prompt: '请只输出一行 ok 即完成，不要做其他事。',
+      files: staged,
+    })
+    expect(created.status).toBe(201)
+    const bid = created.json.batchId as string
+    try {
+      await waitFor(async () => {
+        const r = await openApi(request, key, 'GET', `/v1/ai-batches/${bid}`)
+        return ['completed', 'partial', 'failed'].includes(r.json?.status)
+          ? r.json : null
+      }, 300_000, '首轮完成', 3000)
+      // open API create 响应不含会话明细（只有 batchId/status/total）——
+      // childId 用 batch_seq 数字形（_resolve_child 的第一优先匹配）
+      const childId = '0'
+
+      // 纯文本续跑（兼容面）：不带 files 的旧形状仍然 202
+      const plain = await openApi(request, key, 'POST',
+        `/v1/ai-batches/${bid}/sessions/${childId}/continue`,
+        { prompt: '请只输出一个数字：7' })
+      expect(plain.status).toBe(202)
+      await waitFor(async () => {
+        const r = await openApi(request, key, 'GET', `/v1/ai-batches/${bid}`)
+        return r.json?.children?.[0]?.status === 'completed' ? r.json : null
+      }, 300_000, '纯文本续跑完成', 3000)
+
+      // 带附件续跑：附件哨兵数字唯一（避开首轮/纯文本轮内容），输出必须
+      // 引用它——证明文件真的进了工作区且模型读到了
+      const extra = await stagingUpload(request, `cf-extra-${Date.now()}`, [
+        { name: '增量.txt', body: '续跑附件，内含数字 4153' },
+      ])
+      const withFiles = await openApi(request, key, 'POST',
+        `/v1/ai-batches/${bid}/sessions/${childId}/continue`, {
+          prompt: '本轮附件已放在 uploads/增量.txt，请读取它并只输出其中的数字。',
+          files: extra,
+        })
+      expect(withFiles.status).toBe(202)
+      await waitFor(async () => {
+        const r = await openApi(request, key, 'GET', `/v1/ai-batches/${bid}`)
+        return r.json?.children?.[0]?.status === 'completed' ? r.json : null
+      }, 300_000, '带附件续跑完成', 3000)
+
+      const msgs = await openApi(request, key, 'GET',
+        `/v1/ai-batches/${bid}/sessions/${childId}/messages`)
+      expect(msgs.status).toBe(200)
+      const joined = JSON.stringify(msgs.json?.messages ?? [])
+      expect(joined).toContain('4153')
+      expect(joined).toContain('uploads/增量.txt')  // 指位提示随用户消息落库
+    } finally {
+      await openApi(request, key, 'DELETE', `/v1/ai-batches/${bid}`)
+    }
+  } finally {
+    await deleteApiKey(request, keyTag)
+  }
+}, 600_000)

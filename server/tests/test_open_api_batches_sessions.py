@@ -451,6 +451,130 @@ class TestSessionContinue:
         assert body['status'] == 'running'
         mock_worker.return_value.notify.assert_called_once()
 
+    # ── continue 带附件（files 可选参数，2026-11-20）──────────────────
+
+    @staticmethod
+    def _stage(tmp_path, rel='batch-staging/user-42/up/extra.csv',
+               content=b'1,2,3'):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+        return p
+
+    @contextmanager
+    def _continue_patches(self, mock_conn, detail):
+        """共用 patch 栈：鉴权 + key + 批详情（continue_child 由用例自选）。"""
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('routes.open_api_batches.get_batch_detail', return_value=detail):
+            yield
+
+    def test_202_with_files_passes_files_to_repo(self, client, mock_conn,
+                                                 mock_cursor, tmp_path):
+        """附件走既有 /uploads 暂存契约（{'name','path'}），原样透传给仓储层。"""
+        _auth_passes(mock_cursor)
+        detail = _batch_detail()
+        self._stage(tmp_path)
+        staged = [{'name': 'extra.csv',
+                   'path': 'batch-staging/user-42/up/extra.csv'}]
+        with self._continue_patches(mock_conn, detail), \
+             patch('routes.open_api_batches._workspace_root',
+                   return_value=str(tmp_path)), \
+             patch('utils.batch_repo.continue_child', return_value=detail) as m_cont, \
+             patch('routes.open_api_batches.get_worker') as mock_worker:
+            mock_worker.return_value.notify = MagicMock()
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
+                               headers=HDR,
+                               json={'prompt': '结合新附件再看一遍',
+                                     'files': staged})
+        assert resp.status_code == 202
+        m_cont.assert_called_once()
+        assert m_cont.call_args.kwargs.get('files') == staged
+
+    def test_202_without_files_keeps_repo_call_files_none(self, client,
+                                                          mock_conn,
+                                                          mock_cursor):
+        """向后兼容锁：不带 files 的旧调用，仓储层收到 files=None。"""
+        _auth_passes(mock_cursor)
+        detail = _batch_detail()
+        with self._continue_patches(mock_conn, detail), \
+             patch('utils.batch_repo.continue_child', return_value=detail) as m_cont, \
+             patch('routes.open_api_batches.get_worker') as mock_worker:
+            mock_worker.return_value.notify = MagicMock()
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
+                               headers=HDR, json={'prompt': 'go'})
+        assert resp.status_code == 202
+        assert m_cont.call_args.kwargs.get('files') is None
+
+    def test_400_when_files_empty_list(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        with self._continue_patches(mock_conn, _batch_detail()), \
+             patch('utils.batch_repo.continue_child') as m_cont:
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
+                               headers=HDR,
+                               json={'prompt': 'go', 'files': []})
+        assert resp.status_code == 400
+        m_cont.assert_not_called()
+
+    def test_400_when_files_not_a_list(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        with self._continue_patches(mock_conn, _batch_detail()), \
+             patch('utils.batch_repo.continue_child') as m_cont:
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
+                               headers=HDR,
+                               json={'prompt': 'go', 'files': 'extra.csv'})
+        assert resp.status_code == 400
+        m_cont.assert_not_called()
+
+    def test_400_when_files_over_limit(self, client, mock_conn, mock_cursor):
+        from utils.batch_repo import MAX_FILES_PER_BATCH
+        _auth_passes(mock_cursor)
+        with self._continue_patches(mock_conn, _batch_detail()), \
+             patch('routes.open_api_batches.get_max_files_per_batch',
+                   return_value=MAX_FILES_PER_BATCH), \
+             patch('utils.batch_repo.continue_child') as m_cont:
+            files = [{'name': f'f{i}.pdf', 'path': f'batch-staging/user-42/u/f{i}.pdf'}
+                     for i in range(MAX_FILES_PER_BATCH + 1)]
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
+                               headers=HDR, json={'prompt': 'go', 'files': files})
+        assert resp.status_code == 400
+        assert str(MAX_FILES_PER_BATCH) in resp.get_json()['error']
+        m_cont.assert_not_called()
+
+    def test_400_when_file_foreign_staged_path(self, client, mock_conn,
+                                               mock_cursor, tmp_path):
+        """核心安全断言：不能把别人暂存目录里的文件附进自己的继续对话。"""
+        _auth_passes(mock_cursor)
+        self._stage(tmp_path, rel='batch-staging/someone-else/up/theirs.csv')
+        with self._continue_patches(mock_conn, _batch_detail()), \
+             patch('routes.open_api_batches._workspace_root',
+                   return_value=str(tmp_path)), \
+             patch('utils.batch_repo.continue_child') as m_cont:
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
+                               headers=HDR,
+                               json={'prompt': 'go',
+                                     'files': [{'name': 'theirs.csv',
+                                                'path': 'batch-staging/someone-else/up/theirs.csv'}]})
+        assert resp.status_code == 400
+        m_cont.assert_not_called()
+
+    def test_400_when_staged_file_expired(self, client, mock_conn,
+                                          mock_cursor, tmp_path):
+        """24h TTL 清扫后路径仍合法但文件已不在 → 400 提示重新上传。"""
+        _auth_passes(mock_cursor)
+        with self._continue_patches(mock_conn, _batch_detail()), \
+             patch('routes.open_api_batches._workspace_root',
+                   return_value=str(tmp_path)), \
+             patch('utils.batch_repo.continue_child') as m_cont:
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/continue',
+                               headers=HDR,
+                               json={'prompt': 'go',
+                                     'files': [{'name': 'gone.csv',
+                                                'path': 'batch-staging/user-42/swept/gone.csv'}]})
+        assert resp.status_code == 400
+        assert '重新' in resp.get_json()['error']
+        m_cont.assert_not_called()
+
 
 # ──────────────────────────────────────────────────────────────────
 # _resolve_child helper (tested via HTTP endpoints above, but also
@@ -587,6 +711,89 @@ class TestContinueChild:
         try:
             result = continue_child('wrong-user', bid, sid, 'prompt')
             assert result is None
+        finally:
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            db_conn.commit()
+
+    def test_stores_continue_files_jsonb(self, db_conn):
+        """继续对话带附件：files 以 JSONB 落 continue_files，形态同 input_files。"""
+        import uuid
+        from utils.batch_repo import continue_child
+        uid = '_t_contf_' + uuid.uuid4().hex[:8]
+        bid = '_t_bf_' + uuid.uuid4().hex[:8]
+        sid = '_t_sf_' + uuid.uuid4().hex[:8]
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (id, username, password_hash, role, display_name) "
+                "VALUES (%s, %s, 'x', 'admin', %s) ON CONFLICT DO NOTHING",
+                (uid, uid, uid))
+            cur.execute(
+                "INSERT INTO ai_chat_batches "
+                "(id, user_id, name, prompt, total, status, done) "
+                "VALUES (%s, %s, 't', 'p', 1, 'completed', 1)", (bid, uid))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions "
+                "(id, user_id, status, batch_id, batch_seq, opencode_session_id) "
+                "VALUES (%s, %s, 'completed', %s, 0, 'oc-f')", (sid, uid, bid))
+        db_conn.commit()
+        staged = [{'name': 'a.csv', 'path': 'batch-staging/x/up/a.csv'}]
+        try:
+            continue_child(uid, bid, sid, '带附件续跑', files=staged)
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status, continue_files FROM ai_chat_sessions "
+                    "WHERE id = %s", (sid,))
+                status, cf = cur.fetchone()
+            assert status == 'pending'
+            assert cf == staged
+        finally:
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            db_conn.commit()
+
+    def test_continue_without_files_clears_stale_continue_files(self, db_conn):
+        """生命周期与 continue_prompt 对齐：新一轮 continue 不带文件时，
+        上一轮的 continue_files 残留必须被清 NULL。"""
+        import uuid
+        from utils.batch_repo import continue_child
+        uid = '_t_contg_' + uuid.uuid4().hex[:8]
+        bid = '_t_bg_' + uuid.uuid4().hex[:8]
+        sid = '_t_sg_' + uuid.uuid4().hex[:8]
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (id, username, password_hash, role, display_name) "
+                "VALUES (%s, %s, 'x', 'admin', %s) ON CONFLICT DO NOTHING",
+                (uid, uid, uid))
+            cur.execute(
+                "INSERT INTO ai_chat_batches "
+                "(id, user_id, name, prompt, total, status, done) "
+                "VALUES (%s, %s, 't', 'p', 1, 'completed', 1)", (bid, uid))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions "
+                "(id, user_id, status, batch_id, batch_seq, opencode_session_id) "
+                "VALUES (%s, %s, 'completed', %s, 0, 'oc-g')", (sid, uid, bid))
+        db_conn.commit()
+        staged = [{'name': 'a.csv', 'path': 'batch-staging/x/up/a.csv'}]
+        try:
+            continue_child(uid, bid, sid, '第一轮带附件', files=staged)
+            # 直接把子会话摆回终态，模拟第二轮 continue
+            with db_conn.cursor() as cur:
+                cur.execute("UPDATE ai_chat_sessions SET status='completed' "
+                            "WHERE id = %s", (sid,))
+            db_conn.commit()
+            continue_child(uid, bid, sid, '第二轮纯文本')
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT continue_prompt, continue_files "
+                    "FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cp, cf = cur.fetchone()
+            assert cp == '第二轮纯文本'
+            assert cf is None
         finally:
             with db_conn.cursor() as cur:
                 cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))

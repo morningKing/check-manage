@@ -63,6 +63,15 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS model TEXT;
 -- str|list[str] handling) instead of the single batch_input_file column,
 -- since one session can carry more than one file.
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS input_files JSONB;
+-- File attachments for a "continue" turn on a batch child (POST
+-- /v1/ai-batches/{batchId}/sessions/{childId}/continue body.files). JSONB
+-- array of {"name","path"} — same shape as input_files above, staged via the
+-- same POST /v1/ai-batches/uploads endpoint. batch_engine's continue branch
+-- copies every path into the session's EXISTING workspace uploads/ before
+-- sending the continue prompt, then clears the column together with
+-- continue_prompt (same consume-once semantics). NULL = no attachments this
+-- turn; the plain-text continue path is byte-for-byte unchanged.
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS continue_files JSONB;
 -- Cooperative-cancel flag for the external POST .../cancel endpoints (both
 -- batch children and standalone sessions live in this one table). No CHECK
 -- constraint on `status`, so the worker can write the literal 'cancelled'

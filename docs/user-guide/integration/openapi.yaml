@@ -352,7 +352,7 @@ paths:
       - $ref: '#/components/parameters/ChildId'
     post:
       tags: [ai-batches]
-      summary: 在已终态（completed/failed/cancelled）子会话上继续对话（保留历史）
+      summary: 在已终态（completed/failed/cancelled）子会话上继续对话（保留历史，可带附件）
       requestBody:
         content:
           application/json:
@@ -361,6 +361,17 @@ paths:
               required: [prompt]
               properties:
                 prompt: { type: string, maxLength: 20000 }
+                files:
+                  type: array
+                  description: 本轮附件（可选）。POST /v1/ai-batches/uploads 返回的暂存句柄，24h 有效；执行前复制进子会话工作区 uploads/。省略 = 纯文本续跑
+                  items:
+                    type: object
+                    required: [name, path]
+                    properties:
+                      name: { type: string }
+                      path:
+                        type: string
+                        description: batch-staging/<userId>/<uploadSessionId>/<file> 暂存相对路径
       responses:
         '202':
           description: Accepted

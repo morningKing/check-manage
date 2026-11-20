@@ -1095,13 +1095,25 @@ Content-Type: application/json
 
 ```json
 {
-  "prompt": "请进一步分析风险因素，给出具体的改进建议。"
+  "prompt": "请进一步分析风险因素，给出具体的改进建议。",
+  "files": [
+    { "name": "增量数据.csv", "path": "batch-staging/u-1/a1b2c3d4e5f6/增量数据.csv" }
+  ]
 }
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `prompt` | string | 是 | 追加的提示词，最长 20000 字符 |
+| `files` | array | 否 | 本轮附件，`[{"name","path"}]`，`path` 为 4.1 上传接口返回的暂存路径。省略 = 纯文本续跑（行为与旧版一致） |
+
+**关于 `files`（2026-11-20 新增）**：
+
+- 形态与创建批任务的 `files` 完全一致：先调 `POST /uploads` 暂存（4.1），把返回的 `name`/`path` 原样传进来
+- 执行前服务端把文件**复制**进该子会话**既有工作区**的 `uploads/` 目录，并在提示词前告知 AI 文件位置（AI 会读到 `uploads/<文件名>`）
+- 暂存区保留 24 小时；请求时文件已被清理会返回 400，重新上传后再次调用即可
+- 同名文件会覆盖工作区 `uploads/` 里的旧文件（含首轮输入文件），如需保留请换文件名
+- **接管页 / 内部继续对话接口不支持附件**——`files` 仅 Open API continue 端点提供
 
 **响应 — 202**
 
@@ -1119,26 +1131,32 @@ Content-Type: application/json
 |------|---------|---------|--------|
 | `retry-failed` | 保留（仅 failed 子任务） | **新建** | 原始 prompt |
 | `reexecute` | **删除** | **新建** | 原始 prompt |
-| **`continue`** | **保留** | **复用** | **新 prompt** |
+| **`continue`** | **保留** | **复用** | **新 prompt（可带附件）** |
 
 **追加后发生了什么**：
 
 - 子会话状态从终态回到 `pending`，由后台 worker 异步执行
 - AI 能看到之前的完整对话历史，根据新 prompt 继续工作
-- 新消息追加到已有对话末尾
+- 本轮附件（如传）复制进工作区 `uploads/` 后，新消息追加到已有对话末尾
 - 批任务整体状态会从终态回到 `running`，需要重新轮询
 
 **示例**
 
 ```bash
-# 1) 在已完成的子会话上继续对话
+# 1) 上传本轮附件（可选）
+curl -s -X POST -H "X-API-Key: $API_KEY" \
+  -F "files=@./增量数据.csv" \
+  "http://localhost:8080/api/v1/ai-batches/uploads" | jq
+# → {"files": [{"name": "增量数据.csv", "path": "batch-staging/.../增量数据.csv"}]}
+
+# 2) 在已完成的子会话上继续对话（带附件）
 curl -s -X POST \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "请进一步分析风险因素，给出具体的改进建议。"}' \
+  -d '{"prompt": "请进一步分析风险因素，给出具体的改进建议。", "files": [{"name": "增量数据.csv", "path": "batch-staging/.../增量数据.csv"}]}' \
   "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/continue" | jq
 
-# 2) 轮询等待完成（复用现有 /results 或 /messages 端点）
+# 3) 轮询等待完成（复用现有 /results 或 /messages 端点）
 curl -s -H "X-API-Key: $API_KEY" \
   "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/messages" | jq
 ```
@@ -1147,7 +1165,7 @@ curl -s -H "X-API-Key: $API_KEY" \
 
 | HTTP 状态码 | 触发条件 |
 |-------------|---------|
-| 400 | `prompt` 缺失或超过 20000 字符 |
+| 400 | `prompt` 缺失或超过 20000 字符；`files` 不是非空数组、单次超过单批文件数上限、暂存路径不属于本密钥，或文件已过期/不存在（需重新 `/uploads`） |
 | 404 | 批任务不存在/不属于本密钥，或子会话未找到 |
 | 409 | 子会话不在终态（`pending` / `running`） |
 
@@ -1311,10 +1329,11 @@ curl -s -X POST \
 9. **导入文件大小限制**：导入的文件大小受系统 `data_files` 的限制（单文件 20 MB），超过限制会返回 `TOO_LARGE` 错误。
 10. **`continue` 会让子会话和批任务退出终态**：`continue` 将目标子会话从终态（`completed`/`failed`）拉回 `pending`，批任务整体状态也随之回到 `running`。如果你的集成代码把「进入终态」当作整批完成的信号，`continue` 之后要重新开始轮询。其他已完成的子会话不受影响。
 11. **`continue` 保留历史上下文**：与 `retry-failed`（新建会话、用原始 prompt 重跑）不同，`continue` 复用原有的 AI 会话，AI 能看到之前的完整对话历史。适合「结果基本满意但需要补充」的场景，不适合「结果完全错误需要推倒重来」的场景——后者请用 `retry-failed`。
-12. **`download-all` 基于变更记录**：`/files/download-all` 打包的文件来源是系统自动记录的变更文件（与 `/file-records` 同源），不是工作区的实时扫描。如果 AI 产出的文件没有被 git 追踪到（极少见），可能不会出现在 ZIP 中。此时可用 `/files`（实时扫描）+ `/files/download`（逐个下载）作为备选。
-13. **对话历史有上限**：`/messages` 最多返回 500 条消息（按时间倒序截断后反转为正序）。对于大多数场景足够，超长 agent 运行可能被截断，响应中 `truncated: true` 会告知。
-14. **`PATCH` 是整体替换，不是局部 patch**：省略的字段会被清空为默认值，不是「保持原样」。只传 `agent` 而不重传已经配置好的 `callbackUrl`/`callbackSecret`，会把回调配置一并清空——每次 `PATCH` 都要把想保留的字段一起带上。详见 4.2a。
-15. **完成回调可能不止一次**：`retry-failed`/`append`/`continue` 都可能让一个已终态的批任务重新变回 `running`，之后再次跑到终态时会再收到一次回调。按 `payload.status` 处理，不要假设 `callbackUrl` 对同一个 `batchId` 只会被调用一次。
+12. **`continue` 的附件同样受暂存 24 小时约束**：`files` 里的 `path` 与创建批任务共用同一暂存区（4.1），请求时文件已被清理会 400；即使请求成功，若排队超过 24 小时才轮到执行，本轮会落 `failed`（error 说明附件已过期），重新 `/uploads` + 再次 `continue` 即可。附件会复制进子会话既有工作区的 `uploads/`，同名覆盖旧文件。
+13. **`download-all` 基于变更记录**：`/files/download-all` 打包的文件来源是系统自动记录的变更文件（与 `/file-records` 同源），不是工作区的实时扫描。如果 AI 产出的文件没有被 git 追踪到（极少见），可能不会出现在 ZIP 中。此时可用 `/files`（实时扫描）+ `/files/download`（逐个下载）作为备选。
+14. **对话历史有上限**：`/messages` 最多返回 500 条消息（按时间倒序截断后反转为正序）。对于大多数场景足够，超长 agent 运行可能被截断，响应中 `truncated: true` 会告知。
+15. **`PATCH` 是整体替换，不是局部 patch**：省略的字段会被清空为默认值，不是「保持原样」。只传 `agent` 而不重传已经配置好的 `callbackUrl`/`callbackSecret`，会把回调配置一并清空——每次 `PATCH` 都要把想保留的字段一起带上。详见 4.2a。
+16. **完成回调可能不止一次**：`retry-failed`/`append`/`continue` 都可能让一个已终态的批任务重新变回 `running`，之后再次跑到终态时会再收到一次回调。按 `payload.status` 处理，不要假设 `callbackUrl` 对同一个 `batchId` 只会被调用一次。
 
 ---
 

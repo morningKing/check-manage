@@ -150,6 +150,12 @@ batch = client.create_batch(
 detail = client.get_batch(batch["batchId"])
 if detail["status"] in ("completed", "partial", "failed"):
     results = client.get_batch_results(batch["batchId"])["results"]
+
+# 继续对话（终态子会话追加一轮，保留历史），可带附件（24h 暂存有效）
+extra = client.upload_batch_files(["./增量数据.csv"])
+client.continue_batch_session(
+    batch["batchId"], "1", "结合新附件更新结论。", files=extra["files"],
+)
 ```
 
 **AI 单会话**（一句 prompt 要一个答案，可选带上几个文件——全部读进同一个会话，不像批任务那样按文件拆分）：

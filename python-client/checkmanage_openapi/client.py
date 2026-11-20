@@ -606,13 +606,25 @@ class OpenApiClient:
             Path(dest).write_bytes(content)
         return content
 
-    def continue_batch_session(self, batch_id: str, child_id: str, prompt: str) -> dict:
+    def continue_batch_session(self, batch_id: str, child_id: str, prompt: str,
+                               files: Optional[list] = None) -> dict:
         """在已完成/失败的子会话上追加一轮对话，保留历史上下文（与
-        reexecute_batch_session 不同，不会清空历史/换新会话）。"""
+        reexecute_batch_session 不同，不会清空历史/换新会话）。
+
+        files 可选（2026-11-20）：本轮附件，传 upload_batch_files() 返回的
+        [{'name','path'}] 列表；服务端在执行前把文件复制进子会话工作区的
+        uploads/ 目录。暂存区保留 24 小时，过期会返回 400（重新上传即可）。
+        省略则纯文本续跑，行为与旧版一致。
+
+        返回 {'batchId', 'child': {'name', 'seq'}, 'status': 'running'}。
+        """
+        body = {"prompt": prompt}
+        if files is not None:
+            body["files"] = files
         return self._request(
             "POST",
             f"/ai-batches/{batch_id}/sessions/{child_id}/continue",
-            json_body={"prompt": prompt},
+            json_body=body,
         ).json()
 
     def reexecute_batch_session(self, batch_id: str, child_id: str) -> dict:

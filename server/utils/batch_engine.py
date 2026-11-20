@@ -276,7 +276,7 @@ class _OpenCodeFacade:
         _persist_conversation to store the FULL conversation incl. tool parts."""
         return self._client(oc_session_id).get_messages(oc_session_id, directory=directory) or []
 
-    def list_agents(self, directory: str = '') -> list:
+    def list_agents(self, directory: str = '', oc_session_id: str = '') -> list:
         """OpenCode agents available in `directory`'s scope (global + project),
         each {'name','mode',...}. Used to validate a batch's chosen agent."""
         return self._client(oc_session_id).list_agents(directory=directory) or []
@@ -287,11 +287,18 @@ class _OpenCodeFacade:
         routes/ai_chat.py's interactive abort endpoint."""
         self._client(oc_session_id).abort_session(oc_session_id, directory=directory)
 
-    def list_questions(self, directory: str = '') -> list:
+    def list_questions(self, directory: str = '', oc_session_id: str = '') -> list:
         """Pending QuestionRequest objects (OpenCode's interactive question
         tool) scoped to `directory` — used by the batch worker to auto-reject
         questions the unattended run can never get answered."""
         return self._client(oc_session_id).list_questions(directory=directory)
+
+    def list_permissions(self, directory: str = '', oc_session_id: str = '') -> list:
+        """Pending permission requests scoped to `directory` (same scoping
+        rules as list_questions — the un-scoped list is invisible). Engine
+        callers (2026-11-20 前就存在的两处 except 包裹调用) 用它做无人值守
+        权限询问的自动 reject 与 pendingPermissions 角标。"""
+        return self._client(oc_session_id).list_permissions(directory=directory)
 
     def reject_question(self, request_id: str, directory: str = '',
                         oc_session_id: str = '') -> None:
@@ -424,12 +431,25 @@ def _prepare_workspace(user_id: str, session_id: str,
     if not staged_file_path:
         return ws
     paths = staged_file_path if isinstance(staged_file_path, list) else [staged_file_path]
+    _import_staged_files(ws, paths)
+    return ws
+
+
+def _import_staged_files(ws: str, paths: list) -> None:
+    """Copy staged input files into <ws>/uploads/ (single source for the
+    fresh-run import in _prepare_workspace AND the continue-turn attachment
+    import in _run_one — 2026-11-20; keep their semantics byte-identical).
+
+    Staged paths are stored relative to the batch root; resolve across both
+    the unified and the legacy workspace root. Raises FileNotFoundError if a
+    staged input is gone (staging swept after its 24h TTL) — callers turn
+    that into a failed child, never a silent no-attachment run.
+    """
     up = Path(ws) / 'uploads'
     up.mkdir(parents=True, exist_ok=True)
     for rel in paths:
-        # Staged paths are stored relative to the batch root. Sessions staged
-        # before the root unification still point into the legacy tree, so
-        # resolve across both — no data migration needed.
+        # Sessions staged before the root unification still point into the
+        # legacy tree, so resolve across both — no data migration needed.
         src = Path(resolve_batch_data_path(
             rel, roots=(_workspace_root(), legacy_batch_workspace_root())))
         # On Windows, copying a just-created staging dir can intermittently raise
@@ -450,7 +470,6 @@ def _prepare_workspace(user_id: str, session_id: str,
                 time.sleep(0.3)
         if last_err is not None:
             raise last_err
-    return ws
 
 
 def _recompute_batch_status(batch_id: str, anchor_sid: str | None = None) -> None:
@@ -1492,6 +1511,22 @@ class BatchWorker:
         return (f'本任务的输入文件已放在工作区 uploads/{name}，'
                 f'请完成下面的要求：\n\n{prompt}')
 
+    @staticmethod
+    def _with_continue_files_hint(prompt: str, continue_files) -> str:
+        """Prepend a hint telling the agent where THIS turn's attachments are
+        (continue 轮附件，2026-11-20). 措辞区分于首轮的「本任务的输入文件」：
+        这是追加轮，模型需要知道新文件与历史轮次无关。多文件不点名任何一个
+        （与 _with_input_hint 的多文件分支同理）。空/None 原样返回。"""
+        files = continue_files or []
+        if not files:
+            return prompt
+        if len(files) == 1:
+            name = os.path.basename(str(files[0].get('path', '')).replace('\\', '/'))
+            return (f'本轮继续对话的附件已放在工作区 uploads/{name}，'
+                    f'请结合它完成下面的要求：\n\n{prompt}')
+        return (f'本轮继续对话的附件已放在工作区 uploads/ 目录下'
+                f'（共 {len(files)} 个），请结合它们完成下面的要求：\n\n{prompt}')
+
     def _run_one(self, session_row):
         sid = session_row['id']
         user_id = session_row['user_id']
@@ -1571,11 +1606,19 @@ class BatchWorker:
         user_prompt_for_memory = None
         if is_continue:
             prompt = session_row['continue_prompt']
+            continue_files = session_row.get('continue_files') or []
+            if continue_files:
+                # 继续轮附件（2026-11-20）：指位提示与首轮 _with_input_hint
+                # 同时序生效——落库的用户消息与发给模型的 prompt 都带提示。
+                prompt = self._with_continue_files_hint(prompt, continue_files)
             turn_label = prompt[:80]
-            # Clear continue_prompt immediately so it's not re-sent on retry
+            # Clear continue_prompt/continue_files immediately so they're not
+            # re-sent on retry (consumed together — same lifecycle since
+            # continue_files joined continue_prompt in 2026-11-20).
             with get_db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE ai_chat_sessions SET continue_prompt = NULL "
+                    cur.execute("UPDATE ai_chat_sessions SET continue_prompt = NULL, "
+                                "continue_files = NULL "
                                 "WHERE id = %s", (sid,))
                 conn.commit()
         else:
@@ -1622,6 +1665,27 @@ class BatchWorker:
                         elapsed=time.monotonic() - turn_start,
                         error='继续对话失败：工作区已不存在')
                     return
+                # 继续轮附件（2026-11-20）：暂存文件复制进既有工作区 uploads/。
+                # FileNotFoundError（24h TTL 清扫后暂存已删）必须落 failed 而
+                # 不能静默续跑——提示语已告诉模型去读 uploads/，空跑会"成功"
+                # 地产出垃圾。与首跑 _prepare_workspace 的 FileNotFoundError
+                # 语义对齐（见其 docstring）。
+                if continue_files:
+                    try:
+                        _import_staged_files(ws, [f['path'] for f in continue_files])
+                    except (FileNotFoundError, PermissionError, OSError) as e:
+                        err_text = ('继续对话失败：附件已过期或不存在'
+                                    '（暂存区保留 24 小时），请重新上传后再次继续')
+                        self._mark_failed(sid, batch_id,
+                                          error=err_text,
+                                          generation=generation,
+                                          fencing_token=fencing_token)
+                        self._notify_scan(session_row, None, ok=False)
+                        self._notify_child_done(
+                            session_row, False,
+                            elapsed=time.monotonic() - turn_start,
+                            error=err_text)
+                        return
                 oc_session_id = session_row['opencode_session_id']
             else:
                 if session_row.get('input_files'):

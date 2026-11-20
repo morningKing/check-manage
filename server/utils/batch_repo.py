@@ -933,7 +933,8 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
 
 
 def continue_child(user_id: str, batch_id: str, session_id: str,
-                   prompt: str, repark: bool = False) -> dict | None:
+                   prompt: str, repark: bool = False,
+                   files: list[dict] | None = None) -> dict | None:
     """Continue a TERMINAL (completed/failed) batch child with a new prompt,
     preserving conversation history and reusing the existing OpenCode session.
 
@@ -943,6 +944,12 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
     权交还外部系统。repark=False 时 paused 子任务被拒绝：接管中的会话只能
     经接管通道续跑。
 
+    `files`（2026-11-20 继续对话带附件）：本轮的暂存附件列表，形态同
+    input_files（[{"name","path"}]，path 为 /uploads 暂存区相对路径）。
+    与 continue_prompt 同生命周期——落 continue_files JSONB，worker 在
+    continue 轮复制进既有工作区 uploads/ 后与 prompt 一同清空。传 None 或
+    省略 = 纯文本续跑，且顺带清掉上一轮残留的 continue_files。
+
     Unlike reexecute_child: does NOT delete messages, does NOT null out
     opencode_session_id. Sets continue_prompt so the worker can pick it up
     and send the new prompt to the existing OpenCode session.
@@ -951,6 +958,7 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
     Raises ValueError if child is not in a terminal state (or paused without
     repark=True).
     """
+    continue_files_param = Json(files) if files else None
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -979,11 +987,12 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
                     raise ValueError('paused 子任务须经接管通道（repark）续跑')
                 cur.execute(
                     "UPDATE ai_chat_sessions SET status='pending', "
-                    "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
-                    "  pause_requested=false, continue_repark=true, "
+                    "  continue_prompt=%s, continue_files=%s, error_message=NULL, "
+                    "  cancel_requested=false, pause_requested=false, "
+                    "  continue_repark=true, "
                     "  execution_generation = execution_generation + 1 "
                     "WHERE id = %s AND status = 'paused'",
-                    (prompt, session_id))
+                    (prompt, continue_files_param, session_id))
                 if cur.rowcount != 1:
                     conn.rollback()
                     raise ValueError('子任务状态已变化，请刷新后重试')
@@ -992,11 +1001,12 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
                     raise ValueError('only completed/failed/cancelled/needs_review children can be continued')
                 cur.execute(
                     "UPDATE ai_chat_sessions SET status='pending', "
-                    "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
-                    "  pause_requested=false, continue_repark=false, "
+                    "  continue_prompt=%s, continue_files=%s, error_message=NULL, "
+                    "  cancel_requested=false, pause_requested=false, "
+                    "  continue_repark=false, "
                     "  execution_generation = execution_generation + 1 "
                     "WHERE id = %s AND status = %s",
-                    (prompt, session_id, prev_status),
+                    (prompt, continue_files_param, session_id, prev_status),
                 )
                 if cur.rowcount != 1:
                     conn.rollback()

@@ -48,6 +48,46 @@ def test_facade_create_session_passes_kind():
     _c.assert_called_once_with(kind='v2')
 
 
+def test_facade_list_agents_wiring_not_broken():
+    """OC2 合并回归护栏（2026-11-20）：合并曾把 `self._client()` 改成
+    `self._client(oc_session_id)` 却漏加形参 → list_agents 每次调用必
+    NameError，被 _check_agent 的 except 吞掉 → 批任务 agent 校验静默
+    fail-open（bogus agent 直达 OC）。本测试直接走真 facade（只桩 _client），
+    形参丢失会在此暴露，而打在 facade 方法上的旧 mock 测不出来。"""
+    facade = eng._OpenCodeFacade()
+    c = MagicMock()
+    c.list_agents.return_value = [{'name': 'build', 'mode': 'primary'}]
+    with patch.object(facade, '_client', return_value=c):
+        assert facade.list_agents(directory='/ws') == [
+            {'name': 'build', 'mode': 'primary'}]
+    c.list_agents.assert_called_once_with(directory='/ws')
+
+
+def test_facade_list_questions_wiring_not_broken():
+    """同上：list_questions 丢形参 → pendingQuestions 恒 0（except: pass
+    静默），无人值守提问自动拒绝的入口失明。"""
+    facade = eng._OpenCodeFacade()
+    c = MagicMock()
+    q = {'id': 'q1', 'sessionID': 'ses_1'}
+    c.list_questions.return_value = [q]
+    with patch.object(facade, '_client', return_value=c):
+        assert facade.list_questions(directory='/ws') == [q]
+    c.list_questions.assert_called_once_with(directory='/ws')
+
+
+def test_facade_list_permissions_forwarding_exists():
+    """facade 缺 list_permissions 转发（引擎 3287/4433 两处调用意图明确、
+    底层 V1/V2 客户端都有该方法）→ except 静默吞掉：pendingPermissions
+    恒 0、无人值守权限询问自动 reject 整条链路死路。补转发后打通。"""
+    facade = eng._OpenCodeFacade()
+    c = MagicMock()
+    p = {'id': 'p1', 'sessionID': 'ses_1'}
+    c.list_permissions.return_value = [p]
+    with patch.object(facade, '_client', return_value=c):
+        assert facade.list_permissions(directory='/ws') == [p]
+    c.list_permissions.assert_called_once_with(directory='/ws')
+
+
 def test_facade_reject_question_v2_branch_passes_owning_sid():
     facade = eng._OpenCodeFacade()
     v2c = MagicMock()

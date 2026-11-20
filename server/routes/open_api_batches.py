@@ -917,7 +917,13 @@ def session_files_download_all(batch_id, child_id):
 @api_key_required
 @require_bound_key
 def session_continue(batch_id, child_id):
-    """在已完成/失败/已取消的子会话上追加一轮对话，保留历史上下文。"""
+    """在已完成/失败/已取消的子会话上追加一轮对话，保留历史上下文。
+
+    `files` 可选（2026-11-20）：本轮附件，[{"name","path"}]，path 为
+    POST /uploads 返回的暂存区相对路径（24h TTL）。worker 在本轮执行前把
+    暂存文件复制进子会话既有工作区的 uploads/。省略 = 纯文本续跑，行为与
+    旧版逐字节一致。
+    """
     from utils.batch_repo import continue_child
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
@@ -932,13 +938,29 @@ def session_continue(batch_id, child_id):
         return err('prompt 必填', INVALID_ARGUMENT, 400)
     if len(prompt) > MAX_PROMPT_CHARS:
         return err(f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限', INVALID_ARGUMENT, 400)
+    files = None
+    if 'files' in body and body.get('files') is not None:
+        files = body.get('files')
+        if not isinstance(files, list) or not files:
+            return err('files 必须是非空数组', INVALID_ARGUMENT, 400)
+        max_files = get_max_files_per_batch()
+        if len(files) > max_files:
+            return err(f'单次最多附加 {max_files} 个文件', INVALID_ARGUMENT, 400)
+        # 与 create/append 同一校验：name+path 形态、暂存路径归属当前 key
+        # 的 owner、文件真实存在（24h TTL 清扫后过期会在这里被拦下）。
+        file_err = _validate_files(files, key['ownerUserId'])
+        if file_err:
+            return file_err
     try:
-        continue_child(key['ownerUserId'], batch_id, child['id'], prompt)
+        continue_child(key['ownerUserId'], batch_id, child['id'], prompt,
+                       files=files)
     except ValueError as e:
         return err(str(e), CONFLICT, 409)
     get_worker().notify()
+    _attach_note = f'，附 {len(files)} 个附件' if files else ''
     log_api_operation('update', 'ai_chat_batch', batch_id, d['batch'].get('name'),
-                      f'通过 API Key 继续批任务「{d["batch"].get("name")}」子会话「{_child_name(child)}」')
+                      f'通过 API Key 继续批任务「{d["batch"].get("name")}」'
+                      f'子会话「{_child_name(child)}」{_attach_note}')
     return jsonify({
         'batchId': batch_id,
         'child': {'name': _child_name(child), 'seq': child.get('batch_seq')},
