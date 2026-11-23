@@ -37,10 +37,11 @@ test('旧路径 /admin/ai-skillopt 重定向到单页化的技能拟合优化（
   await expect(page.locator('.skillopt__title')).toContainText('技能优化')
 })
 
-test('AI 能力组侧边栏收敛为 4 项', async ({ page }) => {
+test('AI 能力组侧边栏收敛为 5 项（记忆管理 2026-11-23 加入）', async ({ page }) => {
   await gotoWithAuth(page, '/admin/ai-execution')
   const group = page.locator('.settings-menu__group', { hasText: 'AI 能力' })
   await expect(group.locator('a', { hasText: 'AI 配置' })).toHaveCount(1)
+  await expect(group.locator('a', { hasText: '记忆管理' })).toHaveCount(1)
   await expect(group.locator('a', { hasText: 'AI 定时巡检' })).toHaveCount(1)
   await expect(group.locator('a', { hasText: '技能拟合优化' })).toHaveCount(1)
   await expect(group.locator('a', { hasText: 'AI 技能' })).toHaveCount(0)

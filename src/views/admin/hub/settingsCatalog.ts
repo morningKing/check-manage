@@ -78,6 +78,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
         { id: 'runtime', label: '运行时', perm: ['admin.ai_runtime_read', 'admin.ai_settings'],
           component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
       ] },
+    { id: 'ai-memory', label: '记忆管理', perm: 'admin.ai_settings', icon: 'Collection',
+      component: () => import('@/views/admin/AiMemoryAdmin.vue') },
     { id: 'ai-scan', label: 'AI 定时巡检', perm: 'admin.ai_scan', icon: 'Timer',
       component: () => import('@/views/admin/AiScanTaskManager.vue') },
     { id: 'ai-skills', label: '技能拟合优化', perm: 'admin.ai_chat_admin', icon: 'MagicStick',

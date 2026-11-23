@@ -86,6 +86,9 @@ def get_settings():
 def put_settings():
     """更新 AI 配置"""
     body = request.get_json(force=True)
+    # current 提前取：记忆字段（2026-11-23 迁往「记忆管理」页）不再出现在
+    # 本页载荷里，缺省一律回填当前值——保存模型页绝不能误重置记忆配置。
+    current = get_ai_settings()
 
     enabled = body.get('enabled', False)
     api_key = body.get('apiKey', '').strip()
@@ -103,8 +106,10 @@ def put_settings():
     if not isinstance(max_tokens, int) or max_tokens < 1:
         return jsonify({'error': 'max_tokens 必须为正整数'}), 400
 
-    mem0_enabled = bool(body.get('mem0Enabled', False))
-    embedding_model = (body.get('embeddingModel') or 'text-embedding-v3').strip()
+    mem0_enabled = bool(body.get('mem0Enabled', current.get('mem0Enabled', False)))
+    embedding_model = (body.get('embeddingModel')
+                       or current.get('embeddingModel')
+                       or 'text-embedding-v3').strip()
     default_chat_model = (body.get('defaultChatModel') or '').strip()
 
     max_batch_sessions = body.get('maxBatchSessions', 50)
@@ -113,18 +118,20 @@ def put_settings():
 
     # 嵌入模型提供方（2026-09-29）：api=原 API 端点 / ollama=本地 Ollama 服务。
     # 仅影响 mem0 记忆的 embedder；摘要 LLM 始终走原 API 端点。
-    embedding_provider = (body.get('embeddingProvider') or 'api').strip()
+    embedding_provider = (body.get('embeddingProvider')
+                          or current.get('embeddingProvider') or 'api').strip()
     if embedding_provider not in ('api', 'ollama'):
         return jsonify({'error': "embeddingProvider 只能是 'api' 或 'ollama'"}), 400
-    embedding_ollama_url = (body.get('embeddingOllamaUrl') or 'http://localhost:11434').strip()
+    embedding_ollama_url = (body.get('embeddingOllamaUrl')
+                            or current.get('embeddingOllamaUrl')
+                            or 'http://localhost:11434').strip()
     if embedding_provider == 'ollama' and not embedding_ollama_url:
         return jsonify({'error': 'Ollama 服务地址不能为空'}), 400
-    embedding_dims = body.get('embeddingDims', 1024)
+    embedding_dims = body.get('embeddingDims', current.get('embeddingDims', 1024))
     if not isinstance(embedding_dims, int) or isinstance(embedding_dims, bool)             or not (64 <= embedding_dims <= 4096):
         return jsonify({'error': '向量维度必须是 64-4096 的整数'}), 400
 
     # If api_key is all-masked (unchanged from frontend), keep the old value
-    current = get_ai_settings()
     if api_key and set(api_key[:-4]) == {'*'}:
         api_key = current['apiKey']
 
