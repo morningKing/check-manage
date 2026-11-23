@@ -36,12 +36,15 @@ def takeover_ids(db_conn):
 
 
 def test_create_and_resolve_roundtrip(db_conn, takeover_ids):
-    token, expires = takeover_repo.create_takeover_token(
+    token, expires, token_id = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1')
     assert token.startswith('tk_')
+    # tokenId（2026-11-23 补齐吊销链路）：签发即回传，调用方无须查库即可吊销
+    assert token_id.startswith('tkt_')
     row = takeover_repo.resolve_takeover_token(token)
     assert row and row['session_id'] == takeover_ids['sid']
     assert row['batch_name'] == '接管E2E' and row['child_status'] == 'paused'
+    assert row['token_id'] == token_id
     # 库中只存哈希
     with db_conn.cursor() as cur:
         cur.execute("SELECT token_hash FROM batch_takeover_tokens WHERE session_id=%s",
@@ -51,7 +54,7 @@ def test_create_and_resolve_roundtrip(db_conn, takeover_ids):
 
 
 def test_expired_or_revoked_or_bogus_token_returns_none(db_conn, takeover_ids):
-    token, _ = takeover_repo.create_takeover_token(
+    token, _, _ = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1')
     with db_conn.cursor() as cur:  # 手动改过期
         cur.execute("UPDATE batch_takeover_tokens SET expires_at = NOW() - interval '1 minute' "
@@ -59,10 +62,10 @@ def test_expired_or_revoked_or_bogus_token_returns_none(db_conn, takeover_ids):
     db_conn.commit()
     assert takeover_repo.resolve_takeover_token(token) is None
 
-    # 吊销：先 resolve 拿 token_id，再按 id 吊销（三元组匹配才生效）
-    token2, _ = takeover_repo.create_takeover_token(
+    # 吊销：签发回传的 token_id 直接吊销（三元组匹配才生效），不再查库
+    token2, _, token2_id = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1')
-    token_id = takeover_repo.resolve_takeover_token(token2)['token_id']
+    token_id = token2_id
     # 他人三元组吊销不命中
     assert takeover_repo.revoke_takeover_token('other-user', takeover_ids['bid'],
                                                takeover_ids['sid'], token_id) is False
@@ -79,7 +82,7 @@ def test_expired_or_revoked_or_bogus_token_returns_none(db_conn, takeover_ids):
 
 
 def test_ttl_clamped(db_conn, takeover_ids):
-    _, exp = takeover_repo.create_takeover_token(
+    _, exp, _ = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=9999)
     assert exp - datetime.now(timezone.utc) <= timedelta(days=7, minutes=1)
 
@@ -92,31 +95,31 @@ def test_ttl_deployment_configurable(db_conn, takeover_ids, monkeypatch):
 
     # 上限可配：显式 100h 请求被钳到配置上限 48h
     monkeypatch.setenv('TAKEOVER_TTL_MAX_HOURS', '48')
-    _, exp = takeover_repo.create_takeover_token(
+    _, exp, _ = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=100)
     assert timedelta(hours=47, minutes=55) < exp - now <= timedelta(hours=48, minutes=5)
 
     # 默认可配：不传 ttlHours → TAKEOVER_TTL_DEFAULT_HOURS=3
     monkeypatch.setenv('TAKEOVER_TTL_DEFAULT_HOURS', '3')
-    _, exp2 = takeover_repo.create_takeover_token(
+    _, exp2, _ = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1')
     assert timedelta(hours=2, minutes=55) < exp2 - now <= timedelta(hours=3, minutes=5)
 
     # 默认超上限时钳入 [1, max]：default=72 且 max=48 → 48h
     monkeypatch.setenv('TAKEOVER_TTL_DEFAULT_HOURS', '72')
-    _, exp3 = takeover_repo.create_takeover_token(
+    _, exp3, _ = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1')
     assert timedelta(hours=47, minutes=55) < exp3 - now <= timedelta(hours=48, minutes=5)
 
     # 非法 env 回落内置上限 168；显式 9999 仍被钳
     monkeypatch.delenv('TAKEOVER_TTL_DEFAULT_HOURS')
     monkeypatch.setenv('TAKEOVER_TTL_MAX_HOURS', 'abc')
-    _, exp4 = takeover_repo.create_takeover_token(
+    _, exp4, _ = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=9999)
     assert exp4 - now <= timedelta(days=7, minutes=5)
 
     # 上限误配 0 → 钉到 1h 硬下限（显式 50h 请求也只给 1h）
     monkeypatch.setenv('TAKEOVER_TTL_MAX_HOURS', '0')
-    _, exp5 = takeover_repo.create_takeover_token(
+    _, exp5, _ = takeover_repo.create_takeover_token(
         takeover_ids['uid'], takeover_ids['bid'], takeover_ids['sid'], 'ak-1', ttl_hours=50)
     assert exp5 - now <= timedelta(hours=1, minutes=5)

@@ -300,6 +300,45 @@ def test_reexecute_batch_session():
     client.reexecute_batch_session("b1", "1")
 
 
+def test_create_batch_takeover_link():
+    """接管链接签发：camelCase 可选体 + tokenId 必回传（吊销句柄）。"""
+    def fake_request(method, url, **kwargs):
+        assert url.endswith("/ai-batches/b1/sessions/1/takeover-link")
+        assert kwargs["json"] == {"ttlHours": 48, "mode": "readonly"}
+        return FakeResponse(201, {
+            "token": "tk_x", "tokenId": "tkt_x",
+            "path": "/takeover/session?t=tk_x",
+            "mode": "readonly", "expiresAt": "2026-11-24T00:00:00+00:00",
+        })
+
+    client, _ = make_client(fake_request)
+    link = client.create_batch_takeover_link(
+        "b1", "1", ttl_hours=48, mode="readonly")
+    assert link["tokenId"] == "tkt_x" and link["mode"] == "readonly"
+
+
+def test_create_batch_takeover_link_empty_body_when_no_options():
+    """未传 ttlHours/mode → 空 JSON 体（部署级默认 TTL + full 模式）。"""
+    def fake_request(method, url, **kwargs):
+        assert kwargs["json"] == {}
+        return FakeResponse(201, {"token": "tk_x", "tokenId": "tkt_x",
+                                  "path": "/takeover/session?t=tk_x",
+                                  "mode": "full"})
+
+    client, _ = make_client(fake_request)
+    client.create_batch_takeover_link("b1", "1")
+
+
+def test_revoke_batch_takeover_link():
+    def fake_request(method, url, **kwargs):
+        assert url.endswith("/ai-batches/b1/sessions/1/takeover-link/revoke")
+        assert kwargs["json"] == {"tokenId": "tkt_x"}
+        return FakeResponse(200, {"revoked": True})
+
+    client, _ = make_client(fake_request)
+    assert client.revoke_batch_takeover_link("b1", "1", "tkt_x")["revoked"] is True
+
+
 def test_translate_query_returns_filter():
     def fake_request(method, url, **kwargs):
         assert url.endswith("/ai-batches/query")

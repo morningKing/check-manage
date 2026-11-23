@@ -24,13 +24,14 @@ POST /api/v1/ai-batches/{batch_id}/sessions/{child_id}/takeover-link
 ```json
 {
   "token": "tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE",
+  "tokenId": "tkt_pQ7rS2tU4vW6xY8zA0bC1dE",
   "path": "/takeover/session?t=tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE",
   "mode": "full",
   "expiresAt": "2026-11-03T12:00:00+00:00"
 }
 ```
 
-`mode` 字段回显签发时的模式，供调用方在把链接发给外部人员时附说明（例如"此链接为只读，仅供查看进度"）。
+`mode` 字段回显签发时的模式，供调用方在把链接发给外部人员时附说明（例如"此链接为只读，仅供查看进度"）。`tokenId` 是**吊销句柄**（`tkt_` 前缀，与 `token` 不同）——吊销端点按它定位令牌，**签发时即回传**（2026-11-23 起），请保存；此前版本只回 `token`，吊销前需自行查库拿 `id`。
 
 令牌格式为 `tk_` + 43 字符随机串；数据库**只存 SHA-256 哈希**，不落明文；令牌绑定「签发密钥所属用户 + 批任务 + 子会话」三元组，换批换人皆不可用。
 
@@ -64,7 +65,7 @@ http://your-host:8080/takeover/session?t=tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXa
 POST /api/v1/ai-batches/{batch_id}/sessions/{child_id}/takeover-link/revoke
 ```
 
-请求体 `{"tokenId": "tkt_xxxxxxxx"}`——`tokenId` 是签发时令牌的内部 id（`tkt_` 前缀，与 `token` 不同）。三元组（本人 + 本批 + 本子会话）全匹配才生效，拿别人的 tokenId 一律 404。吊销后链接立即失效。
+请求体 `{"tokenId": "tkt_xxxxxxxx"}`——`tokenId` 是签发响应中的吊销句柄（`tkt_` 前缀，与 `token` 不同；2026-11-23 起签发即回传）。三元组（本人 + 本批 + 本子会话）全匹配才生效，拿别人的 tokenId 一律 404。吊销后链接立即失效。
 
 ## 接管页功能范围
 

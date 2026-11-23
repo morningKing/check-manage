@@ -634,6 +634,41 @@ class OpenApiClient:
             "POST", f"/ai-batches/{batch_id}/sessions/{child_id}/reexecute"
         ).json()
 
+    def create_batch_takeover_link(self, batch_id: str, child_id: str, *,
+                                   ttl_hours: Optional[int] = None,
+                                   mode: Optional[str] = None) -> dict:
+        """签发人工接管链接（2026-10-25 spec D1）：短时令牌 + 公开接管页路径。
+
+        ttl_hours 不传用部署级默认（TAKEOVER_TTL_DEFAULT_HOURS，上限
+        TAKEOVER_TTL_MAX_HOURS）；mode 可选 'full'（默认，可发消息/中断）或
+        'readonly'（2026-11-19 起只读——访客仅可查看会话与大纲）。
+
+        完整页面地址 = 部署站点根地址 + 返回的 path；tokenId（tkt_ 前缀）是
+        吊销句柄，请保存后传给 revoke_batch_takeover_link()。
+
+        返回 {'token', 'tokenId', 'path', 'mode', 'expiresAt'}。
+        """
+        body = {}
+        if ttl_hours is not None:
+            body["ttlHours"] = ttl_hours
+        if mode is not None:
+            body["mode"] = mode
+        return self._request(
+            "POST", f"/ai-batches/{batch_id}/sessions/{child_id}/takeover-link",
+            json_body=body).json()
+
+    def revoke_batch_takeover_link(self, batch_id: str, child_id: str,
+                                   token_id: str) -> dict:
+        """吊销接管链接：三元组（本人+本批+本子会话）全匹配才生效，别人的
+        tokenId 一律 404。吊销后链接立即失效。
+
+        返回 {'revoked': True}。"""
+        return self._request(
+            "POST",
+            f"/ai-batches/{batch_id}/sessions/{child_id}/takeover-link/revoke",
+            json_body={"tokenId": token_id},
+        ).json()
+
     def translate_query(self, collection: str, question: str) -> dict:
         """把中文/英文问题翻译成 MongoDB 风格的查询过滤器，不执行查询本身。
         返回的 filter 可直接传给 list_records()/iter_records() 未来若支持

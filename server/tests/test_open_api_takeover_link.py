@@ -94,7 +94,7 @@ def test_issue_link_returns_token_path_expires(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 1}, None)), \
          patch('utils.takeover_repo.create_takeover_token',
-               return_value=('tk_abc', fake_exp)) as mk:
+               return_value=('tk_abc', fake_exp, 'tkt_abc')) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
                            json={'ttlHours': 48})
     assert resp.status_code == 201
@@ -104,6 +104,28 @@ def test_issue_link_returns_token_path_expires(client, mock_conn, mock_cursor):
     assert mk.call_args.kwargs['ttl_hours'] == 48
     # 归属三元组 + 来源密钥必须原样传下去（owner 在首位、api_key_id 在末位）
     assert mk.call_args.args == ('user-42', 'b1', 's1', 'ak-1')
+
+
+def test_issue_link_response_includes_token_id_for_revoke(client, mock_conn,
+                                                          mock_cursor):
+    """吊销链路契约补齐（2026-11-23）：签发响应必须回传 tokenId（tkt_ 前缀，
+    与 token 不同）——否则纯 API 调用方拿不到吊销句柄，revoke 端点形同虚设
+    （此前 tokenId 在仓储内部生成后即丢弃，只能查库拿）。"""
+    _auth_passes(mock_cursor)
+    fake_exp = datetime.now(timezone.utc) + timedelta(hours=24)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key()), \
+         patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}), \
+         patch('routes.open_api_batches._resolve_child',
+               return_value=({'id': 's1', 'batch_seq': 1}, None)), \
+         patch('utils.takeover_repo.create_takeover_token',
+               return_value=('tk_x', fake_exp, 'tkt_xyz')):
+        resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
+                           json={})
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body['tokenId'] == 'tkt_xyz'
+    assert body['token'] != body['tokenId']
 
 
 def test_revoke_scoped_to_triple(client, mock_conn, mock_cursor):
@@ -145,7 +167,7 @@ def test_issue_link_passes_ttl_through_unclamped(client, mock_conn, mock_cursor)
          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 2}, None)), \
          patch('utils.takeover_repo.create_takeover_token',
-               return_value=('tk_big', fake_exp)) as mk:
+               return_value=('tk_big', fake_exp, 'tkt_big')) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
                            json={'ttlHours': 9999})
     assert resp.status_code == 201
@@ -163,7 +185,7 @@ def test_issue_link_absent_ttl_passes_none(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 1}, None)), \
          patch('utils.takeover_repo.create_takeover_token',
-               return_value=('tk_none', fake_exp)) as mk:
+               return_value=('tk_none', fake_exp, 'tkt_none')) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR, json={})
     assert resp.status_code == 201
     assert mk.call_args.kwargs['ttl_hours'] is None
@@ -179,7 +201,7 @@ def test_issue_link_mode_readonly_passthrough(client, mock_conn, mock_cursor):
     fake_exp = datetime.now(timezone.utc) + timedelta(hours=24)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)),          patch('routes.open_api_batches._current_key', return_value=_key()),          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}),          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 1}, None)),          patch('utils.takeover_repo.create_takeover_token',
-               return_value=('tk_ro', fake_exp)) as mk:
+               return_value=('tk_ro', fake_exp, 'tkt_ro')) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
                            json={'mode': 'readonly'})
     assert resp.status_code == 201
@@ -194,7 +216,7 @@ def test_issue_link_mode_full_is_default(client, mock_conn, mock_cursor):
     fake_exp = datetime.now(timezone.utc) + timedelta(hours=24)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)),          patch('routes.open_api_batches._current_key', return_value=_key()),          patch('routes.open_api_batches.get_batch_detail', return_value={'id': 'b1'}),          patch('routes.open_api_batches._resolve_child',
                return_value=({'id': 's1', 'batch_seq': 1}, None)),          patch('utils.takeover_repo.create_takeover_token',
-               return_value=('tk_f', fake_exp)) as mk:
+               return_value=('tk_f', fake_exp, 'tkt_f')) as mk:
         resp = client.post(f'{BASE}/b1/sessions/s1/takeover-link', headers=HDR,
                            json={})
     assert resp.status_code == 201

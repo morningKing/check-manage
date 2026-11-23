@@ -156,6 +156,12 @@ extra = client.upload_batch_files(["./增量数据.csv"])
 client.continue_batch_session(
     batch["batchId"], "1", "结合新附件更新结论。", files=extra["files"],
 )
+
+# 签发人工接管链接（公开接管页，发给外部人员人工介入；readonly 只能看）
+link = client.create_batch_takeover_link(batch["batchId"], "1", mode="full")
+print(f"https://你的站点根地址{link['path']}")
+# 吊销（tokenId 是签发响应里的吊销句柄）
+client.revoke_batch_takeover_link(batch["batchId"], "1", link["tokenId"])
 ```
 
 **AI 单会话**（一句 prompt 要一个答案，可选带上几个文件——全部读进同一个会话，不像批任务那样按文件拆分）：

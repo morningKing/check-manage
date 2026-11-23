@@ -748,13 +748,15 @@ def create_takeover_link(batch_id, child_id):
     mode = body.get('mode') or 'full'
     if mode not in takeover_repo.TAKEOVER_MODES:
         return err('mode 不合法（full|readonly）', 'INVALID_MODE', 400)
-    token, expires_at = takeover_repo.create_takeover_token(
+    token, expires_at, token_id = takeover_repo.create_takeover_token(
         key['ownerUserId'], batch_id, child['id'], key['id'], ttl_hours=ttl_hours,
         mode=mode)
     log_api_operation('ai.batch_takeover_link_created', 'ai_batch', batch_id,
                       d.get('name') or batch_id,
                       f'签发子任务接管链接 seq={child.get("batch_seq")} mode={mode}')
+    # tokenId（2026-11-23 吊销链路补齐）：吊销端点按它定位令牌，签发即回传
     return jsonify({'token': token,
+                    'tokenId': token_id,
                     'path': f'/takeover/session?t={token}',
                     'mode': mode,
                     'expiresAt': expires_at.isoformat()}), 201

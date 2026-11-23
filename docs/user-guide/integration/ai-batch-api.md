@@ -136,7 +136,9 @@ curl -s -X POST \
 | GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files` | 实时扫描子会话工作区，返回当前文件列表 |
 | GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download?path=...` | 下载子会话工作区中的单个文件 |
 | GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download-all` | 打包下载子会话所有新增/修改文件（ZIP） |
-| POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/continue` | 在已完成/失败的子会话上继续对话（保留历史） |
+| POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/continue` | 在已完成/失败的子会话上继续对话（保留历史，可带附件） |
+| POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/takeover-link` | 签发人工接管链接（公开接管页，短时令牌，见 4.17） |
+| POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/takeover-link/revoke` | 吊销接管链接（按签发响应中的 `tokenId`，见 4.18） |
 | POST | `/api/v1/ai-batches/{batchId}/pause` | 暂停整批排队/运行中的子任务（**2026-09-23 新增**） |
 | POST | `/api/v1/ai-batches/{batchId}/resume` | 继续执行已暂停/已中断的批任务（**2026-09-23 新增**） |
 | POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/cancel` | 取消单个子会话（**2026-09-23 新增**） |
@@ -1211,6 +1213,96 @@ curl -s -X POST \
 |-------------|---------|
 | 404 | 批任务不存在/不属于本密钥，或子会话未找到 |
 | 409 | 子会话不在终态（`pending` / `running`） |
+
+---
+
+### 4.17 签发人工接管链接
+
+```
+POST /api/v1/ai-batches/{batchId}/sessions/{childId}/takeover-link
+```
+
+为一个子会话签发**人工接管链接**：短时令牌 + 公开接管页路径（`/takeover/session`，免登录），把链接发给外部人员即可让其在浏览器中查看对话历史并人工介入（发消息续跑、中断任务）。令牌只存 SHA-256 哈希，绑定「签发密钥所属用户 + 本批 + 本子会话」三元组，换批换人皆不可用。
+
+**请求体（可选）**
+
+```json
+{ "ttlHours": 48, "mode": "readonly" }
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `ttlHours` | integer | 否 | 链接有效期（小时）。不传用部署级默认（`TAKEOVER_TTL_DEFAULT_HOURS`），上限 `TAKEOVER_TTL_MAX_HOURS` |
+| `mode` | string | 否 | `full`（默认，可发消息/中断）或 `readonly`（**只读**——访客仅可查看会话与大纲，发送/中断被服务端 403 冻结） |
+
+**响应 — 201**
+
+```json
+{
+  "token": "tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE",
+  "tokenId": "tkt_pQ7rS2tU4vW6xY8zA0bC1dE",
+  "path": "/takeover/session?t=tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE",
+  "mode": "full",
+  "expiresAt": "2026-11-24T12:00:00+00:00"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `token` | 页面令牌（`tk_` 前缀）——即凭证，只走私密渠道发送 |
+| `tokenId` | **吊销句柄**（`tkt_` 前缀）——吊销端点按它定位令牌，请保存（**2026-11-23 起签发响应回传**；此前只能查库获取） |
+| `path` | 接管页相对路径，完整 URL = 部署站点根地址 + `path` |
+| `mode` | 回显签发模式，供转发时附说明（如"此链接为只读"） |
+| `expiresAt` | 过期时间 |
+
+**示例**
+
+```bash
+curl -s -X POST \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"ttlHours": 48, "mode": "readonly"}' \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/takeover-link" | jq
+# → 拼完整链接发给外部人员：{站点根地址}{path}
+```
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400 | `ttlHours` 不是整数；`mode` 不是 `full`/`readonly` |
+| 404 | 批任务不存在/不属于本密钥，或子会话未找到 |
+
+接管页本身的功能范围（对话历史/大纲/发送/中断/只读冻结）见[接管模式手册](../ai/batch-takeover.md)。
+
+---
+
+### 4.18 吊销接管链接
+
+```
+POST /api/v1/ai-batches/{batchId}/sessions/{childId}/takeover-link/revoke
+```
+
+吊销已签发的接管链接，链接立即失效。三元组（签发密钥所属用户 + 本批 + 本子会话）全匹配才生效，拿别人的 `tokenId` 一律 404。
+
+**请求体**
+
+```json
+{ "tokenId": "tkt_pQ7rS2tU4vW6xY8zA0bC1dE" }
+```
+
+**响应 — 200**
+
+```json
+{ "revoked": true }
+```
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400 | `tokenId` 缺失 |
+| 404 | 批任务/子会话未找到，或 `tokenId` 与三元组不匹配 |
 
 ---
 

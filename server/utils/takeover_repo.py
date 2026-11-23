@@ -54,12 +54,16 @@ TAKEOVER_MODES = ('full', 'readonly')
 
 def create_takeover_token(owner_user_id: str, batch_id: str, session_id: str,
                           api_key_id: str, ttl_hours: int | None = None,
-                          mode: str = 'full') -> tuple[str, datetime]:
+                          mode: str = 'full') -> tuple[str, datetime, str]:
     """ttl_hours=None 表示调用方未指定 → 应用部署级默认（TAKEOVER_TTL_DEFAULT_HOURS）；
     显式指定则钳入 [TTL_MIN_H, TAKEOVER_TTL_MAX_HOURS]。
 
     mode：'full'=可接管（默认，存量行为）；'readonly'=仅查看——发送/中断
-    被路由层 403，前端冻结输入区（会话查看与大纲跳转不受影响）。"""
+    被路由层 403，前端冻结输入区（会话查看与大纲跳转不受影响）。
+
+    返回 (token, expires_at, token_id) 三元组（2026-11-23 吊销链路补齐）：
+    token_id（tkt_ 前缀，库内主键）必须随签发响应回传调用方——revoke 端点
+    按 token_id 吊销，此前它在本函数内部生成后即丢弃，纯 API 调用方拿不到。"""
     if mode not in TAKEOVER_MODES:
         raise ValueError(f'invalid takeover mode: {mode!r}')
     max_h = ttl_max_hours()
@@ -68,6 +72,7 @@ def create_takeover_token(owner_user_id: str, batch_id: str, session_id: str,
     else:
         ttl_h = max(TTL_MIN_H, min(int(ttl_hours), max_h))
     token = 'tk_' + secrets.token_urlsafe(32)
+    token_id = 'tkt_' + secrets.token_urlsafe(8)
     expires = datetime.now(timezone.utc) + timedelta(hours=ttl_h)
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -76,10 +81,10 @@ def create_takeover_token(owner_user_id: str, batch_id: str, session_id: str,
                 "(id, token_hash, api_key_id, owner_user_id, batch_id, session_id, "
                 "expires_at, mode) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                ('tkt_' + secrets.token_urlsafe(8), _hash(token), api_key_id,
+                (token_id, _hash(token), api_key_id,
                  owner_user_id, batch_id, session_id, expires, mode))
         conn.commit()
-    return token, expires
+    return token, expires, token_id
 
 
 def resolve_takeover_token(token_plain: str | None) -> dict | None:

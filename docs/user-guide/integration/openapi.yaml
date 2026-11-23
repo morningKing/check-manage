@@ -398,6 +398,75 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /v1/ai-batches/{batchId}/sessions/{childId}/takeover-link:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+      - $ref: '#/components/parameters/ChildId'
+    post:
+      tags: [ai-batches]
+      summary: 签发人工接管链接（公开接管页 /takeover/session，短时令牌，只存哈希）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ttlHours:
+                  type: integer
+                  description: 链接有效期（小时）；省略用部署级默认，钳入 [1, TAKEOVER_TTL_MAX_HOURS]
+                mode:
+                  type: string
+                  enum: [full, readonly]
+                  description: 'full=可发消息/中断（默认）；readonly=仅查看会话与大纲，发送/中断服务端 403'
+      responses:
+        '201':
+          description: 已签发。完整页面地址 = 部署站点根地址 + path；tokenId 为吊销句柄
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, tokenId, path, mode, expiresAt]
+                properties:
+                  token:
+                    type: string
+                    description: 页面令牌（tk_ 前缀），即凭证，只走私密渠道发送
+                  tokenId:
+                    type: string
+                    description: 吊销句柄（tkt_ 前缀），传给 revoke 端点
+                  path: { type: string }
+                  mode: { type: string, enum: [full, readonly] }
+                  expiresAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-batches/{batchId}/sessions/{childId}/takeover-link/revoke:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+      - $ref: '#/components/parameters/ChildId'
+    post:
+      tags: [ai-batches]
+      summary: 吊销接管链接（三元组全匹配才生效，链接立即失效）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tokenId]
+              properties:
+                tokenId: { type: string, description: 签发响应中的吊销句柄（tkt_ 前缀） }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked: { type: boolean }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /v1/ai-batches/{batchId}/sessions/{childId}/messages:
     parameters:
       - $ref: '#/components/parameters/BatchId'
