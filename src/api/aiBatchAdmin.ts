@@ -88,8 +88,22 @@ export function listAdminBatches(
   return get<{ items: AdminBatch[]; total: number }>(BASE, { ...filters, page, pageSize }, config)
 }
 
-export function getAdminBatch(batchId: string) {
-  return get<{ batch: AdminBatch; sessions: AdminChild[] }>(`${BASE}/${batchId}`)
+export interface AdminBatchDetail {
+  batch: AdminBatch
+  /** 子任务当前页（服务端分页 2026-11-23：生产大批一次全吐是抽屉卡顿根因） */
+  sessions: AdminChild[]
+  sessionsTotal: number
+  sessionsPage: number
+  sessionsPageSize: number
+}
+
+export function getAdminBatch(
+  batchId: string,
+  sessionsPage = 1,
+  sessionsPageSize = 20,
+) {
+  return get<AdminBatchDetail>(
+    `${BASE}/${batchId}`, { sessionsPage, sessionsPageSize })
 }
 
 export function getAdminChildMessages(batchId: string, sessionId: string) {
@@ -155,35 +169,6 @@ export function adminChildFileDownloadUrl(batchId: string, sessionId: string, pa
   return `/api${BASE}/${bid}/sessions/${sid}/files/download?path=${p}${authParam('&')}`
 }
 
-// ── P1 §10 管理面（缺口补齐 4.2）：attempt 链 + 投递状态/重放 ──
-
-export interface AdminAttempt {
-  id: string
-  attemptNo: number
-  parentAttemptId: string | null
-  operation: string
-  status: string
-  startedAt: string | null
-  finishedAt: string | null
-  recoveryReason?: string | null
-}
-
-export interface AdminDelivery {
-  id: string
-  eventType: string
-  status: string
-  attemptCount: number
-  lastError: string | null
-  nextRetryAt: string | null
-  deliveredAt: string | null
-  targetUrl: string
-}
-
-export function getBatchAttempts(batchId: string) {
-  return get<{ attempts: AdminAttempt[] }>(
-    `/ai/chat/batches/${encodeURIComponent(batchId)}/attempts`)
-}
-
 export interface AdminToolCall {
   ocSessionId: string
   subtaskId: string | null
@@ -198,31 +183,4 @@ export interface AdminToolCall {
 export function getChildToolCalls(batchId: string, sid: string) {
   return get<{ calls: AdminToolCall[] }>(
     `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/sessions/${encodeURIComponent(sid)}/tool-calls`)
-}
-
-export function listBatchDeliveries(batchId: string) {
-  return get<{ deliveries: AdminDelivery[] }>(
-    `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/deliveries`)
-}
-
-export function replayDelivery(oid: string) {
-  return post<{ ok: boolean; status: string }>(
-    `/ai/chat/admin/batches/deliveries/${encodeURIComponent(oid)}/replay`)
-}
-
-export interface AdminCommand {
-  commandId: string
-  type: string
-  requestedBy: string
-  requestedByKind: string
-  status: string
-  errorCode: string | null
-  result: Record<string, unknown> | null
-  createdAt: string
-  appliedAt: string | null
-}
-
-export function listBatchCommands(batchId: string) {
-  return get<{ commands: AdminCommand[] }>(
-    `/ai/chat/batches/${encodeURIComponent(batchId)}/commands`)
 }

@@ -1,11 +1,14 @@
 /**
  * AI 批任务管理域 spec（管理页闭环，全确定性：fail-fast 驱动 0 LLM）。
  *
- * 覆盖（API 面 4 例 + UI 面 1 例）：
+ * 覆盖（API 面 4 例 + UI 面 3 例）：
  *  1. 跨用户列表筛选（keyword=批名 / status）与跨用户详情 + 子任务消息端点；
  *  2. admin reexecute（单子）与 retry-failed（全批）生效 + 终态软删子任务；
  *  3. tool-calls 与 attempt-timeline 端点（会话级路由）；
- *  4. AdminBatchFiles 文件面：uploads 分组可见 / download / 导入 data_files 幂等。
+ *  4. AdminBatchFiles 文件面：uploads 分组可见 / download / 导入 data_files 幂等；
+ *  5. cancelled 子任务软删口径（后端三态 vs 前端 isTerminal 曾漏 cancelled）；
+ *  6. 子任务分页（2026-11-23）：25 子任务详情默认 20/页可翻页——详情接口
+ *    sessionsPage/sessionsPageSize 服务端切片，修生产大批抽屉卡顿。
  *
  * 相对 brief 草稿的修正（已逐一对照服务端实现核实）：
  *  - 用例 1：keyword 筛选匹配的是批任务**名称**（b.name ILIKE，batch_repo.py:1322），
@@ -339,6 +342,44 @@ test.describe('admin UI 面', () => {
       const after = await (await fetch(`${API}/ai/chat/admin/batches/${bid}`,
         { headers: authHeaders(admin) })).json()
       expect(after.sessions.filter((s: any) => s.sessionId === sid).length).toBe(0)
+    } finally { await cleanupBatch(admin, bid) }
+  })
+
+  test('子任务分页：25 子任务详情默认 20/页，翻页看剩余 5 个（生产大批卡顿修复）', async ({ page }) => {
+    const admin = await adminTokenCached()
+    const name = tag('admpage')
+    // fail-fast × 25：每个子任务秒级 failed，全程 0 LLM（max_batch_sessions=50 内）
+    const bid = await failFastBatch(admin, { files: 25, name })
+    try {
+      await waitFor(async () => (await getDetail(admin, bid)).batch.status === 'failed',
+        180_000, '25 子任务全部 fail-fast 收敛')
+
+      await gotoWithAuth(page, '/admin/ai-execution?tab=batches')
+      const row = page.getByRole('row', { name }).first()
+      await row.waitFor({ state: 'visible', timeout: 30_000 })
+      await row.getByRole('button', { name: '详情' }).first().click()
+      const drawer = page.locator('.el-drawer')
+      await expect(drawer).toBeVisible({ timeout: 15_000 })
+
+      // 第 1 页：默认 20 条，in-19 可见而 in-20 不在（DOM 含 fixed 列克隆，
+      // 用文本存在性断言而非行数；分页器只有在「总数 > 每页」时才出现）
+      const pager = drawer.locator('.batch-admin__child-pager')
+      await expect(pager).toContainText('共 25 条', { timeout: 15_000 })
+      await expect(drawer.locator('.el-table__row', { hasText: 'in-19' }).first())
+        .toBeVisible()
+      await expect(drawer.locator('.el-table__row', { hasText: 'in-20' }))
+        .toHaveCount(0)
+
+      // 翻到第 2 页：in-20..in-24 共 5 个，第 1 页内容消失
+      await pager.locator('li.number', { hasText: '2' }).click()
+      await expect(drawer.locator('.el-table__row', { hasText: 'in-20' }).first())
+        .toBeVisible({ timeout: 15_000 })
+      await expect(drawer.locator('.el-table__row', { hasText: 'in-24' }).first())
+        .toBeVisible()
+      await expect(drawer.locator('.el-table__row', { hasText: 'in-19' }))
+        .toHaveCount(0)
+      await expect(pager).toContainText('共 25 条')
+      await screenshot(page, 'admin-batch-child-pager')
     } finally { await cleanupBatch(admin, bid) }
   })
 })

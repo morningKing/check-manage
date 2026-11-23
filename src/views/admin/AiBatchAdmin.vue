@@ -73,7 +73,7 @@
                      @click="onRetryAll">重试全部失败（{{ detail.batch.failed }}）</el-button>
         </div>
 
-        <el-table :data="detail.sessions" size="small" style="width: 100%">
+        <el-table :data="detail.sessions" v-loading="detailLoading" size="small" style="width: 100%">
           <el-table-column prop="seq" label="#" width="60" />
           <el-table-column prop="name" label="文件" min-width="160" show-overflow-tooltip />
           <el-table-column label="状态" width="100">
@@ -107,42 +107,15 @@
           </el-table-column>
         </el-table>
 
-        <!-- P1 §10 管理面（缺口补齐 4.2）：Attempt 链 + 投递状态/重放 -->
-        <el-tabs model-value="attempts" class="batch-admin__tabs">
-          <el-tab-pane label="Attempt 链" name="attempts">
-            <el-table :data="attempts" size="small" style="width: 100%">
-              <el-table-column prop="attemptNo" label="#" width="60" />
-              <el-table-column prop="operation" label="操作" width="110" />
-              <el-table-column prop="status" label="状态" width="110" />
-              <el-table-column prop="startedAt" label="开始" min-width="150" show-overflow-tooltip />
-              <el-table-column prop="finishedAt" label="结束" min-width="150" show-overflow-tooltip />
-              <el-table-column prop="recoveryReason" label="恢复原因" min-width="140" show-overflow-tooltip />
-            </el-table>
-          </el-tab-pane>
-          <el-tab-pane label="命令历史" name="commands">
-            <el-table :data="commands" size="small" style="width: 100%">
-              <el-table-column prop="type" label="命令" width="110" />
-              <el-table-column prop="status" label="状态" width="100" />
-              <el-table-column prop="requestedBy" label="发起人" min-width="120" show-overflow-tooltip />
-              <el-table-column prop="createdAt" label="时间" min-width="150" show-overflow-tooltip />
-            </el-table>
-          </el-tab-pane>
-          <el-tab-pane label="回调投递" name="deliveries">
-            <el-table :data="deliveries" size="small" style="width: 100%">
-              <el-table-column prop="eventType" label="事件" width="150" />
-              <el-table-column prop="status" label="状态" width="110" />
-              <el-table-column prop="attemptCount" label="次数" width="70" />
-              <el-table-column prop="lastError" label="错误" min-width="180" show-overflow-tooltip />
-              <el-table-column label="操作" width="100" fixed="right">
-                <template #default="{ row }">
-                  <el-button link type="primary"
-                             :disabled="!['dead_letter', 'failed'].includes(row.status)"
-                             @click="onReplayDelivery(row)">重放</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
-        </el-tabs>
+        <!-- 子任务分页（2026-11-23）：服务端切片，生产大批不再一次全吐。
+             删末页最后一批行后当前页可能变空 → loadDetail 里回退一页。 -->
+        <el-pagination v-if="detail && detail.sessionsTotal > detail.sessionsPageSize"
+                       class="batch-admin__child-pager" small background
+                       layout="total, prev, pager, next"
+                       :total="detail.sessionsTotal"
+                       :current-page="detail.sessionsPage"
+                       :page-size="detail.sessionsPageSize"
+                       @current-change="onChildPage" />
       </div>
     </el-drawer>
 
@@ -220,8 +193,6 @@ import {
   adminChildFileDownloadUrl,
   type AdminBatch, type AdminChild, type AdminMessage,
   type AdminChildFile, type AdminImportResult,
-  getBatchAttempts, listBatchDeliveries, replayDelivery, listBatchCommands,
-  type AdminAttempt, type AdminDelivery, type AdminCommand,
 } from '@/api/aiBatchAdmin'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
@@ -240,8 +211,11 @@ const LABELS: Record<string, string> = Object.fromEntries(
 
 const store = useAiBatchAdminStore()
 const detailOpen = ref(false)
-const detail = ref<{ batch: AdminBatch; sessions: AdminChild[] } | null>(null)
+const detail = ref<Awaited<ReturnType<typeof getAdminBatch>> | null>(null)
 const retrying = ref(false)
+/** 子任务当前页（服务端分页 2026-11-23）。删行后当前页可能变空 → 回退一页。 */
+const sessPage = ref(1)
+const detailLoading = ref(false)
 const convOpen = ref(false)
 const convName = ref('')
 const convSessionId = ref('')
@@ -285,21 +259,32 @@ async function onPage(p: number) {
   store.startPolling()
 }
 
-const attempts = ref<AdminAttempt[]>([])
-const deliveries = ref<AdminDelivery[]>([])
-const commands = ref<AdminCommand[]>([])
+/** 按当前页加载详情。返回是否成功（404 时调用方清理列表陈旧行）。 */
+async function loadDetail(batchId: string): Promise<boolean> {
+  detailLoading.value = true
+  try {
+    detail.value = await getAdminBatch(batchId, sessPage.value)
+    return true
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+/** 删行后当前页可能越界变空：回退到最后一个非空页。 */
+async function loadDetailClampPage(batchId: string) {
+  await loadDetail(batchId)
+  while (detail.value && detail.value.sessions.length === 0
+         && sessPage.value > 1) {
+    sessPage.value -= 1
+    await loadDetail(batchId)
+  }
+}
 
 async function openDetail(row: AdminBatch) {
   try {
-    detail.value = await getAdminBatch(row.batchId)
+    sessPage.value = 1
+    await loadDetail(row.batchId)
     detailOpen.value = true
-    // P1 §10 管理面（缺口补齐 4.2）：attempt 链 + 投递状态并行加载（best-effort）
-    attempts.value = []
-    deliveries.value = []
-    commands.value = []
-    void getBatchAttempts(row.batchId).then(r => { attempts.value = r.attempts || [] }).catch(() => {})
-    void listBatchDeliveries(row.batchId).then(r => { deliveries.value = r.deliveries || [] }).catch(() => {})
-    void listBatchCommands(row.batchId).then(r => { commands.value = r.commands || [] }).catch(() => {})
   } catch (e: any) {
     // 所有者在列表渲染与点击之间删掉了该批任务：全局拦截器已弹出「请求资源不存在」，
     // 这里只需把陈旧行从列表里清掉，不然它会一直留在表格里，再点还是 404。
@@ -309,17 +294,10 @@ async function openDetail(row: AdminBatch) {
   }
 }
 
-async function onReplayDelivery(row: AdminDelivery) {
-  try {
-    await replayDelivery(row.id)
-    ElMessage.success('已重置为待投递')
-    if (detail.value) {
-      void listBatchDeliveries(detail.value.batch.batchId)
-        .then(r => { deliveries.value = r.deliveries || [] })
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.message || '重放失败')
-  }
+async function onChildPage(p: number) {
+  if (!detail.value) return
+  sessPage.value = p
+  await loadDetail(detail.value.batch.batchId)
 }
 
 async function onRetryAll() {
@@ -328,7 +306,7 @@ async function onRetryAll() {
   try {
     const res = await retryAdminBatch(detail.value.batch.batchId)
     ElMessage.success(`已重置 ${res.retried} 个失败的子任务`)
-    detail.value = await getAdminBatch(detail.value.batch.batchId)
+    await loadDetail(detail.value.batch.batchId)
     await store.fetchList()
     store.startPolling()
   } finally {
@@ -346,14 +324,15 @@ async function onSoftDelete(row: AdminChild) {
   } catch { return }
   const res = await softDeleteAdminChild(cur.batch.batchId, row.sessionId)
   ElMessage.success(`已软删除(原状态:${res.status});前台不可见,数据保留`)
-  detail.value = await getAdminBatch(cur.batch.batchId)
+  // 删行可能让当前页变空（末页删最后一批行）→ 钳位回退
+  await loadDetailClampPage(cur.batch.batchId)
 }
 
 async function onReexecute(row: AdminChild) {
   if (!detail.value) return
   await reexecuteAdminChild(detail.value.batch.batchId, row.sessionId)
   ElMessage.success('已提交重跑')
-  detail.value = await getAdminBatch(detail.value.batch.batchId)
+  await loadDetail(detail.value.batch.batchId)
   await store.fetchList()
   store.startPolling()
 }
@@ -391,8 +370,8 @@ function stopConvPoll() {
 async function refreshConversation() {
   if (!detail.value || !convSessionId.value) return
   try {
-    detail.value = await getAdminBatch(detail.value.batch.batchId)
-    const row = detail.value.sessions.find(s => s.sessionId === convSessionId.value)
+    await loadDetail(detail.value.batch.batchId)
+    const row = detail.value?.sessions.find(s => s.sessionId === convSessionId.value)
     if (!row || isTerminal(row.status)) { stopConvPoll(); return }
     if (convLoading.value) return                    // 首拉未完成，跳过本轮
     const res = await getAdminChildMessages(detail.value.batch.batchId, row.sessionId)
@@ -576,6 +555,7 @@ onUnmounted(() => store.stopPolling())
 .batch-admin__poll-error { margin-bottom: 12px; }
 .batch-admin__pager { margin-top: 12px; justify-content: flex-end; }
 .batch-admin__actions { margin: 12px 0; }
+.batch-admin__child-pager { margin-top: 10px; justify-content: flex-end; }
 .admin-preview__text {
   white-space: pre-wrap;
   word-break: break-word;

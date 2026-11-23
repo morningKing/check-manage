@@ -114,6 +114,54 @@ def test_detail_spans_users_and_lists_children(two_users_two_batches):
     assert [s['id'] for s in d['sessions']] == [f['sid']]
 
 
+@pytest.fixture
+def batch_with_many_sessions(two_users_two_batches):
+    """一个 7 子任务的批（seq 0..6），其中 seq=6 已软删——分页切片与总数
+    都必须排除软删行（与详情 SELECT 的 deleted_at IS NULL 过滤同口径）。
+    收尾靠 two_users_two_batches 删批的 FK ON DELETE CASCADE 级联。"""
+    f = two_users_two_batches
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            for seq in range(1, 7):
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions "
+                    "(id,user_id,status,batch_id,batch_seq,batch_input_file) "
+                    "VALUES (%s,%s,'completed',%s,%s,%s)",
+                    ('s-adm-' + uuid.uuid4().hex[:8], f['uid_b'], f['bid_api'],
+                     seq, f'uploads/in-{seq}.txt'))
+            cur.execute(
+                "UPDATE ai_chat_sessions SET deleted_at=now() "
+                "WHERE batch_id=%s AND batch_seq=6", (f['bid_api'],))
+        conn.commit()
+    return f
+
+
+def test_detail_sessions_pagination_slices_and_counts(batch_with_many_sessions):
+    """子任务多的批（生产形态）详情不能一次全吐：分页切片按 batch_seq 稳定
+    排序、总数排除软删行、越界页返回空列表但总数仍准确。"""
+    f = batch_with_many_sessions
+    d = batch_repo.admin_get_batch_detail(f['bid_api'],
+                                          sessions_page=1, sessions_page_size=3)
+    assert d['sessions_total'] == 6                  # 7 植入 - 1 软删
+    assert [s['batch_seq'] for s in d['sessions']] == [0, 1, 2]
+    d2 = batch_repo.admin_get_batch_detail(f['bid_api'],
+                                           sessions_page=2, sessions_page_size=3)
+    assert [s['batch_seq'] for s in d2['sessions']] == [3, 4, 5]
+    d3 = batch_repo.admin_get_batch_detail(f['bid_api'],
+                                           sessions_page=9, sessions_page_size=3)
+    assert d3['sessions'] == []
+    assert d3['sessions_total'] == 6
+
+
+def test_detail_without_pagination_returns_all_sessions(batch_with_many_sessions):
+    """不传分页参数的既有调用方（重试流取批名等）行为不变：全量子任务。"""
+    f = batch_with_many_sessions
+    d = batch_repo.admin_get_batch_detail(f['bid_api'])
+    assert len(d['sessions']) == 6
+    assert [s['batch_seq'] for s in d['sessions']] == [0, 1, 2, 3, 4, 5]
+    assert d['sessions_total'] == 6
+
+
 def test_detail_missing_returns_none():
     assert batch_repo.admin_get_batch_detail('b-does-not-exist') is None
 

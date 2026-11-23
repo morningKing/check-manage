@@ -164,11 +164,23 @@ def list_all():
 @ai_batch_admin_bp.get('/<batch_id>')
 @require_permission('admin.ai_chat_admin')
 def detail(batch_id):
-    d = admin_get_batch_detail(batch_id)
+    """批任务详情 + 子任务分页清单（sessionsPage/sessionsPageSize，默认第 1 页
+    每页 20、上限 100——生产大批子任务多，一次全吐是抽屉卡顿根因）。
+    响应带 sessionsTotal/sessionsPage/sessionsPageSize 供前端页码器。"""
+    try:
+        page = max(1, int(request.args.get('sessionsPage', 1)))
+        page_size = min(max(1, int(request.args.get('sessionsPageSize', 20))), 100)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'sessionsPage 与 sessionsPageSize 必须是整数'}), 400
+    d = admin_get_batch_detail(batch_id, sessions_page=page,
+                               sessions_page_size=page_size)
     if not d:
         return jsonify({'error': '批任务不存在'}), 404
     return jsonify({'batch': _batch_out(d['batch']),
-                    'sessions': [_session_out(s) for s in d['sessions']]})
+                    'sessions': [_session_out(s) for s in d['sessions']],
+                    'sessionsTotal': d['sessions_total'],
+                    'sessionsPage': page,
+                    'sessionsPageSize': page_size})
 
 
 @ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/messages')

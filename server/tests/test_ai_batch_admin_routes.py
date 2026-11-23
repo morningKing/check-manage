@@ -132,6 +132,63 @@ def test_detail_not_found_is_404(client, admin_headers):
     assert resp.status_code == 404
 
 
+def _detail_payload(sessions_total=6, sessions=None):
+    batch_row = {'id': 'b-1', 'name': '大批', 'status': 'completed', 'total': 6,
+                 'done': 6, 'failed': 0, 'agent': None, 'model': None,
+                 'created_at': None, 'completed_at': None,
+                 'owner_username': 'alice', 'source': 'ui'}
+    return {'batch': batch_row, 'sessions': sessions or [],
+            'sessions_total': sessions_total}
+
+
+def test_detail_sessions_pagination_params_passthrough(client, admin_headers):
+    """子任务分页参数必须透传仓储层——详情卡的总开关（生产大批一次全吐是
+    页面卡顿根因，2026-11-23）。"""
+    with patch('routes.ai_batch_admin.admin_get_batch_detail',
+               return_value=_detail_payload()) as gd:
+        resp = client.get(f'{BASE}/b-1?sessionsPage=2&sessionsPageSize=50',
+                          headers=admin_headers)
+    assert resp.status_code == 200
+    kw = gd.call_args[1]
+    assert kw['sessions_page'] == 2 and kw['sessions_page_size'] == 50
+
+
+def test_detail_sessions_pagination_defaults_and_cap(client, admin_headers):
+    """默认第 1 页每页 20；上限 100（与列表接口同口径）。"""
+    with patch('routes.ai_batch_admin.admin_get_batch_detail',
+               return_value=_detail_payload()) as gd:
+        client.get(f'{BASE}/b-1?sessionsPageSize=9999', headers=admin_headers)
+    kw = gd.call_args[1]
+    assert kw['sessions_page'] == 1 and kw['sessions_page_size'] == 100
+
+
+def test_detail_sessions_pagination_bad_params_rejected(client, admin_headers):
+    """非整数 → 400；越界整数走钳位（与列表接口同口径，0/负数钳到 1 不报错）。"""
+    resp = client.get(f'{BASE}/b-1?sessionsPage=abc', headers=admin_headers)
+    assert resp.status_code == 400
+    resp = client.get(f'{BASE}/b-1?sessionsPageSize=', headers=admin_headers)
+    assert resp.status_code == 400
+
+
+def test_detail_sessions_pagination_contract_keys(client, admin_headers):
+    """响应带分页元数据（前端页码器数据源），子任务行键集合不变。"""
+    session_row = {'id': 's-1', 'batch_seq': 1, 'batch_input_file': 'r.pdf',
+                   'status': 'completed', 'error_message': None,
+                   'last_message_preview': None, 'gate_status': None,
+                   'gate_error': None}
+    with patch('routes.ai_batch_admin.admin_get_batch_detail',
+               return_value=_detail_payload(sessions=[session_row])):
+        resp = client.get(f'{BASE}/b-1', headers=admin_headers)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['sessionsTotal'] == 6
+    assert body['sessionsPage'] == 1
+    assert body['sessionsPageSize'] == 20
+    assert set(body['sessions'][0]) == {
+        'sessionId', 'seq', 'name', 'status', 'error', 'preview',
+        'gateStatus', 'gateError'}
+
+
 def test_detail_returns_contract_fields_only(client, admin_headers):
     """list 端点有 test_list_returns_contract_fields_only 精确断言键集合，detail 端点
     此前只测了 404 分支，_session_out 的输出形状从未被断言过——这类错完全无声，
@@ -151,7 +208,8 @@ def test_detail_returns_contract_fields_only(client, admin_headers):
                    'status': 'completed', 'error_message': None,
                    'last_message_preview': '处理完成'}
     with patch('routes.ai_batch_admin.admin_get_batch_detail',
-               return_value={'batch': batch_row, 'sessions': [session_row]}):
+               return_value={'batch': batch_row, 'sessions': [session_row],
+                             'sessions_total': 1}):
         resp = client.get(f'{BASE}/b-1', headers=admin_headers)
 
     assert resp.status_code == 200

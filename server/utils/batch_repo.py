@@ -1547,22 +1547,53 @@ def admin_list_batches(*, page: int, page_size: int,
     return {'items': items, 'total': total, 'page': page, 'pageSize': page_size}
 
 
-def admin_get_batch_detail(batch_id: str) -> dict | None:
-    """跨用户取批任务详情 + 子任务清单。"""
+def admin_get_batch_detail(batch_id: str, *,
+                           sessions_page: int = 1,
+                           sessions_page_size: int | None = None) -> dict | None:
+    """跨用户取批任务详情 + 子任务清单。
+
+    sessions_page_size=None（默认）→ 全量子任务，既有调用方（重试流取批名等）
+    行为不变；给定则按 batch_seq 稳定排序做 LIMIT/OFFSET 切片——管理页详情
+    的子任务分页（2026-11-23，生产大批一次全吐是页面卡顿根因）。两种模式都
+    返回 sessions_total（未删除子任务总数，排除软删行，与可见口径一致）。"""
+    page = max(1, int(sessions_page))
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(_ADMIN_SELECT + " WHERE b.id = %s", (batch_id,))
+            # 按 id 取单行：SQL 全字面量内联（Mimosa 对「常量拼接 WHERE」形态
+            # 会拦），字段与 _ADMIN_SELECT 保持一致，改动需两处同改。
+            cur.execute(
+                "SELECT b.*, u.username AS owner_username,"
+                "       CASE WHEN b.api_key_id IS NULL THEN 'ui' ELSE 'api' END AS source"
+                "  FROM ai_chat_batches b"
+                "  JOIN users u ON u.id = b.user_id"
+                " WHERE b.id = %s",
+                (batch_id,))
             batch = cur.fetchone()
             if not batch:
                 return None
             cur.execute(
-                "SELECT id, status, batch_seq, batch_input_file, error_message, "
-                "       last_message_preview, gate_status, gate_error "
-                "  FROM ai_chat_sessions "
-                "  WHERE batch_id = %s AND deleted_at IS NULL ORDER BY batch_seq",
-                (batch_id,))
+                "SELECT count(*) AS n FROM ai_chat_sessions "
+                " WHERE batch_id = %s AND deleted_at IS NULL", (batch_id,))
+            sessions_total = cur.fetchone()['n']
+            if sessions_page_size is None:
+                cur.execute(
+                    "SELECT id, status, batch_seq, batch_input_file, error_message, "
+                    "       last_message_preview, gate_status, gate_error "
+                    "  FROM ai_chat_sessions "
+                    "  WHERE batch_id = %s AND deleted_at IS NULL ORDER BY batch_seq",
+                    (batch_id,))
+            else:
+                size = max(1, int(sessions_page_size))
+                cur.execute(
+                    "SELECT id, status, batch_seq, batch_input_file, error_message, "
+                    "       last_message_preview, gate_status, gate_error "
+                    "  FROM ai_chat_sessions "
+                    "  WHERE batch_id = %s AND deleted_at IS NULL "
+                    "  ORDER BY batch_seq LIMIT %s OFFSET %s",
+                    (batch_id, size, (page - 1) * size))
             sessions = [dict(r) for r in cur.fetchall()]
-    return {'batch': dict(batch), 'sessions': sessions}
+    return {'batch': dict(batch), 'sessions': sessions,
+            'sessions_total': sessions_total}
 
 
 def admin_soft_delete_child(batch_id: str, sid: str) -> dict | None:
