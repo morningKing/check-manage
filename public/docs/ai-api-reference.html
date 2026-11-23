@@ -740,6 +740,8 @@
       <a href="#ep-batch-downloadall">打包下载产出文件</a>
       <a href="#ep-batch-continue">继续对话</a>
       <a href="#ep-batch-reexecute">重新执行</a>
+      <a href="#ep-batch-takeover-link">签发接管链接</a>
+      <a href="#ep-batch-takeover-revoke">吊销接管链接</a>
     </div>
 
     <div class="nav-group">
@@ -1441,11 +1443,20 @@ X-Webhook-Event: ai_batch_completed
           <span class="flags"><span class="flag write">需绑定密钥</span></span>
         </div>
         <div class="endpoint-body">
-          <p>在已完成/失败/已取消的子会话上追加一轮对话，<strong>保留历史上下文</strong>——AI 能看到之前的完整对话，再根据新 prompt 继续工作。</p>
+          <p>在已完成/失败/已取消的子会话上追加一轮对话，<strong>保留历史上下文</strong>——AI 能看到之前的完整对话，再根据新 prompt 继续工作。<strong style="color: var(--accent-ink);">本轮可带附件</strong>（2026-11-20 起）：执行前服务端把文件复制进该子会话<strong>既有工作区</strong>的 <code>uploads/</code>，并在提示词前告知 AI 文件位置。</p>
           <div class="code">
             <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
-            <pre><code>{ <span class="k">"prompt"</span>: <span class="s">"请进一步分析风险因素，给出具体的改进建议。"</span> }</code></pre>
+            <pre><code>{
+  <span class="k">"prompt"</span>: <span class="s">"请进一步分析风险因素，给出具体的改进建议。"</span>,
+  <span class="k">"files"</span>: [ { <span class="k">"name"</span>: <span class="s">"增量数据.csv"</span>, <span class="k">"path"</span>: <span class="s">"batch-staging/u-1/a1b2c3d4e5f6/增量数据.csv"</span> } ]
+}</code></pre>
           </div>
+          <table class="params">
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>prompt</td><td>是</td><td>追加的提示词，最长 20000 字符</td></tr>
+            <tr><td>files</td><td>否</td><td>本轮附件，形状同创建批任务的 <code>files</code>：<code>[{name,path}]</code>；<code>path</code> 来自 <a href="#ep-batch-upload" style="color: var(--accent-ink);">上传接口</a>（同一暂存区，24 小时有效）。省略 = 纯文本续跑（行为与旧版一致）</td></tr>
+          </table>
+          <p style="font-size: 13px;"><strong>关于 files</strong>：先调 <a href="#ep-batch-upload" style="color: var(--accent-ink);">上传接口</a> 暂存，把返回的 <code>{name,path}</code> 原样传进来；请求时文件已被清理会返回 400，重新上传后再次调用即可。同名文件会覆盖工作区 <code>uploads/</code> 里的旧文件（含首轮输入文件）。即使请求成功，若排队超过 24 小时才轮到执行，本轮会落 <code>failed</code>（error 说明附件已过期）。<strong>接管页 / 内部继续对话接口不支持附件</strong>——<code>files</code> 仅本端点提供。</p>
           <div class="code">
             <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 202</div>
             <pre><code>{ <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"child"</span>: { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"seq"</span>: <span class="n">1</span> }, <span class="k">"status"</span>: <span class="s">"running"</span> }</code></pre>
@@ -1454,11 +1465,11 @@ X-Webhook-Event: ai_batch_completed
             <tr><th>操作</th><th>历史消息</th><th>AI 会话</th><th>prompt</th></tr>
             <tr><td>retry-failed</td><td>保留（仅 failed）</td><td>新建</td><td>原始</td></tr>
             <tr><td>reexecute</td><td>删除</td><td>新建</td><td>原始</td></tr>
-            <tr><td><strong>continue</strong></td><td><strong>保留</strong></td><td><strong>复用</strong></td><td><strong>新 prompt</strong></td></tr>
+            <tr><td><strong>continue</strong></td><td><strong>保留</strong></td><td><strong>复用</strong></td><td><strong>新 prompt（可带附件）</strong></td></tr>
           </table>
           <table class="params">
             <tr><th>状态码</th><th>触发条件</th></tr>
-            <tr><td>400</td><td><code>prompt</code> 缺失或超长</td></tr>
+            <tr><td>400</td><td><code>prompt</code> 缺失或超长；<code>files</code> 不是非空数组、单次超过单批文件数上限、暂存路径不属于本密钥，或文件已过期/不存在（需重新上传）</td></tr>
             <tr><td>404</td><td>批任务/子会话不存在</td></tr>
             <tr><td>409</td><td>子会话不在终态</td></tr>
           </table>
@@ -1485,6 +1496,82 @@ X-Webhook-Event: ai_batch_completed
             <tr><th>状态码</th><th>触发条件</th></tr>
             <tr><td>404</td><td>批任务/子会话不存在</td></tr>
             <tr><td>409</td><td>子会话不在终态</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-takeover-link">
+      <p class="eyebrow">AI 批任务 · 子会话 5.19</p>
+      <h2>签发人工接管链接</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/takeover-link</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>为一个子会话签发<strong>人工接管链接</strong>：短时令牌 + 公开接管页路径（<code>/takeover/session</code>，免登录），把链接发给外部人员即可让其在浏览器中查看对话历史并人工介入（发消息续跑、中断任务）。令牌数据库<strong>只存 SHA-256 哈希</strong>，绑定「签发密钥所属用户 + 本批 + 本子会话」三元组，换批换人皆不可用。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body（可选）</div>
+            <pre><code>{ <span class="k">"ttlHours"</span>: <span class="n">48</span>, <span class="k">"mode"</span>: <span class="s">"readonly"</span> }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>ttlHours</td><td>否</td><td>链接有效期（小时）。不传用部署级默认（<code>TAKEOVER_TTL_DEFAULT_HOURS</code>），上限 <code>TAKEOVER_TTL_MAX_HOURS</code></td></tr>
+            <tr><td>mode</td><td>否</td><td><code>full</code>（默认，可发消息/中断）或 <code>readonly</code>（<strong>只读</strong>——访客仅可查看会话与大纲，发送/中断被服务端 403 冻结）</td></tr>
+          </table>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 201</div>
+            <pre><code>{
+  <span class="k">"token"</span>: <span class="s">"tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE"</span>,
+  <span class="k">"tokenId"</span>: <span class="s">"tkt_pQ7rS2tU4vW6xY8zA0bC1dE"</span>,
+  <span class="k">"path"</span>: <span class="s">"/takeover/session?t=tk_3xKq9f2mA7vBwLd0pRtYs8nC1hJe5uGoZiXaMqWbNvE"</span>,
+  <span class="k">"mode"</span>: <span class="s">"full"</span>,
+  <span class="k">"expiresAt"</span>: <span class="s">"2026-11-24T12:00:00+00:00"</span>
+}</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>字段</th><th>说明</th></tr>
+            <tr><td>token</td><td>页面令牌（<code>tk_</code> 前缀）——即凭证，只走私密渠道发送</td></tr>
+            <tr><td>tokenId</td><td><strong>吊销句柄</strong>（<code>tkt_</code> 前缀）——吊销端点按它定位令牌，请保存（2026-11-23 起签发响应回传）</td></tr>
+            <tr><td>path</td><td>接管页相对路径，<strong>完整 URL = 部署站点根地址 + path</strong>（本接口不含域名）</td></tr>
+            <tr><td>mode</td><td>回显签发模式，供转发时附说明（如"此链接为只读"）</td></tr>
+            <tr><td>expiresAt</td><td>过期时间</td></tr>
+          </table>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>ttlHours</code> 不是整数；<code>mode</code> 不是 <code>full</code>/<code>readonly</code></td></tr>
+            <tr><td>404</td><td>批任务/子会话不存在</td></tr>
+          </table>
+          <p style="font-size: 13px;">接管页本身的功能范围（对话历史/大纲/发送/中断/只读冻结）见<a href="../ai/batch-takeover.md" style="color: var(--accent-ink);">接管模式手册</a>。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-takeover-revoke">
+      <p class="eyebrow">AI 批任务 · 子会话 5.20</p>
+      <h2>吊销接管链接</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/takeover-link/revoke</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>吊销已签发的接管链接，链接立即失效。三元组（签发密钥所属用户 + 本批 + 本子会话）全匹配才生效，拿别人的 <code>tokenId</code> 一律 404。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"tokenId"</span>: <span class="s">"tkt_pQ7rS2tU4vW6xY8zA0bC1dE"</span> }</code></pre>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"revoked"</span>: <span class="n">true</span> }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>tokenId</code> 缺失</td></tr>
+            <tr><td>404</td><td>批任务/子会话不存在，或 <code>tokenId</code> 与三元组不匹配</td></tr>
           </table>
         </div>
       </div>
