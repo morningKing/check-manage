@@ -9,11 +9,18 @@ OpenCode 进程内拦截 task 工具：
 - tool.execute.after：从工具输出解析 `task_id: ses_xxx`，经平台反查 agent
   名后回写平台登记（首次委派新建子会话后固化锚点）。
 
-所有 HTTP 回调 best-effort：平台不可达时插件静默放行，委派照常执行。
+所有 HTTP 回调 best-effort：平台不可达时插件放行，委派照常执行。
+
+作用域（2026-11-24）：插件装在 OpenCode 全局目录，随本机每一个 OpenCode 实例
+加载。按目录实例初始化时的入参 directory 判定——不在平台工作区根下（= 用户
+自己的工作会话）则返回空钩子，不介入委派、不查后端。根清单与逃生口见
+oc_plugin_scope。
 注意：OC serve 进程在启动时加载 plugin 目录——部署后需重启 serve 生效。
 """
 import logging
 from pathlib import Path
+
+from utils.oc_plugin_scope import inject_scope
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +148,8 @@ async function pinByCall(sessionID, callID, taskId, agent) {
   return r.ok
 }
 
-export const BaizeSubagentReusePlugin = async () => ({
+/*__BAIZE_SCOPE__*/
+const _hooks = async () => ({
   async 'tool.execute.before'(input, output) {
     try {
       if (!input || input.tool !== 'task') return
@@ -199,12 +207,20 @@ export const BaizeSubagentReusePlugin = async () => ({
     } catch { /* 登记失败不影响委派 */ }
   },
 })
+
+// 作用域守卫：OpenCode 按目录实例各初始化一份插件，入参 directory 就是该
+// 实例会话的目录。非平台会话（用户自己的工作目录）→ 空钩子，不介入委派。
+export const BaizeSubagentReusePlugin = async (input) => {
+  if (!inPlatformWorkspace(input && input.directory)) return {}
+  return _hooks(input)
+}
 """
 
 
-def plugin_source(endpoint: str, token: str) -> str:
-    return _PLUGIN_TEMPLATE.replace('__ENDPOINT__', endpoint) \
-                           .replace('__TOKEN__', token or '')
+def plugin_source(endpoint: str, token: str, workspace_roots=None) -> str:
+    return inject_scope(_PLUGIN_TEMPLATE, workspace_roots) \
+        .replace('__ENDPOINT__', endpoint) \
+        .replace('__TOKEN__', token or '')
 
 
 # ---------------------------------------------------------------------------
@@ -329,9 +345,13 @@ function _extractTaskId(result) {
   return m ? m[1] : null
 }
 
+/*__BAIZE_SCOPE__*/
 export default {
   id: 'baize-subagent-reuse',
   async setup(ctx) {
+    // 作用域守卫：V2 插件按 location 实例化，ctx.location.directory 是本实例
+    // 所属目录。非平台会话（用户自己的工作目录）→ 不注册钩子、不打日志。
+    if (!inPlatformWorkspace(ctx && ctx.location && ctx.location.directory)) return
     _log('v2 plugin loaded')
     await ctx.tool.hook('execute.before', async (event) => {
       try {
@@ -371,21 +391,24 @@ export default {
 """
 
 
-def plugin_source_v2(endpoint: str, token: str) -> str:
-    return _PLUGIN_TEMPLATE_V2.replace('__ENDPOINT__', endpoint) \
-                              .replace('__TOKEN__', token or '')
+def plugin_source_v2(endpoint: str, token: str, workspace_roots=None) -> str:
+    return inject_scope(_PLUGIN_TEMPLATE_V2, workspace_roots) \
+        .replace('__ENDPOINT__', endpoint) \
+        .replace('__TOKEN__', token or '')
 
 
 PLUGIN_NAME_V2 = 'baize-subagent-reuse'
 
 
 def ensure_subagent_reuse_plugin_v2(plugins_root: str, endpoint: str,
-                                    token: str = '') -> str | None:
+                                    token: str = '',
+                                    workspace_roots=None) -> str | None:
     """写入 <V2 plugins_root>/baize-subagent-reuse/index.js（幂等）。
 
     plugins_root = <OPENCODE2_XDG_ROOT>/config/opencode/plugins（V2 目录
     形态——单文件会被 V2 跳过，官方 plugins 指南）。部署后需重启 V2 serve
-    才被加载。与 V1 版双文件物理隔离：V1 模板/部署函数一行不动。"""
+    才被加载。与 V1 版双文件物理隔离：各自部署到各自 serve 的全局目录。
+    workspace_roots=None → 平台工作区根清单（oc_plugin_scope）。"""
     import os
     if not plugins_root or not endpoint:
         return None
@@ -396,7 +419,7 @@ def ensure_subagent_reuse_plugin_v2(plugins_root: str, endpoint: str,
             raise ValueError('plugin path escapes plugins root')
         os.makedirs(pdir, exist_ok=True)
         path = os.path.join(pdir, 'index.js')
-        source = plugin_source_v2(endpoint, token)
+        source = plugin_source_v2(endpoint, token, workspace_roots)
         current = Path(path).read_text(encoding='utf-8') \
             if os.path.isfile(path) else ''
         if current != source:
@@ -409,11 +432,13 @@ def ensure_subagent_reuse_plugin_v2(plugins_root: str, endpoint: str,
 
 
 def ensure_subagent_reuse_plugin(global_dir: str, endpoint: str,
-                                 token: str = '') -> str | None:
+                                 token: str = '',
+                                 workspace_roots=None) -> str | None:
     """写入 <OPENCODE_GLOBAL_DIR>/plugin/baize-subagent-reuse.js（幂等）。
 
     内容无变化时不重写（避免无谓 mtime 抖动）。部署后需重启 OC serve
-    才被加载。"""
+    才被加载。workspace_roots=None → 平台工作区根清单（oc_plugin_scope）：
+    插件只对这些根之下的目录实例生效，用户自己的工作会话不受影响。"""
     import os
     if not global_dir or not endpoint:
         return None
@@ -421,7 +446,7 @@ def ensure_subagent_reuse_plugin(global_dir: str, endpoint: str,
         plugin_dir = os.path.join(global_dir, 'plugin')
         os.makedirs(plugin_dir, exist_ok=True)
         path = os.path.join(plugin_dir, PLUGIN_NAME)
-        source = plugin_source(endpoint, token)
+        source = plugin_source(endpoint, token, workspace_roots)
         if os.path.isfile(path):
             with open(path, 'r', encoding='utf-8') as f:
                 if f.read() == source:

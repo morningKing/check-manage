@@ -27,6 +27,8 @@ import secrets
 from db import get_db
 from pathlib import Path
 
+from utils.oc_plugin_scope import inject_scope
+
 logger = logging.getLogger(__name__)
 
 RUNTIME_PLUGIN_NAME = 'baize-trace.js'
@@ -301,14 +303,13 @@ const _argsSummary = (args) => {
   } catch { return '' }
 }
 // 诊断留痕（2026-10-15 生产 token 错位排查）：插件实际使用的 token 指纹与
-// 来源（env 优先/文件回落）随加载打印一次——与后端启动日志的 fingerprint、
-// 403 日志的 server=/got= 两侧对照，错位在哪一级一眼可见。只打前缀+长度。
-{
-  const _envTok = process.env.BAIZE_INTERNAL_TOKEN
-  const _tokStr = String(TOKEN)
-  const _fp = _tokStr ? `${_tokStr.slice(0, 6)}…len=${_tokStr.length}` : '(empty)'
-  console.error(`[baize-trace] ${_ts()} gate token source=${_envTok ? 'env' : 'file'} fingerprint=${_fp}`)
-}
+// 来源（env 优先/文件回落）随**平台目录实例**的初始化打印一次——与后端启动
+// 日志的 fingerprint、403 日志的 server=/got= 两侧对照，错位在哪一级一眼
+// 可见。只打前缀+长度。（2026-11-24 起不在模块加载时打印：插件随本机每个
+// OpenCode 实例加载，非平台会话的日志里不该出现平台 token 指纹。）
+const _tokSource = process.env.BAIZE_INTERNAL_TOKEN ? 'env' : 'file'
+const _tokStr = String(TOKEN)
+const _tokFp = _tokStr ? `${_tokStr.slice(0, 6)}…len=${_tokStr.length}` : '(empty)'
 const GATE_TIMEOUT_MS = 3000
 // (sessionID → expiry)。服务端返回 rules=0（该会话无任何 pre 规则）时短路
 // 后续工具调用的 pre-check 请求——无规则是常态，热路径零开销。
@@ -406,7 +407,13 @@ async function gatePostCheck(sessionID, tool, argsText) {
   }
 }
 
-export const BaizeTracePlugin = async () => {
+/*__BAIZE_SCOPE__*/
+export const BaizeTracePlugin = async (input) => {
+  // 作用域守卫：OpenCode 按目录实例各初始化一份插件，入参 directory 就是该
+  // 实例会话的目录。非平台会话（用户自己的工作目录）→ 空钩子：不门禁、
+  // 不上报、不打日志。
+  if (!inPlatformWorkspace(input && input.directory)) return {}
+  console.error(`[baize-trace] ${_ts()} gate token source=${_tokSource} fingerprint=${_tokFp}`)
   return {
     async event({ event }) {
       const type = event?.type || ''
@@ -480,7 +487,8 @@ export const BaizeTracePlugin = async () => {
 
 def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '',
                           gate_endpoint: str = '',
-                          gate_post_endpoint: str = '') -> str | None:
+                          gate_post_endpoint: str = '',
+                          workspace_roots=None) -> str | None:
     """写入 <OPENCODE_GLOBAL_DIR>/plugin/baize-trace.js（幂等）。
 
     endpoint 与 internal token 都直接嵌入插件文件（serve 子进程环境不可靠，
@@ -490,7 +498,9 @@ def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '',
     after 时机 post-check 端点（/ai/gate/internal/post-check，after 钩子
     非阻断追加注入）。任一留空时插件模板里的占位符替换为空串，对应钩子
     短路（pre 放行 / after 不注入，等价于未启用该门禁）。
-    内容变化会在下次启动时重写插件文件——OC serve 需重启才重新加载。"""
+    内容变化会在下次启动时重写插件文件——OC serve 需重启才重新加载。
+    workspace_roots=None → 平台工作区根清单（oc_plugin_scope）：插件只对
+    这些根之下的目录实例生效，用户自己的工作会话不受影响。"""
     import os
     if not global_dir:
         return None
@@ -498,7 +508,8 @@ def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '',
         pdir = os.path.join(global_dir, 'plugin')
         os.makedirs(pdir, exist_ok=True)
         path = os.path.join(pdir, RUNTIME_PLUGIN_NAME)
-        js = PLUGIN_JS.replace('__ENDPOINT__', endpoint or '') \
+        js = inject_scope(PLUGIN_JS, workspace_roots) \
+                      .replace('__ENDPOINT__', endpoint or '') \
                       .replace('__TOKEN__', token or '') \
                       .replace('__GATE_ENDPOINT__', gate_endpoint or '') \
                       .replace('__GATE_POSTCHECK__', gate_post_endpoint or '')
@@ -555,12 +566,11 @@ const _argsSummary = (args) => {
     }).join(' '), ARGS_MAX)
   } catch { return '' }
 }
-{
-  const _envTok = process.env.BAIZE_INTERNAL_TOKEN
-  const _tokStr = String(TOKEN)
-  const _fp = _tokStr ? `${_tokStr.slice(0, 6)}…len=${_tokStr.length}` : '(empty)'
-  console.error(`[baize-trace] ${_ts()} gate token source=${_envTok ? 'env' : 'file'} fingerprint=${_fp}`)
-}
+// 诊断留痕同 V1 版：token 指纹随**平台 location 实例**的初始化打印一次，
+// 不在模块加载时打印（插件随本机每个 OpenCode 实例加载）。
+const _tokSource = process.env.BAIZE_INTERNAL_TOKEN ? 'env' : 'file'
+const _tokStr = String(TOKEN)
+const _tokFp = _tokStr ? `${_tokStr.slice(0, 6)}…len=${_tokStr.length}` : '(empty)'
 const GATE_TIMEOUT_MS = 3000
 const _gateEmpty = new Map()
 const GATE_EMPTY_TTL_MS = 30000
@@ -662,9 +672,17 @@ function _appendResult(result, prompt) {
   return { text: '\n\n' + prompt }
 }
 
+/*__BAIZE_SCOPE__*/
 export default {
   id: 'baize-trace',
   async setup(ctx) {
+    // 作用域守卫：V2 插件按 location 实例化，ctx.location.directory 是本实例
+    // 所属目录。非平台会话（用户自己的工作目录）→ 不订阅事件、不注册钩子、
+    // 不打日志。
+    if (!inPlatformWorkspace(ctx && ctx.location && ctx.location.directory)) {
+      return () => {}
+    }
+    console.error(`[baize-trace] ${_ts()} gate token source=${_tokSource} fingerprint=${_tokFp}`)
     const ctrl = new AbortController()
     void (async () => {
       try {
@@ -744,8 +762,8 @@ export default {
 
 
 def plugin_js_v2(endpoint: str, token: str = '', gate_endpoint: str = '',
-                 gate_post_endpoint: str = '') -> str:
-    return (_PLUGIN_JS_V2
+                 gate_post_endpoint: str = '', workspace_roots=None) -> str:
+    return (inject_scope(_PLUGIN_JS_V2, workspace_roots)
             .replace('__ENDPOINT__', endpoint or '')
             .replace('__TOKEN__', token or '')
             .replace('__GATE_ENDPOINT__', gate_endpoint or '')
@@ -757,10 +775,11 @@ RUNTIME_PLUGIN_NAME_V2 = 'baize-trace'
 
 def ensure_runtime_plugin_v2(plugins_root: str, endpoint: str, token: str = '',
                              gate_endpoint: str = '',
-                             gate_post_endpoint: str = '') -> str | None:
+                             gate_post_endpoint: str = '',
+                             workspace_roots=None) -> str | None:
     """写入 <V2 plugins_root>/baize-trace/index.js（幂等）。V2 目录形态部署，
     与 V1 文件物理隔离；部署后需重启 V2 serve。上报 body 与 V1 同形状
-    （后端零改动）。"""
+    （后端零改动）。workspace_roots=None → 平台工作区根清单（oc_plugin_scope）。"""
     import os
     if not plugins_root:
         return None
@@ -771,7 +790,8 @@ def ensure_runtime_plugin_v2(plugins_root: str, endpoint: str, token: str = '',
             raise ValueError('plugin path escapes plugins root')
         os.makedirs(pdir, exist_ok=True)
         path = os.path.join(pdir, 'index.js')
-        js = plugin_js_v2(endpoint, token, gate_endpoint, gate_post_endpoint)
+        js = plugin_js_v2(endpoint, token, gate_endpoint, gate_post_endpoint,
+                          workspace_roots)
         current = Path(path).read_text(encoding='utf-8') \
             if os.path.exists(path) else ''
         if current != js:

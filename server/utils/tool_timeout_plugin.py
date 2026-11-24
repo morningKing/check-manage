@@ -29,11 +29,17 @@ OpenCode 进程内给每一次内置工具调用挂看门狗：
                                 （子代理委派合法耗时可能很长，批任务侧
                                 已有带子代理存活检测的更聪明看门狗）
 
+作用域（2026-11-24）：插件装在 OpenCode 全局目录，随本机每一个 OpenCode 实例
+加载。按目录实例初始化时的入参 directory 判定——不在平台工作区根下（= 用户
+自己的工作会话）则返回空钩子，不挂看门狗。根清单与逃生口见 oc_plugin_scope。
+
 注意：OC serve 在启动时加载 plugin 目录——部署后需重启 serve 生效。
 """
 import os
 import logging
 from pathlib import Path
+
+from utils.oc_plugin_scope import inject_scope
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +89,8 @@ const argsSummary = (args) => {
   } catch { return '' }
 }
 
-export const BaizeToolTimeoutPlugin = async ({ client }) => ({
+/*__BAIZE_SCOPE__*/
+const _hooks = async ({ client }) => ({
   // 会话删除/清理 → 该会话在途工具不会再触发 tool.execute.after，
   // 计时器会泄漏并在门限到点后对死会话（或其新回合）补 abort——误杀。
   async event({ event }) {
@@ -141,12 +148,20 @@ export const BaizeToolTimeoutPlugin = async ({ client }) => ({
     } catch { /* 清理失败无碍 */ }
   },
 })
+
+// 作用域守卫：OpenCode 按目录实例各初始化一份插件，入参 directory 就是该
+// 实例会话的目录。非平台会话（用户自己的工作目录）→ 空钩子，不挂看门狗。
+export const BaizeToolTimeoutPlugin = async (input) => {
+  if (!inPlatformWorkspace(input && input.directory)) return {}
+  return _hooks(input)
+}
 """
 
 
 def plugin_source(timeout_ms: int = DEFAULT_TIMEOUT_MS,
-                  exempt: str = DEFAULT_EXEMPT) -> str:
-    return (_PLUGIN_TEMPLATE
+                  exempt: str = DEFAULT_EXEMPT,
+                  workspace_roots=None) -> str:
+    return (inject_scope(_PLUGIN_TEMPLATE, workspace_roots)
             .replace('__TIMEOUT_MS__', str(int(timeout_ms)))
             .replace('__EXEMPT__', exempt))
 
@@ -191,9 +206,15 @@ const argsSummary = (args) => {
   } catch { return '' }
 }
 
+/*__BAIZE_SCOPE__*/
 export default {
   id: 'baize-tool-timeout',
   async setup(ctx) {
+    // 作用域守卫：V2 插件按 location 实例化，ctx.location.directory 是本实例
+    // 所属目录。非平台会话（用户自己的工作目录）→ 不注册钩子、不订阅事件。
+    if (!inPlatformWorkspace(ctx && ctx.location && ctx.location.directory)) {
+      return () => {}
+    }
     // 会话删除/清理 → 在途工具不会再触发 after，计时器泄漏会误杀——
     // V2 经事件订阅清理（V1 是 event 回调）。
     const ctrl = new AbortController()
@@ -260,8 +281,9 @@ export default {
 
 
 def plugin_source_v2(timeout_ms: int = DEFAULT_TIMEOUT_MS,
-                     exempt: str = DEFAULT_EXEMPT) -> str:
-    return (_PLUGIN_TEMPLATE_V2
+                     exempt: str = DEFAULT_EXEMPT,
+                     workspace_roots=None) -> str:
+    return (inject_scope(_PLUGIN_TEMPLATE_V2, workspace_roots)
             .replace('__TIMEOUT_MS__', str(int(timeout_ms)))
             .replace('__EXEMPT__', exempt))
 
@@ -271,9 +293,11 @@ PLUGIN_NAME_V2 = 'baize-tool-timeout'
 
 def ensure_tool_timeout_plugin_v2(plugins_root: str,
                                   timeout_ms: int = DEFAULT_TIMEOUT_MS,
-                                  exempt: str = DEFAULT_EXEMPT) -> str | None:
+                                  exempt: str = DEFAULT_EXEMPT,
+                                  workspace_roots=None) -> str | None:
     """写入 <V2 plugins_root>/baize-tool-timeout/index.js（幂等）。
-    V2 目录形态部署，与 V1 文件物理隔离；部署后需重启 V2 serve。"""
+    V2 目录形态部署，与 V1 文件物理隔离；部署后需重启 V2 serve。
+    workspace_roots=None → 平台工作区根清单（oc_plugin_scope）。"""
     if not plugins_root:
         return None
     try:
@@ -283,7 +307,7 @@ def ensure_tool_timeout_plugin_v2(plugins_root: str,
             raise ValueError('plugin path escapes plugins root')
         os.makedirs(pdir, exist_ok=True)
         path = os.path.join(pdir, 'index.js')
-        source = plugin_source_v2(timeout_ms, exempt)
+        source = plugin_source_v2(timeout_ms, exempt, workspace_roots)
         current = Path(path).read_text(encoding='utf-8') \
             if os.path.isfile(path) else ''
         if current != source:
@@ -297,10 +321,13 @@ def ensure_tool_timeout_plugin_v2(plugins_root: str,
 
 def ensure_tool_timeout_plugin(global_dir: str,
                                timeout_ms: int = DEFAULT_TIMEOUT_MS,
-                               exempt: str = DEFAULT_EXEMPT) -> str | None:
+                               exempt: str = DEFAULT_EXEMPT,
+                               workspace_roots=None) -> str | None:
     """写入 <OPENCODE_GLOBAL_DIR>/plugin/baize-tool-timeout.js（幂等）。
 
-    内容无变化时不重写。部署后需重启 OC serve 才被加载。"""
+    内容无变化时不重写。部署后需重启 OC serve 才被加载。
+    workspace_roots=None → 平台工作区根清单（oc_plugin_scope）：插件只对
+    这些根之下的目录实例生效，用户自己的工作会话不受影响。"""
     if not global_dir:
         return None
     try:
@@ -311,7 +338,7 @@ def ensure_tool_timeout_plugin(global_dir: str,
         # 写点必须落在全局目录内（global_dir 来自环境配置，防止误配 ../ 逃逸）
         if os.path.commonpath([dest, root]) != root:
             raise ValueError('plugin path escapes global dir')
-        source = plugin_source(timeout_ms, exempt)
+        source = plugin_source(timeout_ms, exempt, workspace_roots)
         if os.path.isfile(dest):
             with open(dest, 'r', encoding='utf-8') as f:
                 if f.read() == source:
