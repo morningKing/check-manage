@@ -3090,6 +3090,9 @@ function onKey(e: Event) {
 .change-file {
   display: flex; flex-direction: column; gap: 6px;
   padding: 6px 8px; border-radius: 6px; font-size: 14px;
+  /* 显式主文本色：无 color 时会继承 body 的浅色模式编译色 #303133，
+     深色模式下深字配深底几乎不可见（与 .output-file 同一修法） */
+  color: var(--el-text-color-primary);
   &:hover { background: var(--el-fill-color); }
   &__row { display: flex; align-items: center; gap: 8px; }
   &__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--el-font-family-mono, monospace); }

@@ -228,7 +228,8 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .batch-group__head .caret { flex: 0 0 auto; margin-top: 3px; }
 /* 标题区独占一行自由折行（任务名完整可读），元信息收进标题下方一条紧凑行 */
 .bg-main { flex: 1; min-width: 0; }
-.bg-name { display: block; font-weight: 600; overflow-wrap: anywhere; line-height: 1.35; }
+/* 显式主文本色：无 color 会继承 body 的浅色模式编译色 #303133，深色模式下不可读 */
+.bg-name { display: block; font-weight: 600; overflow-wrap: anywhere; line-height: 1.35; color: var(--el-text-color-primary); }
 .bg-sub { display: flex; align-items: center; gap: 6px; margin-top: 3px; min-width: 0; }
 .bg-meta, .bg-am { color: var(--el-text-color-secondary); font-size: 11px; }
 .bg-am { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -239,7 +240,7 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .bg-child { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer;
   border-radius: 6px; font-size: 12px; }
 .bg-child:hover, .bg-child.active { background: var(--el-fill-color); }
-.bg-child__file { flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-child__file { flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--el-text-color-primary); }
 .bg-child__preview { color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bg-child__preview.is-error { color: var(--el-color-danger); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-info); flex: 0 0 auto; }
