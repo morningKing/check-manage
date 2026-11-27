@@ -17,6 +17,10 @@ const props = defineProps<{
 const durationText = computed(() => formatDuration(props.durationMs))
 
 const open = ref(false)
+// 折叠体懒渲染：首次展开才挂载 body。历史会话动辄上百个折叠工具气泡，
+// 挂载即对每个 input/result 全量 stringify（v-show 只藏样式、绑定照跑），
+// 打开会话时的主线程冻结大头之一。首次展开后保持 v-show 收合，避免反复重解析。
+const openedOnce = ref(false)
 const bodyId = `tool-call-body-${Math.random().toString(36).slice(2, 9)}`
 
 // P2 spec §5: the collapsed head shows a human-readable deterministic summary
@@ -42,7 +46,7 @@ const inputText = computed(() =>
   summary.value.showRawInput ? stringifyRedacted(props.input, summary.value.sensitiveKeys) : '')
 const resultText = computed(() => stringifyRedacted(props.result, summary.value.sensitiveKeys))
 
-function toggle() { open.value = !open.value }
+function toggle() { open.value = !open.value; openedOnce.value = true }
 </script>
 
 <template>
@@ -66,7 +70,7 @@ function toggle() { open.value = !open.value }
         <ElIcon v-else-if="statusKind === 'run'" class="run spin"><Loading /></ElIcon>
       </span>
     </button>
-    <div v-show="open" :id="bodyId" class="tool-call__body">
+    <div v-if="openedOnce" v-show="open" :id="bodyId" class="tool-call__body">
       <div class="tool-call__sub">操作</div>
       <div class="tool-call__action">
         {{ summary.actionText }}<template v-if="summary.resultText"> —— {{ summary.resultText }}</template>
