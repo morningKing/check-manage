@@ -9,6 +9,7 @@ Reverse proxy server for production deployment.
 import os
 import re
 import sys
+import json
 import mimetypes
 import socket
 import threading
@@ -660,10 +661,15 @@ def start_mcp():
         print(f'       [WARN] mcp-server not found at {mcp_dir}; AI chat disabled', flush=True)
         return None
     log = open(MCP_LOG, 'w', encoding='utf-8', errors='replace')
+    # 子进程端口必须跟随 MCP_HEALTH_URL（prestart 探针/指纹都认它），否则
+    # MCP_HEALTH_URL 指了非默认端口时 spawn 落在 .env 默认 3003、proxy 却
+    # 探测另一头——冒烟实锤的 spawn/探测漂移（2026-11-27）。
+    env = opencode_launch.child_env()
+    env['MCP_PORT'] = str(urlparse(MCP_HEALTH_URL).port or 3003)
     proc = subprocess.Popen(
         [_mcp_python(), 'main.py'],
         cwd=mcp_dir,
-        env=opencode_launch.child_env(),
+        env=env,
         stdout=log,
         stderr=subprocess.STDOUT,
         creationflags=_NO_WINDOW,
@@ -885,6 +891,132 @@ def _kill_tree(p):
             pass
 
 
+# ---------------------------------------------------------------------------
+# 行为指纹自动释放（prestart_cleanup 第②步「父存活身份不明」的归属确认）
+# ---------------------------------------------------------------------------
+# 「父存活身份不明」的端口占用者从进程系谱认不出归属：venv trampoline /
+# tsx watch / cmd /c 这类启动包装会把项目路径藏掉，命令行只剩裸
+# `python main.py` / `node`。改从行为认——对端口发免鉴权探针，响应精确
+# 命中本项目服务特征即确认归属，自动链杀（含包装链）后由本进程重建；
+# 不匹配维持拒启。三个指纹均已实测（2026-11-27）：
+#   - MCP:      GET /openapi.json → info.title == 'check-manage MCP server'
+#               （FastAPI 默认文档路由，mcp-server/main.py FastAPI(title=)）；
+#               404（文档被关）时退 /tools 的数组形态（元素含 group_order+access）
+#   - 智能写作:  GET /（非升级请求）→ body 精确 'Welcome to Hocuspocus!'
+#               （@hocuspocus/server requestHandler 固定响应）
+#   - BACKEND:  GET /<单段路径> → 401 {"error": "未登录"}
+#               （@login_required 无 Authorization 头即 401，先于一切不碰库，
+#               落 routes/dynamic.py 的 /<collection> catch-all）
+_FINGERPRINT_PROBE_PATHS = {
+    'MCP': ('/openapi.json', '/tools'),
+    '智能写作(SE)': ('/',),
+    'BACKEND_URL': ('/__fingerprint_probe__',),
+}
+_FINGERPRINT_TITLE = 'check-manage MCP server'
+_PROBE_BODY_CAP = 2_000_000   # openapi.json 可达几十 KB；2MB 封顶防失控读取
+
+
+def _fingerprint_ok(role, status, body):
+    """纯函数（可单测）：单次响应是否命中该角色的本项目服务指纹。
+
+    body 为 bytes。返回 (ok, detail)，detail 用于 [AUTO]/[ERROR] 行留痕。
+    """
+    if role == 'MCP':
+        if status != 200:
+            return False, f'status={status}'
+        try:
+            data = json.loads(body.decode('utf-8', 'replace'))
+        except ValueError:
+            return False, '响应不是 JSON'
+        if isinstance(data, dict) and isinstance(data.get('info'), dict) \
+                and data['info'].get('title') == _FINGERPRINT_TITLE:
+            return True, 'openapi 标题匹配'
+        if isinstance(data, list) and bool(data) and isinstance(data[0], dict) \
+                and 'group_order' in data[0] and 'access' in data[0]:
+            return True, '/tools 形态匹配'
+        return False, 'JSON 形态不匹配'
+    if role == '智能写作(SE)':
+        if status == 200 and body.strip() == b'Welcome to Hocuspocus!':
+            return True, 'Hocuspocus 响应匹配'
+        return False, f'status={status} body={body[:60]!r}'
+    if role == 'BACKEND_URL':
+        if status != 401:
+            return False, f'status={status}'
+        try:
+            err = (json.loads(body.decode('utf-8', 'replace')) or {}).get('error')
+        except ValueError:
+            return False, '401 响应不是 JSON'
+        if err == '未登录':
+            return True, '401 未登录匹配'
+        return False, f'401 error={err!r}'
+    return False, f'未知角色 {role}'
+
+
+def _probe_fingerprint(role, port, timeout=3.0):
+    """向角色端口发免鉴权探针并判定指纹。返回 (ok, detail)。
+
+    探测失败（拒连/超时/非 HTTP）一律 (False, …)——无身份证据，保守拒启。
+    """
+    paths = _FINGERPRINT_PROBE_PATHS.get(role)
+    if not paths:
+        return False, f'角色 {role} 无指纹探针'
+    last = '探测失败'
+    for path in paths:
+        try:
+            with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}',
+                                        timeout=timeout) as r:
+                status, body = r.status, r.read(_PROBE_BODY_CAP)
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read(_PROBE_BODY_CAP)
+            except Exception:  # noqa: BLE001 —— 401 带 body 是常态，缺了就空判
+                body = b''
+            status = e.code
+        except Exception as e:  # noqa: BLE001
+            return False, f'探测失败：{e}'
+        ok, detail = _fingerprint_ok(role, status, body)
+        if ok:
+            return True, f'{path} {detail}'
+        last = f'{path} {detail}'
+    return False, last
+
+
+# 占端口者的祖先链必然是它的启动包装（trampoline/watcher/shell /c），一并
+# 带走防止 watcher（tsx watch）把端口抢回去；祖先不像包装即停——交互
+# shell/终端绝不杀。命令行特征全部来自真实链路实测（2026-11-27）。
+_WRAPPER_CMD_MARKS = ('tsx', 'node_modules', 'npm', '/d /s /c', 'cmd /c',
+                      'cmd.exe /c', '.venv', 'main.py',
+                      'scripts\\python', 'bin/python')
+
+
+def _kill_listener_chain(pid, procs):
+    """指纹确认后的链杀：从 pid 上溯找最顶层包装祖先，对它树杀（/T 连带
+    整条链）。返回 (ok, err)。
+
+    上溯守卫：祖先缺失 / 命令行取不到 / 祖先比子年轻（PID 复用=链断）/
+    不像包装 → 停，只杀已确认的链段。POSIX 快照无 created，同样保守停。
+    """
+    target, cur, child_created = pid, pid, (procs.get(pid) or {}).get('created')
+    while True:
+        info = procs.get(cur) or {}
+        parent = info.get('parent') or 0
+        if not parent or parent not in procs:
+            break
+        pinfo = procs[parent]
+        pcreated = pinfo.get('created')
+        if child_created is None or pcreated is None \
+                or pcreated > child_created + 2:
+            break   # 核不了年龄（created 缺失，POSIX 快照即如此）或父比子
+                    # 年轻（pid 复用）→ 链不可信，保守停
+        cmd = pinfo.get('cmd') or _stale_check._cmdline_one(parent)
+        if not cmd:
+            break   # 命令行取不到（快照只批量补 python 的）→ 不盲杀
+        if not any(m in cmd.lower() for m in _WRAPPER_CMD_MARKS):
+            break   # 不像启动包装（交互 shell/终端）→ 停
+        target, cur, child_created = parent, parent, pcreated
+    return _stack_stop._kill_tree(target, procs)
+
+
 def prestart_cleanup():
     """启动前清理上一轮残留进程（best-effort 自愈；PROXY_AUTOCLEAN=0 关闭）。
 
@@ -901,13 +1033,20 @@ def prestart_cleanup():
          报错退出（换端口/手动释放）。
       ② BACKEND_URL / MCP / SE 端口上**父进程已死**的监听者 → 树杀（孤儿
          形态，命令行认不出也杀——这些端口本来就是本进程要占的）。
-         **父还活着**的身份不明监听者 → 不杀，报错退出：继续启动就是让新
-         backend bind 失败、流量被陌生进程接走，等于把要防的事故再演一遍。
+         **父还活着**的身份不明监听者 → 先过④的行为指纹，不匹配才拒启。
          FLASK_PORT（dev 后端，与 BACKEND_URL 不同端口时）不碰——那是另一条
          开发栈的端口；OC serve 永不碰（可达即复用是既有契约，别人的不归
          本进程管）。
       ③ 孤儿 multiprocessing 子进程（spawn_main 且 parent_pid 已不存在）
          → 树杀（历史强杀遗留、无端口可循，无条件清）。
+      ④ 行为指纹自动释放（PROXY_AUTOCLEAN_VERIFY=0 关）：父存活的占用者
+         从进程系谱认不出归属（venv trampoline / tsx watch / cmd /c 包装
+         会把项目路径藏掉），改向端口发免鉴权探针，响应命中本项目服务
+         特征（MCP /openapi.json 标题、SE Hocuspocus 固定响应、后端 401
+         未登录）即确认归属 → 链杀其启动包装（防 watcher 把端口抢回）后
+         由本进程重建；BACKEND 角色指纹吻合 = 自动接管（显式指了就是
+         接管意图，旧代码占端口的 405 事故形态顺带自愈）。指纹不匹配/
+         探测失败/释放后端口仍占 → 维持拒启交人工确认（宁少勿误杀不变）。
 
     清理模块缺失（部署包不含 scripts/）→ 打 WARN 跳过，绝不阻断启动。
     """
@@ -938,9 +1077,10 @@ def prestart_cleanup():
             sys.exit(1)
     time.sleep(1.0)   # 树杀后端口释放/子进程随之退场，下一轮快照才反映得出
 
-    # ② 所需端口：父已死 → 杀孤儿；父存活且身份不明 → 拦下启动
+    # ② 所需端口：父已死 → 杀孤儿；父存活 → 先过行为指纹，不匹配才拦
     procs = _stale_check.snapshot_processes()
     foreign = []
+    auto_verify = os.environ.get('PROXY_AUTOCLEAN_VERIFY', '1').strip() != '0'
     for name, port in (('BACKEND_URL', backend_port), ('MCP', mcp_port),
                        ('智能写作(SE)', SE_WS_PORT)):
         if port in (PROXY_PORT, oc_port):   # 端口配置串角色也绝不越界杀 proxy/OC
@@ -958,13 +1098,38 @@ def prestart_cleanup():
                   f'（{name}，父进程已退出）', flush=True)
             _stack_stop._kill_tree(pid, procs)
     if foreign:
+        blocked = []
         for name, port, pid, cmd in foreign:
+            verified = None
+            if auto_verify:
+                try:
+                    verified = _probe_fingerprint(name, port)
+                except Exception as e:  # noqa: BLE001 —— 探针自身异常=无身份证据
+                    verified = (False, f'指纹探测异常：{e}')
+            if verified is not None and verified[0]:
+                print(f'       [AUTO] :{port}（{name}）指纹确认为本项目服务'
+                      f'（{verified[1]}），自动释放 pid={pid} 及其包装链',
+                      flush=True)
+                ok, err = _kill_listener_chain(pid, procs)
+                if serve_listener_pids(port):
+                    print(f'       [WARN] pid={pid} 释放未确认'
+                          f'（{err or "端口仍占"}），2s 后重试', flush=True)
+                    time.sleep(2.0)
+                    ok, err = _kill_listener_chain(pid, procs)
+                if not serve_listener_pids(port):
+                    continue    # 端口已腾出，本进程随后正常重建该角色
+                blocked.append((name, port, pid, cmd,
+                                f'指纹吻合但端口释放失败：{err or "端口仍占"}'))
+                continue
+            reason = verified[1] if verified is not None else '指纹校验已关闭'
             print(f'[ERROR] :{port}（{name}）被父进程存活的身份不明进程占用 '
                   f'pid={pid}：{(cmd or "?")[:120]}', flush=True)
-            print(f'        新拉起的子进程会 bind 失败、流量可能被它接走'
-                  f'（405 事故形态）。请确认后手动释放'
+            print(f'        指纹不匹配（{reason}）。新拉起的子进程会 bind 失败、'
+                  f'流量可能被它接走（405 事故形态）。请确认后手动释放'
                   f'（taskkill /F /PID {pid}）再重启。', flush=True)
-        sys.exit(1)
+            blocked.append((name, port, pid, cmd, reason))
+        if blocked:
+            sys.exit(1)
 
     # ③ 孤儿 multiprocessing 子进程
     procs = _stale_check.snapshot_processes()
