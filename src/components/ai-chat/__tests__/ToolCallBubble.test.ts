@@ -111,13 +111,29 @@ describe('ToolCallBubble.vue', () => {
     expect(head.text()).toContain('查询数据页“订单”')
     expect(head.text()).toContain('找到 24 条记录')
     expect(head.text()).toContain('已完成')
-    // raw JSON body is hidden (v-show) until expanded; head shows summary only
-    expect(w.find('.tool-call__body').attributes('style')).toContain('display: none')
+    // raw JSON body is not in the DOM at all until first expanded (lazy body:
+    // collapsed bubbles must not stringify input/result at mount)
+    expect(w.find('.tool-call__body').exists()).toBe(false)
     expect(head.text()).not.toContain('"collection"')
     await head.trigger('click')
     expect(w.find('.tool-call__head').attributes('aria-expanded')).toBe('true')
-    expect(w.find('.tool-call__body').attributes('style')).not.toContain('display: none')
+    expect(w.find('.tool-call__body').exists()).toBe(true)
     expect(w.text()).toContain('"collection"')
+  })
+
+  it('keeps the body mounted after first expand — collapse only hides it (v-show)', async () => {
+    const w = mount(ToolCallBubble, {
+      props: { name: 'bash', input: { command: 'npm test' }, result: 'ok', status: 'completed' },
+      global: { stubs },
+    })
+    expect(w.find('.tool-call__body').exists()).toBe(false)
+    await w.find('.tool-call__head').trigger('click')
+    expect(w.find('.tool-call__body').exists()).toBe(true)
+    await w.find('.tool-call__head').trigger('click')
+    // re-collapsed: stays mounted, merely hidden — re-expanding doesn't re-parse
+    expect(w.find('.tool-call__body').attributes('style')).toContain('display: none')
+    await w.find('.tool-call__head').trigger('click')
+    expect(w.find('.tool-call__body').attributes('style')).not.toContain('display: none')
   })
 
   it('status icon is never the only signal — text label always present', () => {

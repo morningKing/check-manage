@@ -14,6 +14,8 @@ vi.mock('@/api/aiChat', () => ({
   clearSession: vi.fn(),
   getMessages: vi.fn(),
   getTurns: vi.fn(async () => ({ turns: [] })),
+  getRuntimeState: vi.fn(),
+  getPendingQuestion: vi.fn(async () => ({ data: null })),
   sendMessage: vi.fn(),
   setMessageFeedback: vi.fn(),
   uploadFile: vi.fn(),
@@ -444,5 +446,65 @@ describe('permissionMode（bypass）', () => {
     } as never)
     expect(store.pendingPermissions['sess_1']).toHaveLength(1)
     expect(store.autoApproved['sess_1']).toBeUndefined()
+  })
+
+  describe('_syncAfterReconnect 指纹判据（打开会话去重复拉取）', () => {
+    const threeMessages = [
+      { id: 'm1', role: 'user', content: [{ type: 'text', text: 'a' }], createdAt: '', seq: 1 },
+      { id: 'm2', role: 'assistant', content: [{ type: 'text', text: 'b' }], createdAt: '', seq: 2 },
+      { id: 'm3', role: 'assistant', content: [{ type: 'text', text: 'c' }], createdAt: '', seq: 3 },
+    ] as never[]
+
+    function seedAdopted(store: ReturnType<typeof useAiChatStore>, messages: never[]) {
+      store.activeSessionId = 'sess_1'
+      store._adoptHistory('sess_1', { messages, hasMore: false, revert: null } as never)
+    }
+
+    it('内存窗口已覆盖服务端最新消息 → 不再整替（打开 idle 会话只拉一次）', async () => {
+      vi.mocked(api.getMessages).mockResolvedValue({
+        messages: threeMessages, hasMore: false, revert: null,
+      } as never)
+      vi.mocked(api.getRuntimeState).mockResolvedValue({
+        sessionId: 'sess_1', sessionStatus: 'active', turnStatus: 'idle',
+        opencodeSessionId: null, lastMessageId: 'm3', error: null,
+      } as never)
+      const store = useAiChatStore()
+      seedAdopted(store, threeMessages)
+      // openSession 后 _syncAfterReconnect 对 idle 会话还会调 _reloadPersisted——
+      // 窗口指纹（最新消息 id）一致就必须让位，否则打开即两次 200 条整替
+      // （两次全量重渲染，重度会话卡顿大头之一）。
+      await store._syncAfterReconnect('sess_1')
+      expect(api.getMessages).not.toHaveBeenCalled()
+      expect(store.messages['sess_1']).toHaveLength(3)
+    })
+
+    it('服务端有更新（拉取后、订阅前恰好落库）→ 指纹不一致，照旧收敛整替', async () => {
+      vi.mocked(api.getMessages).mockResolvedValue({
+        messages: threeMessages, hasMore: false, revert: null,
+      } as never)
+      vi.mocked(api.getRuntimeState).mockResolvedValue({
+        sessionId: 'sess_1', sessionStatus: 'active', turnStatus: 'idle',
+        opencodeSessionId: null, lastMessageId: 'm_new', error: null,
+      } as never)
+      const store = useAiChatStore()
+      seedAdopted(store, threeMessages)
+      await store._syncAfterReconnect('sess_1')
+      expect(api.getMessages).toHaveBeenCalledTimes(1)
+      expect(store.messages['sess_1']).toHaveLength(3)
+    })
+
+    it('两侧皆空（空会话）→ 跳过整替', async () => {
+      vi.mocked(api.getMessages).mockResolvedValue({
+        messages: [], hasMore: false, revert: null,
+      } as never)
+      vi.mocked(api.getRuntimeState).mockResolvedValue({
+        sessionId: 'sess_1', sessionStatus: 'active', turnStatus: 'idle',
+        opencodeSessionId: null, lastMessageId: null, error: null,
+      } as never)
+      const store = useAiChatStore()
+      seedAdopted(store, [])
+      await store._syncAfterReconnect('sess_1')
+      expect(api.getMessages).not.toHaveBeenCalled()
+    })
   })
 })
