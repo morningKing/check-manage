@@ -1,6 +1,7 @@
 import logging
 import sys
 import os
+import gzip
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, jsonify, request
@@ -165,6 +166,48 @@ def _ai_open_api_body_limit():
         return jsonify({'error': f'请求体超过 {limit // 1024 // 1024} MB 的上限',
                         'code': 'PAYLOAD_TOO_LARGE'}), 413
     return None
+
+
+# JSON 响应 gzip 压缩门槛（无第三方依赖，stdlib）：
+GZIP_MIN_SIZE = 1024        # 小于 1KB 的响应不值得压（CPU 换不来几字节）
+GZIP_COMPRESS_LEVEL = 1     # 速度优先：文本 JSON 下 level 1 与 level 9 体积差 <15%，
+                            # 而大响应（消息列表数 MB）压 10MB 级别 5 要 ~150ms CPU，
+                            # level 1 只需几十 ms——waitress 线程池是稀缺资源。
+
+
+@app.after_request
+def _gzip_json_response(response):
+    """对 2xx 的 application/json 响应做 gzip（浏览器 Accept-Encoding 声明时）。
+
+    AI 会话消息列表（GET /ai/chat/sessions/<sid>/messages）等端点的 content
+    JSONB 含工具 input/result 全文且无截断，单响应可达数 MB——压缩后传输体积
+    与前端等待时间同比例下降（文本 JSON 通常 5~10x）。
+
+    只压 2xx JSON：
+    - 错误响应体量小（不值得 CPU），也让生产代理 proxy.py 的 HTTPError 转发
+      路径（只透传 Content-Type/Content-Length）天然无风险；
+    - SSE（text/event-stream）按 content-type 天然跳过；
+    - 文件流（direct_passthrough）不碰。
+    代理侧配套（proxy.py）：请求透传 Accept-Encoding，响应转发
+    Content-Encoding/Vary——否则浏览器声明了 gzip 也压不了 / 压了没头。
+    """
+    if response.status_code >= 300 or response.direct_passthrough:
+        return response
+    if not (response.headers.get('Content-Type') or '').startswith('application/json'):
+        return response
+    if 'gzip' not in (request.headers.get('Accept-Encoding') or '').lower():
+        return response
+    if response.headers.get('Content-Encoding'):
+        return response
+    data = response.get_data()
+    if len(data) < GZIP_MIN_SIZE:
+        return response
+    compressed = gzip.compress(data, compresslevel=GZIP_COMPRESS_LEVEL)
+    response.set_data(compressed)
+    response.headers['Content-Encoding'] = 'gzip'
+    response.headers['Content-Length'] = str(len(compressed))
+    response.headers.add('Vary', 'Accept-Encoding')
+    return response
 
 # 执行审计表/回填随启动幂等执行（execution-audit §17）：旧分析会话
 # （标题前缀）自动补 kind=trace_analysis，无需手动跑迁移。

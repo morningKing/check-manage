@@ -218,8 +218,11 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         body = self.rfile.read(content_length) if content_length > 0 else None
 
         # Build upstream request, forward relevant headers
+        # Accept-Encoding 必须透传：后端对大 JSON（AI 会话消息列表）做 gzip，
+        # 不透传浏览器就永远收不到压缩响应（app.py::_gzip_json_response）。
         req = urllib.request.Request(url, data=body, method=self.command)
-        for header in ('Content-Type', 'Authorization', 'X-API-Key', 'X-Visitor-Id', 'Accept'):
+        for header in ('Content-Type', 'Authorization', 'X-API-Key', 'X-Visitor-Id', 'Accept',
+                       'Accept-Encoding'):
             value = self.headers.get(header)
             if value:
                 req.add_header(header, value)
@@ -289,10 +292,14 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     def _relay_buffered(self, resp):
         """Read the whole upstream response, then forward it (normal API calls)."""
+        # content-encoding 必须转发：后端 gzip 的响应体是压缩字节，丢了头
+        # 浏览器会把压缩体当明文 JSON 解析（直接坏掉）。urllib 不解压，
+        # 这里原样透传即可。vary 一并透传（缓存正确性）。
         resp_body = resp.read()
         self.send_response(resp.status)
         for key, val in resp.getheaders():
             if key.lower() in ('content-type', 'content-disposition',
+                               'content-encoding', 'vary',
                                'x-total-count', 'cache-control'):
                 self.send_header(key, val)
         self.send_header('Content-Length', len(resp_body))
