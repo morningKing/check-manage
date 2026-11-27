@@ -6,45 +6,33 @@ import {
   ElDrawer, ElTag, ElDialog,
   ElDropdown, ElDropdownMenu, ElDropdownItem,
   ElSelect, ElOption, ElRadioGroup, ElRadioButton,
-  ElImage,
 } from 'element-plus'
 import {
   Plus, Top, EditPen, Close, Document, Loading, Picture,
-  CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
+  Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
   ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
   DataAnalysis, FolderAdd,
   Folder, FolderOpened, Collection, Timer, Monitor, DataLine, Files, Aim,
   Lock, Unlock,
 } from '@element-plus/icons-vue'
-import { Bubble, Thinking } from 'vue-element-plus-x'
+import { Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
-import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import QuestionCard from '@/components/ai-chat/QuestionCard.vue'
 import PermissionCard from '@/components/ai-chat/PermissionCard.vue'
 import TodoListBlock from '@/components/ai-chat/TodoListBlock.vue'
-import QuestionResultCard from '@/components/ai-chat/QuestionResultCard.vue'
 import ContextStatusBar from '@/components/ai-chat/ContextStatusBar.vue'
 import { parseTodos, buildTodoTrace, type TodoTraceItem } from '@/utils/todos'
 import type { SubtaskTodoGroup } from '@/stores/aiChat'
-import { parseQuestionPart } from '@/utils/questionPart'
-import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
-import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
-import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
-import LspFormatterBlock from '@/components/ai-chat/LspFormatterBlock.vue'
-import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
 import SessionRowActions from '@/components/ai-chat/SessionRowActions.vue'
-import ChatFile from '@/components/ai-chat/ChatFile.vue'
-import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
+import MessageBubble from '@/components/ai-chat/MessageBubble.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
 import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
-import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, mergeReasoningParts, type CodeSegment, type FileGroup } from '@/utils/artifacts'
+import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, type CodeSegment, type FileGroup } from '@/utils/artifacts'
 import { activeAtToken, filterFileItems } from '@/utils/fileMentions'
-import UserMentionText from '@/components/ai-chat/UserMentionText.vue'
 import { copyText } from '@/utils/clipboard'
-import { summarizeMeta } from '@/utils/aiMeta'
 import { authParam } from '@/utils/request'
 import { useAiChatStore } from '@/stores/aiChat'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
@@ -219,9 +207,14 @@ async function loadOlder() {
   if (!id || olderLoading.value) return
   const el = getScrollEl()
   const prevHeight = el?.scrollHeight ?? 0
+  const prevLen = messages.value?.length ?? 0
   olderLoading.value = true
   try {
     await store.loadOlderMessages(id)
+    // 用户明确点了「加载更早」：新前置的历史整页放开渲染（与补偿逻辑配合
+    // 视口停回原消息位置，不跳动）
+    const added = (messages.value?.length ?? 0) - prevLen
+    if (added > 0) visibleCount.value += added
     await nextTick()
     // 前置插入后把视口停回原消息位置，避免跳到别处
     if (el) el.scrollTop += el.scrollHeight - prevHeight
@@ -229,6 +222,73 @@ async function loadOlder() {
     olderLoading.value = false
   }
 }
+
+// ---- 可视区窗口渲染（会话加载卡顿优化）----
+// 初始只挂载最近 REVEAL_INITIAL 条；用户上滚接近窗口顶部时由哨兵
+// （IntersectionObserver）按 REVEAL_CHUNK 增量补渲染，并做滚动位置补偿
+// （补渲染的内容都在视口上方，不加补偿视口内容会整体下移）。窗口从尾部
+// 锚定：流式新消息天然在窗口内；「加载更早」前插时按增量扩大窗口。
+// data-msg-idx 用全数组真实下标，大纲/执行轨迹定位与 scroll-spy 不受影响。
+const REVEAL_INITIAL = 30
+const REVEAL_CHUNK = 20
+const visibleCount = ref(REVEAL_INITIAL)
+const visibleMessages = computed(() => {
+  const msgs = messages.value ?? []
+  const from = Math.max(0, msgs.length - visibleCount.value)
+  return msgs.slice(from).map((m, i) => ({ m, idx: from + i }))
+})
+watch(activeId, () => { visibleCount.value = REVEAL_INITIAL })
+
+/** 定位兜底：目标消息还在未渲染区（下标 < 窗口起点）→ 先扩窗覆盖它。
+ *  返回是否扩了窗（调用方需在 nextTick 后再找 DOM）。 */
+function ensureMsgVisible(idx: number): boolean {
+  const msgs = messages.value ?? []
+  const from = Math.max(0, msgs.length - visibleCount.value)
+  if (idx < 0 || idx >= from) return false
+  visibleCount.value = Math.max(visibleCount.value, msgs.length - idx)
+  return true
+}
+
+const revealSentinelRef = ref<HTMLElement | null>(null)
+const sentinelVisible = computed(() => (messages.value?.length ?? 0) > visibleCount.value)
+let revealInFlight = false
+async function revealEarlier() {
+  const msgs = messages.value ?? []
+  if (revealInFlight || msgs.length <= visibleCount.value) return
+  // 贴底（含刚打开会话尚未滚动）时不补渲染：IntersectionObserver 的首次
+  // 上报可能早于 openSession 的 pinToBottom（此时视口还在内容顶部、哨兵
+  // 必然相交），不设门会把初始窗口悄悄翻倍（E2E 实测 heads 15→25）。
+  if (pinnedToBottom.value) return
+  revealInFlight = true
+  try {
+    const wrap = getScrollEl()
+    const prevHeight = wrap?.scrollHeight ?? 0
+    const prevTop = wrap?.scrollTop ?? 0
+    visibleCount.value = Math.min(msgs.length, visibleCount.value + REVEAL_CHUNK)
+    await nextTick()
+    // 补渲染的全在视口上方：抬高 scrollTop 抵消新增高度，视口内容不动
+    if (wrap) wrap.scrollTop = prevTop + (wrap.scrollHeight - prevHeight)
+  } finally {
+    revealInFlight = false
+  }
+}
+let revealObserver: IntersectionObserver | null = null
+onMounted(() => {
+  if (typeof IntersectionObserver === 'undefined') return  // 测试环境兜底
+  revealObserver = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting)) void revealEarlier()
+  }, { root: getScrollEl(), rootMargin: '700px 0px 700px 0px' })
+  // 初始哨兵可能先于本钩子挂载（pre-watch flush 早于 onMounted）——补挂
+  if (revealSentinelRef.value) revealObserver.observe(revealSentinelRef.value)
+})
+onUnmounted(() => { revealObserver?.disconnect(); revealObserver = null })
+// 哨兵元素随窗口全量露出而消失（v-if）：挂载/卸载都要重挂 observer
+watch(revealSentinelRef, (el, _prev, onCleanup) => {
+  const obs = revealObserver
+  if (!obs) return
+  onCleanup(() => obs.unobserve(el as HTMLElement))
+  if (el) obs.observe(el)
+})
 
 // ---- F9 长任务完成：浏览器系统通知（切走/失焦时弹 OS Toast）+ 提示音 + Tab 角标 ----
 const {
@@ -631,6 +691,8 @@ function locateSubtaskDelegate(grp: SubtaskTodoGroup) {
 
 function locateTodoStep(msgIdx: number) {
   locatedMsgIdx.value = null
+  // 可视区窗口兜底：目标还在未渲染区 → 先扩窗覆盖，再等 DOM 落定滚动
+  ensureMsgVisible(msgIdx)
   void nextTick(() => {
     const el = document.querySelector(`[data-msg-idx="${msgIdx}"]`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -664,6 +726,9 @@ const locatedMsgId = ref<string | null>(null)
 let locatedIdTimer: ReturnType<typeof setTimeout> | null = null
 function locateMessageById(mid: string) {
   locatedMsgId.value = null
+  // 可视区窗口兜底：目标在未渲染区 → 先扩窗覆盖（大纲跳转/搜索定位）
+  const idx = (messages.value ?? []).findIndex((m) => m.id === mid)
+  if (idx >= 0) ensureMsgVisible(idx)
   void nextTick(() => {
     document.querySelector(`[data-msg-id="${CSS.escape(mid)}"]`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -976,25 +1041,28 @@ async function runArtifact(seg: CodeSegment, idx: number) {
   }
 }
 
-function isRunResultOnly(m: AiMessage): boolean {
-  return m.content.length > 0 && m.content.every(p => p.type === 'run_result')
-}
-
-function parseQueryResult(p: any): any | null {
-  if (p?.name !== 'query_collection') return null
-  let r: any = p.result
-  if (typeof r === 'string') {
-    try { r = JSON.parse(r) } catch { return null }
-  }
-  return r && typeof r === 'object' && typeof r.mode === 'string' ? r : null
-}
+// isRunResultOnly / parseQueryResult 已随消息气泡模板迁入 MessageBubble.vue
 
 // 滚动门控（F4）：只有贴底时才跟随流式自动滚动；用户上滑回看时不被打断，
 // 期间新消息计入 unread，由「回到底部」浮动按钮承载。
 // - 消息条数变化 = 新消息：贴底跟随，否则累计未读
 watch(() => messages.value.length, () => onChatNewMessage())
-// - 同一消息内的文本/思考增量：贴底才跟随，不累计未读
-watch(() => messages.value.map(m => m.content.map(c => (c as any).text || '').join()).join('|'), () => onChatStreamDelta())
+// - 同一消息内的文本/思考增量：贴底才跟随，不累计未读。
+//   廉价键只盯尾部消息（流式目标恒为尾行，part 到达即 parts.length 变化；
+//   文本 delta 反映在尾 part 文本长度上）。此前的 watch key 把全部消息全文
+//   join 成一个巨型字符串——任何响应式变更都要 O(全量文本) 拼串比较，
+//   200 条大消息会话单次就是几十 MB 字符串。
+//   旧 key 唯一多覆盖的场景是「窗口中段旧消息的 text part 原地改写」——
+//   整替类变更（reload/merge）消息条数必变，已由上面的长度 watch 兜住。
+const streamDeltaKey = computed(() => {
+  const msgs = messages.value
+  const last = msgs[msgs.length - 1]
+  if (!last) return '0'
+  let chars = 0
+  for (const p of last.content) chars += ((p as { text?: string }).text ?? '').length
+  return `${msgs.length}|${last.id}|${last.content.length}|${chars}`
+})
+watch(streamDeltaKey, () => onChatStreamDelta())
 watch(reasoning, () => onChatStreamDelta())
 // 切换会话：恢复贴底并滚到最新（消息异步加载后由长度 watch 再次跟随）
 watch(activeId, () => {
@@ -1805,149 +1873,45 @@ function onKey(e: Event) {
         </div>
 
         <template v-else>
+          <!-- 首次 adopt 前 store.messages[id] 为 undefined（空会话 adopt 后是
+               []，activeMessages getter 会兜底成 []，所以这里判原始字典）：
+               此区间渲染加载骨架，点击会话不再是一段空白主区 -->
+          <div v-if="!store.messages[activeId!]" class="ai-chat__thread-skeleton" data-test="thread-skeleton">
+            <div
+              v-for="i in 4" :key="i"
+              class="ai-chat__skeleton-row" :class="`ai-chat__skeleton-row--${i % 2 ? 'l' : 'r'}`"
+            >
+              <span class="ai-chat__skeleton-bubble" />
+            </div>
+            <div class="ai-chat__skeleton-hint">正在加载会话…</div>
+          </div>
+          <template v-else>
           <div v-if="store.hasMoreMessages[activeId]" class="ai-chat__load-older">
             <ElButton size="small" text type="primary" :loading="olderLoading" @click="loadOlder">
               加载更早消息
             </ElButton>
           </div>
+          <!-- 可视区窗口哨兵：上滚接近窗口顶部时增量补渲染更早的消息 -->
+          <div v-if="sentinelVisible" ref="revealSentinelRef" class="ai-chat__reveal-sentinel" data-test="reveal-sentinel" />
           <div class="ai-thread">
             <div
-              v-for="(m, mi) in messages" :key="m.id"
-              class="msg" :class="[`msg--${m.role}`, { 'msg--located': locatedMsgIdx === mi || locatedMsgId === m.id }]"
-              :data-msg-idx="mi"
-              :data-msg-id="m.id"
+              v-for="vm in visibleMessages" :key="vm.m.id"
+              class="msg" :class="[`msg--${vm.m.role}`, { 'msg--located': locatedMsgIdx === vm.idx || locatedMsgId === vm.m.id }]"
+              :data-msg-idx="vm.idx"
+              :data-msg-id="vm.m.id"
             >
-              <div class="msg__role" v-if="m.role !== 'user' && !isRunResultOnly(m)">AI 助手</div>
-              <Bubble
-                :placement="m.role === 'user' ? 'end' : 'start'"
-                :variant="m.role === 'user' ? 'filled' : 'borderless'"
-                :class="['ai-bubble', 'ai-bubble--' + m.role]"
-              >
-                <template #content>
-                  <div v-if="m.queued" class="msg__queued-tag">
-                    <ElIcon><Clock /></ElIcon> 排队中 · 回合结束后自动发送
-                  </div>
-                  <template v-for="(p, i) in mergeReasoningParts(m.content)" :key="i">
-                    <ChatFile v-if="p.type === 'file'" :name="p.name" :src="fileUrl(p.path)" />
-                    <template v-else-if="p.type === 'tool_use'">
-                      <TodoListBlock
-                        v-if="parseTodos(p)"
-                        :todos="parseTodos(p)!"
-                      />
-                      <QueryResultBlock
-                        v-else-if="parseQueryResult(p)"
-                        :result="parseQueryResult(p)!" :download-url="fileUrl"
-                      />
-                      <!-- question 工具完成后保留卡片渲染（勾选你的选择），
-                           而不是折叠成 JSON 工具气泡；运行中只留一条占位提示，
-                           交互卡片在对话流末尾。 -->
-                      <QuestionResultCard
-                        v-else-if="parseQuestionPart(p)"
-                        :view="parseQuestionPart(p)!"
-                      />
-                      <ToolCallBubble
-                        v-else
-                        :name="p.name" :title="p.title" :status="p.status"
-                        :input="p.input" :result="p.result" :duration-ms="p.durationMs"
-                      />
-                    </template>
-                    <RunResultBlock
-                      v-else-if="p.type === 'run_result'"
-                      :result="p" :download-url="fileUrl"
-                    />
-                    <McpServicesBlock
-                      v-else-if="p.type === 'mcp_services'"
-                      :servers="p.servers"
-                    />
-                    <LspFormatterBlock
-                      v-else-if="p.type === 'lsp_formatter'"
-                      :lsp="p.lsp" :formatters="p.formatters" :error="p.error"
-                    />
-                    <Thinking
-                      v-else-if="p.type === 'reasoning' && p.text"
-                      class="ai-thinking"
-                      :content="p.text" status="end"
-                      :model-value="false"
-                    />
-                    <SubtaskBubble
-                      v-else-if="p.type === 'subtask_use'"
-                      :subtask-id="p.subtaskId" :session-id="activeId!"
-                      :agent="p.agent" :description="p.description" :status="p.status"
-                      :depth="1" :segment-count="p.segmentCount" :fetch-fn="getSubtaskMessages"
-                    />
-                    <!-- 回合级失败（session.error / 出错的 assistant 消息）：
-                         持久化为 error part，刷新后仍在，见 chat_persist.py -->
-                    <div v-else-if="p.type === 'error'" class="msg__turn-error">
-                      <ElIcon><WarningFilled /></ElIcon>
-                      <span>{{ p.text }}</span>
-                    </div>
-                    <template v-else-if="p.type === 'text' && p.text">
-                      <!-- assistant: lift big code/doc blocks into artifact cards -->
-                      <template v-if="m.role === 'assistant'">
-                        <template v-for="(seg, si) in splitArtifacts(p.text)" :key="si">
-                          <MarkdownView v-if="seg.type === 'text' && seg.text.trim()" :text="seg.text" />
-                          <ArtifactCard
-                            v-else-if="seg.type === 'code'"
-                            :lang="seg.lang" :code="seg.code" :index="si"
-                            :versions="versionsForSeg(seg, si).length"
-                            :running="runningCode === seg.code"
-                            @preview="openPreview(seg, si)"
-                            @run="runArtifact(seg, si)"
-                          />
-                        </template>
-                      </template>
-                      <!-- user: @文件路径 renders as a clickable chip (F2) -->
-                      <UserMentionText
-                        v-else
-                        :text="p.text"
-                        :files="mentionFiles"
-                        @preview="onMentionPreview"
-                      />
-                    </template>
-                    <!-- user 气泡：image part（图片附件，后端 stored parts type=image）渲染为可预览图片 -->
-                    <template v-else-if="p.type === 'image'">
-                      <ElImage
-                        class="msg-image" :src="downloadFileUrl(activeId!, p.path)"
-                        :alt="p.name" fit="cover"
-                        :preview-src-list="[downloadFileUrl(activeId!, p.path)]" hide-on-click-modal
-                      />
-                    </template>
-                  </template>
-                </template>
-              </Bubble>
-              <div v-if="m.role === 'assistant' && summarizeMeta(m.meta)" class="msg__meta">
-                {{ summarizeMeta(m.meta) }}
-              </div>
-              <div v-if="messageText(m)" class="msg__actions" :class="`msg__actions--${m.role}`">
-                <button
-                  class="msg__action-btn" type="button" title="复制" aria-label="复制"
-                  @click="copyMessage(m)"
-                ><ElIcon><CopyDocument /></ElIcon></button>
-                <template v-if="m.role === 'user'">
-                  <button
-                    class="msg__action-btn" type="button" title="编辑并重发" aria-label="编辑并重发"
-                    :disabled="streaming" @click="editMessage(m)"
-                  ><ElIcon><EditPen /></ElIcon></button>
-                  <button
-                    class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
-                    :disabled="streaming" @click="retryMessage(m)"
-                  ><ElIcon><RefreshRight /></ElIcon></button>
-                </template>
-                <template v-else-if="m.role === 'assistant'">
-                  <button
-                    class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
-                    :disabled="streaming" @click="retryAssistantMessage(m)"
-                  ><ElIcon><RefreshRight /></ElIcon></button>
-                  <button class="msg__action-btn" :class="{ 'feedback-on': m.rating === 1 }"
-                    type="button" data-test="feedback-up" title="赞" aria-label="赞"
-                    @click="onFeedback(m, 1)"
-                  ><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg></button>
-                  <button class="msg__action-btn" :class="{ 'feedback-on': m.rating === -1 }"
-                    type="button" data-test="feedback-down" title="踩" aria-label="踩"
-                    @click="onFeedback(m, -1)"
-                  ><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg></button>
-                </template>
-              </div>
+              <!-- 渲染隔离：单条消息的解析/渲染全部收敛进 MessageBubble，
+                   其余消息子树被 Vue 按 props 等值跳过（此前任何响应式变化
+                   都会对全部消息重跑一次 3000 行组件的 render） -->
+              <MessageBubble
+                :message="vm.m" :session-id="activeId!" :streaming="streaming"
+                :mention-files="mentionFiles" :running-code="runningCode"
+                :get-versions="versionsForSeg" :fetch-subtask-messages="getSubtaskMessages"
+                :on-preview="openPreview" :on-run="runArtifact"
+                :on-mention-preview="onMentionPreview" :on-copy="copyMessage"
+                :on-edit="editMessage" :on-retry-user="retryMessage"
+                :on-retry-assistant="retryAssistantMessage" :on-feedback="onFeedback"
+              />
             </div>
 
             <!-- 思考过程：完成后自动收起 -->
@@ -2113,6 +2077,7 @@ function onKey(e: Event) {
 
             <!-- 工具调用已移至右侧「工具调用」侧栏（toolPanelOpen），不占消息流 -->
           </div>
+          </template>
         </template>
       </ElScrollbar>
         <button
@@ -2587,6 +2552,38 @@ function onKey(e: Event) {
 .ai-chat__messages-wrap { flex: 1; min-height: 0; position: relative; }
 .ai-chat__messages { height: 100%; }
 .ai-chat__load-older { display: flex; justify-content: center; padding: 8px 0 2px; }
+/* 可视区窗口哨兵：近零高度占位，IntersectionObserver 据此增量补渲染更早消息 */
+.ai-chat__reveal-sentinel { height: 1px; }
+/* 会话加载骨架（首次 adopt 前的主区占位，替代空白） */
+.ai-chat__thread-skeleton {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 28px 20px 40px;
+}
+.ai-chat__skeleton-row {
+  display: flex;
+  margin-bottom: 18px;
+  &--r { justify-content: flex-end; }
+}
+.ai-chat__skeleton-bubble {
+  display: block;
+  width: 62%;
+  height: 28px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--el-fill-color) 25%, var(--el-fill-color-light) 37%, var(--el-fill-color) 63%);
+  background-size: 400% 100%;
+  animation: ai-chat-skeleton-wave 1.4s ease infinite;
+}
+@keyframes ai-chat-skeleton-wave {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+.ai-chat__skeleton-hint {
+  text-align: center;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  padding-top: 12px;
+}
 .ai-chat__welcome { height: 100%; display: flex; align-items: center; justify-content: center; }
 /* 「回到底部」浮动按钮（流式自动滚动 F4） */
 .ai-chat__jump-bottom {
@@ -2739,12 +2736,8 @@ function onKey(e: Event) {
   padding: 28px 20px 40px;
 }
 .msg { margin-bottom: 24px; }
-.msg__role {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 6px;
-}
+/* msg__role / queued-tag / turn-error / meta / actions / ai-bubble / msg-image
+   样式已随消息气泡模板迁入 MessageBubble.vue（scoped 规则跨组件失配） */
 /* User: a single gray rounded block on the right (no inner box) */
 .msg--user { display: flex; flex-direction: column; align-items: flex-end; }
 
@@ -2774,83 +2767,6 @@ function onKey(e: Event) {
   border-radius: 8px;
   animation: msg-locate-pulse 0.8s ease-in-out 3;
 }
-/* 运行中插话的排队标记（气泡内顶部一行小字，发送后随 queued 标记消失） */
-.msg__queued-tag {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 6px;
-}
-/* 回合级失败提示条（error part）：出错也要看得见，而不是悄悄停转 */
-.msg__turn-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 8px 0;
-  padding: 8px 12px;
-  border: 1px solid var(--el-color-danger-light-5);
-  border-radius: 8px;
-  background: var(--el-color-danger-light-9);
-  color: var(--el-color-danger);
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
-}
-.msg__meta {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  font-family: var(--el-font-family-mono, monospace);
-}
-.msg__actions {
-  display: flex; gap: 4px;
-  margin-top: 4px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-  width: fit-content;
-}
-.msg__actions--assistant { margin-left: 0; }
-.msg:hover .msg__actions { opacity: 0.9; }
-.msg__action-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px;
-  padding: 0;
-  border: 1px solid var(--el-border-color);
-  border-radius: 6px;
-  background: var(--el-bg-color);
-  color: var(--el-text-color-regular);
-  font-size: 13px;
-  cursor: pointer;
-}
-.msg__action-btn:hover:not(:disabled) {
-  color: var(--el-color-primary);
-  border-color: var(--el-color-primary);
-}
-.msg__action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.feedback-on { color: var(--el-color-primary); }
-.ai-bubble--user :deep(.elx-bubble__content-wrapper),
-.ai-bubble--user :deep(.elx-bubble__content) {
-  background: var(--el-fill-color) !important;
-  color: var(--el-text-color-primary) !important;
-  border: none !important;
-  border-radius: 14px !important;
-}
-/* Assistant: borderless, full width, document feel — no frame around content */
-.ai-bubble--assistant { width: 100%; }
-.ai-bubble--assistant :deep(.elx-bubble__content-wrapper),
-.ai-bubble--assistant :deep(.elx-bubble__content) {
-  background: transparent !important;
-  border: none !important;
-  border-radius: 0 !important;
-  padding: 0 !important;
-  /* Full width (not shrink-to-content) so 100%-width children like echarts
-     charts don't collapse to a tiny default size. */
-  width: 100% !important;
-  max-width: 100% !important;
-}
-.ai-bubble--assistant :deep(.md-editor-preview) { font-size: 15px; line-height: 1.7; }
 .ai-thinking { max-width: 780px; margin: 0 auto 24px; }
 /* 展开态限高内滚：数千行推理会把会话撑到几千像素高，收起按钮（块头部）
    也被顶出视野。限高后头部始终近在眼前，内容在块内滚动。 */
@@ -2900,7 +2816,6 @@ function onKey(e: Event) {
   background: var(--el-fill-color-light); border-radius: 4px; font-size: 13px;
 }
 .attach-chip__x { cursor: pointer; &:hover { color: var(--el-color-danger); } }
-.msg-image { max-width: 240px; max-height: 180px; border-radius: 8px; }
 .batch-bar {
   max-width: 780px;
   margin: 0 auto;
