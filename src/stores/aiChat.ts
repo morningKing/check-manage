@@ -1232,7 +1232,16 @@ export const useAiChatStore = defineStore('aiChat', {
         if (st.turnStatus !== 'running') {
           this.loadFiles(sid)
           this.loadChanges(sid)
-          await this._reloadPersisted(sid)
+          // 指纹判据：内存窗口的最新消息 id 已等于服务端最新消息 → 刚 openSession
+          // 拉过的窗口就是当前持久化终态，不再整替一遍（否则打开 idle 会话 =
+          // 两次 200 条拉取 + 两次全量重渲染，重度会话卡顿大头之一）。lastMessageId
+          // 不一致（离开期间/订阅间隙有新落库）或两侧皆空才照旧收敛——不会误吞
+          // 「拉取后、订阅前」回合恰好完成的窗口（此时 id 必不一致）。
+          const msgs = this.messages[sid] ?? []
+          const newest = msgs[msgs.length - 1]
+          if (st.lastMessageId !== (newest?.id ?? null)) {
+            await this._reloadPersisted(sid)
+          }
         }
       } catch { /* non-fatal */ }
     },
