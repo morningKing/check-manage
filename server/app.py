@@ -694,6 +694,19 @@ try:
 except Exception as _e:
     logging.warning('skill candidates migration on boot failed: %s', _e)
 
+# run diagnoses FK 补 CASCADE（2026-11-28）：ai_run_diagnoses.attempt_id 建表时
+# 漏了 ON DELETE CASCADE（同库其余 attempts 引用表均有），删批任务级联删
+# attempts 时被诊断行挡住报 FK violation，批删不掉。漏注册则该库删批持续报错。
+try:
+    _mp23 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_11_28_run_diagnoses_fk_cascade.py')
+    _spec23 = _ilu.spec_from_file_location('_run_diag_fk_boot', _mp23)
+    _m23 = _ilu.module_from_spec(_spec23)
+    _spec23.loader.exec_module(_m23)
+    _m23.run()
+except Exception as _e:
+    logging.warning('run diagnoses fk cascade migration on boot failed: %s', _e)
+
 # 工具级耗时采集列（2026-10-10）：agent_tool_calls 加 started_at/duration_ms
 # + root/manifest 聚合索引（SkillOpt 性能分析二期，spec §7）。随启动幂等执行。
 try:
