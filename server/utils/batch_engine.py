@@ -408,7 +408,7 @@ def _prepare_workspace(user_id: str, session_id: str,
     # 批子会话整体不可用，模型调用被 OC 记 invalid（当日 R4 实测），账本里
     # 批会话的 check-manage_* 调用自 9-29 后为零。先写 MCP/model，再由
     # ensure_batch_permissions 幂等合并 permission 键（不动 MCP 段）。
-    from config import (AI_SESSION_TTL_HOURS, MCP_SERVER_URL,
+    from config import (AI_MCP_TOKEN_TTL_HOURS, MCP_SERVER_URL,
                         get_default_chat_model)
     from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled, \
         INTERNAL_MCP_NAME as MCP_NAME
@@ -418,7 +418,7 @@ def _prepare_workspace(user_id: str, session_id: str,
     write_opencode_config(
         ws, mcp_name=_mcp_name,
         mcp_url=(f'{MCP_SERVER_URL}/mcp?token='
-                 f'{generate_token(session_id, AI_SESSION_TTL_HOURS)}'),
+                 f'{generate_token(session_id, AI_MCP_TOKEN_TTL_HOURS)}'),
         model=get_default_chat_model(),
         extra_mcp=enabled_mcp_config(reserved_names=[_mcp_name]),
         include_internal=internal_mcp_enabled())

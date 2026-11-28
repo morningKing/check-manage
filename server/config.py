@@ -87,6 +87,13 @@ AI_WORKSPACE_ROOT     = os.getenv(
 OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
+# MCP token 有效期（小时）——独立于 AI_SESSION_TTL_HOURS：后者 0 的语义是
+# 「会话/工作区永不回收」（编排回收器按 <=0 跳过），但对 token 却是
+# 「签发即过期」——2026-10-27 生产实锤：TTL=0 时批子会话的平台 MCP 工具
+# 整体 401（token 签出即失效，无人值守无续租可救）。0/负值钳制回默认，
+# 两条语义从此解耦。
+_MCP_TOKEN_TTL_RAW = _to_int(os.getenv('AI_MCP_TOKEN_TTL_HOURS'), 24)
+AI_MCP_TOKEN_TTL_HOURS = _MCP_TOKEN_TTL_RAW if _MCP_TOKEN_TTL_RAW > 0 else 24
 # P0 §10.3 执行所有权严格模式的降级开关（默认开启严格模式）：
 # 设为 0/False 时，非终态批子会话的普通发送不再被 409 拒绝（渐进迁移用）。
 AI_BATCH_STRICT_OWNERSHIP = (os.getenv('AI_BATCH_STRICT_OWNERSHIP', '1')

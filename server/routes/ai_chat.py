@@ -84,7 +84,7 @@ from utils.memory import search_memory, render_memory_block
 from utils.operation_log import log_operation
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
-    AI_SESSION_TTL_HOURS, get_default_chat_model,
+    AI_MCP_TOKEN_TTL_HOURS, get_default_chat_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -222,7 +222,7 @@ def create_session():
              '_pending_', project_menu_id, _oc_kind),
         )
     # 2) overwrite the token via the dedicated utility (single source of truth for TTL math)
-    token = generate_token(session_id, AI_SESSION_TTL_HOURS)
+    token = generate_token(session_id, AI_MCP_TOKEN_TTL_HOURS)
 
     # 3) write opencode.json into the workspace so OpenCode (scoped to this dir)
     #    connects to our MCP server with this session's token. OpenCode has no
@@ -963,7 +963,7 @@ def _load_session_for_user(session_id: str, user_id: str):
     batch_id, orchestration_run_id) or None.
 
     On a successful load, also bump `last_active_at` and extend `token_expires_at`
-    by `AI_SESSION_TTL_HOURS` — every user action keeps the session's MCP token
+    by `AI_MCP_TOKEN_TTL_HOURS` — every user action keeps the session's MCP token
     alive so the chat doesn't 401 partway through a long day, and feeds the
     sidebar's recency sort (which previously only saw creation time).
     """
@@ -983,7 +983,7 @@ def _load_session_for_user(session_id: str, user_id: str):
             "UPDATE ai_chat_sessions "
             "SET last_active_at = NOW(), token_expires_at = NOW() + %s "
             "WHERE id = %s",
-            (timedelta(hours=AI_SESSION_TTL_HOURS), session_id),
+            (timedelta(hours=AI_MCP_TOKEN_TTL_HOURS), session_id),
         )
         return row
 
@@ -2976,7 +2976,7 @@ def clear_session(sid):
     cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)
     workspace_path = create_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)
     # 3) 重新签发 token（新 TTL）+ 用新 token 重写 opencode.json 的 MCP url
-    token = generate_token(sid, AI_SESSION_TTL_HOURS)
+    token = generate_token(sid, AI_MCP_TOKEN_TTL_HOURS)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
                           model=get_default_chat_model(), extra_mcp=_external_mcp(),

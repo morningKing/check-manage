@@ -17,7 +17,7 @@ from utils.session_token import generate_token
 from utils.opencode_client import OpenCodeClient
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
-    AI_SESSION_TTL_HOURS, get_default_chat_model,
+    AI_MCP_TOKEN_TTL_HOURS, get_default_chat_model,
 )
 
 _BOT_USER_ID = 'kefu-bot'
@@ -203,7 +203,7 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
             ),
         )
 
-    token = generate_token(session_id, AI_SESSION_TTL_HOURS)
+    token = generate_token(session_id, AI_MCP_TOKEN_TTL_HOURS)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(
         workspace_path,
