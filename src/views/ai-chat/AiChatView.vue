@@ -470,9 +470,10 @@ const palette = computed<PaletteItem[]>(() => {
   const skills: PaletteItem[] = (cached?.skills ?? []).map((s) => ({ kind: 'skill', name: s.name, description: s.description }))
   return [...builtin, ...commands, ...skills].filter((it) => !q || it.name.toLowerCase().includes(q))
 })
-// ---- F2 @-mention 文件：当前会话工作区文件（uploads + outputs/根目录），用于
-// 补全列表与用户气泡里的可点击文件 chip ----
-const mentionFiles = computed<AiFile[]>(() => [...store.activeUploads, ...store.activeOutputs])
+// ---- F2 @-mention 文件：当前会话工作区文件（uploads + outputs/根目录 +
+// mentionChips——搜索采纳、loadFiles 全集之外的仓库文件），用于补全列表
+// 本地回退与用户气泡里的可点击文件 chip。注意不改动 outputs 本身（抽屉数据源）。 ----
+const mentionFiles = computed<AiFile[]>(() => [...store.activeUploads, ...store.activeOutputs, ...store.activeMentionChips])
 const FILE_DIR_LABEL: Record<string, string> = { uploads: '上传文件', outputs: '产出', workspace: '工作区' }
 function fileItemDesc(f: AiFile): string {
   const dir = FILE_DIR_LABEL[f.dir] ?? '文件'

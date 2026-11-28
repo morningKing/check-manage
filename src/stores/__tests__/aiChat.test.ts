@@ -355,12 +355,40 @@ describe('useAiChatStore', () => {
     expect(store.mentionSearch['sess_1']).toBeUndefined()
   })
 
-  it('ensureMentionFile adds a searched file once so the bubble chip can resolve it', () => {
+  it('ensureMentionFile records searched files into mentionChips only (drawer\'s outputs untouched)', () => {
     const store = useAiChatStore()
     const f = { name: 'alpha.py', path: 'repo/src/alpha.py', dir: 'workspace' as const, size: 3 }
     store.ensureMentionFile('sess_1', f)
-    store.ensureMentionFile('sess_1', { ...f })
-    expect(store.outputs['sess_1']).toEqual([f])
+    store.ensureMentionFile('sess_1', { ...f })   // 按路径去重
+    expect(store.mentionChips['sess_1']).toEqual([f])
+    // 关键契约：outputs 是文件抽屉产出分组的数据源，绝不能被 @ 采纳混入
+    expect(store.outputs['sess_1']).toBeUndefined()
+  })
+
+  it('ensureMentionFile skips files already present in uploads/outputs lists', () => {
+    const store = useAiChatStore()
+    store.uploads['sess_1'] = [{ name: 'in.txt', path: 'uploads/in.txt', dir: 'uploads', size: 1 }]
+    store.outputs['sess_1'] = [{ name: 'out.md', path: 'outputs/out.md', dir: 'outputs', size: 2 }]
+    store.ensureMentionFile('sess_1', { name: 'in.txt', path: 'uploads/in.txt', dir: 'uploads', size: 1 })
+    store.ensureMentionFile('sess_1', { name: 'out.md', path: 'outputs/out.md', dir: 'outputs', size: 2 })
+    expect(store.mentionChips['sess_1']).toEqual([])
+  })
+
+  it('clearSession wipes mentionChips and mentionSearch with the rest of per-session state', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { void h; return { close: vi.fn() } })
+    ;(api.clearSession as any).mockResolvedValue({ ok: true, status: 'active' })
+    vi.mocked(api.listFiles).mockResolvedValue({ files: [] })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    store.ensureMentionFile('sess_1', { name: 'a.py', path: 'repo/a.py', dir: 'workspace', size: 1 })
+    store.mentionSearch['sess_1'] = { query: 'a', files: [] }
+
+    await store.clearSession('sess_1')
+    expect(store.mentionChips['sess_1']).toEqual([])
+    expect(store.mentionSearch['sess_1']).toBeNull()
   })
 
   it('clearSession wipes local history/files, keeps the session active, and reopens the stream', async () => {

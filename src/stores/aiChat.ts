@@ -134,6 +134,13 @@ interface State {
   mentionSearch: Record<string, { query: string; files: AiFile[] } | null>
   /** @ 联想搜索的请求序号（防过期响应覆盖新结果）。 */
   mentionSearchSeq: Record<string, number>
+  /**
+   * @ 联想采纳、但不在 loadFiles 全集里的文件（克隆仓库文件——list 扫描
+   * 跳过嵌套仓库）。单独成组**不进 outputs**：outputs 同时喂文件抽屉的
+   * 产出分组，混入会让抽屉瞬态多出仓库文件。这里只喂气泡 chip 渲染与
+   * palette 本地回退；下一次 loadFiles 不清理（文件真实存在，chip 保留）。
+   */
+  mentionChips: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
   /** 会话全部工具调用时间线（根 + 子代理，agent_tool_calls 账本；大数据量 §1.1 的快查视图） */
   toolCalls: Record<string, SessionToolCall[]>
@@ -286,6 +293,7 @@ export const useAiChatStore = defineStore('aiChat', {
     uploads: {},
     mentionSearch: {},
     mentionSearchSeq: {},
+    mentionChips: {},
     changes: {} as Record<string, ChangedFile[]>,
     toolCalls: {} as Record<string, SessionToolCall[]>,
     toolCallsLoading: {} as Record<string, boolean>,
@@ -330,6 +338,9 @@ export const useAiChatStore = defineStore('aiChat', {
     /** 当前会话的 @ 联想服务端搜索结果（query 匹配由 view 校验）。 */
     activeMentionSearch(state): { query: string; files: AiFile[] } | null {
       return state.activeSessionId ? state.mentionSearch[state.activeSessionId] ?? null : null
+    },
+    activeMentionChips(state): AiFile[] {
+      return state.activeSessionId ? state.mentionChips[state.activeSessionId] ?? [] : []
     },
     activeChanges(state): ChangedFile[] {
       return state.activeSessionId ? state.changes[state.activeSessionId] ?? [] : []
@@ -635,11 +646,15 @@ export const useAiChatStore = defineStore('aiChat', {
       } catch { /* non-fatal */ }
     },
 
-    /** 把 @ 采纳的文件（可能来自服务端搜索，不在 loadFiles 全集里）并入
-     *  outputs 组，让用户气泡 chip（knownPaths）与点击预览照常工作。 */
+    /** 把 @ 采纳的文件（可能来自服务端搜索，不在 loadFiles 全集里）记入
+     *  mentionChips（不进 outputs——那是文件抽屉产出分组的数据源，混入会
+     *  让抽屉瞬态多出仓库文件）。供气泡 chip（knownPaths）与本地回退解析。 */
     ensureMentionFile(id: string, f: AiFile) {
-      const list = this.outputs[id] ?? (this.outputs[id] = [])
-      if (!list.some(x => x.path === f.path)) list.push({ ...f })
+      const list = this.mentionChips[id] ?? (this.mentionChips[id] = [])
+      const dup = list.some(x => x.path === f.path)
+        || (this.uploads[id] ?? []).some(x => x.path === f.path)
+        || (this.outputs[id] ?? []).some(x => x.path === f.path)
+      if (!dup) list.push({ ...f })
     },
 
     async loadChanges(id: string): Promise<boolean> {
@@ -1204,6 +1219,9 @@ export const useAiChatStore = defineStore('aiChat', {
       this.uploads[id] = []
       this.changes[id] = []
       this.attachments[id] = []
+      this.mentionChips[id] = []      // 工作区已重建，@ 联想 chip/搜索缓存一并作废
+      this.mentionSearch[id] = null
+      this.mentionSearchSeq[id] = 0
       this.streaming[id] = false
       this.thinking[id] = false
       this.usageBySession[id] = { ...EMPTY_USAGE }  // 上下文重置，用量归零
