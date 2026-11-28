@@ -67,7 +67,13 @@ export async function createBatchViaDialog(page: Page, o: {
  * 显式化）。子任务数量断言由调用方自行执行。 */
 export async function expandBatchGroup(page: Page, name: string): Promise<void> {
   const group = page.locator('.batch-group', { hasText: name }).first()
-  await group.waitFor({ state: 'visible', timeout: 15_000 })
+  // 60s（与 gotoChat 同预算）：会话侧栏非虚拟化渲染 600+ 行（每行带
+  // ElDropdown），挂载期间主线程长任务连续占帧，locator 等待的 RAF 轮询会
+  // 饿死——2026-11-28 agent-action-gate E2E 实锤：元素早已在 DOM 且
+  // visible（box 215x66@22747px），但 15s 内页面持续无帧导致等待超时；
+  // trace-on 因周期截图强制出帧反而必过。挂载结束的瞬间轮询立即恢复，
+  // 放宽等待窗即可，不需要改轮询机制。
+  await group.waitFor({ state: 'visible', timeout: 60_000 })
   const head = group.locator('.batch-group__head')
   for (let i = 0; i < 5 && (await group.locator('.batch-group__body').count()) === 0; i++) {
     await head.click()

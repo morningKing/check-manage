@@ -24,6 +24,25 @@ export default defineConfig({
   // 开发服务器配置
   server: {
     port: 5173,
+    watch: {
+      // 运行日志与测试产物不在模块图里，但默认会被监听——每次写入都触发
+      // vite full-page-reload，把开发中的浏览器页（含 E2E 页面）周期性整页
+      // 刷新。2026-11-28 实锤：ai-chat.log / oc-serve.log / proxy-*.log 高频
+      // 写入使 agent-action-gate E2E 的 UI 步骤在 15s 等待窗内反复重载，批组
+      // 永远渲染不出来（trace 快照：整页 DOM 从完整→空白→半渲染循环）。
+      // 「批列表首载偶发空」的老现象与此同源。
+      ignored: [
+        '**/server/*.log',
+        '**/server/logs/**',
+        '**/.dev-ai-workspaces/**',
+        '**/test-results/**',
+        '**/playwright-report/**',
+        '**/.mimosa/**',
+        '**/.playwright-mcp/**',
+        '**/e2e/screenshots/**',
+        '**/e2e/.auth/**',
+      ],
+    },
     // API 代理配置，将 /api 请求转发到 Flask server
     proxy: {
       '/api': {

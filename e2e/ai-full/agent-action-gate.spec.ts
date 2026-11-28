@@ -7,10 +7,11 @@
  * 既有 deny/终态核对/verifier/gate_retry/徽标场景在 batch/gate.spec.ts,不重复。
  *
  * 场景(设计 §11 E2E 1-5;⑥ agent 定向降级为单测覆盖,见文末 skip 桩):
- * 1. before 闭环:checkpoint(before) 拦首次 write → 注入核对提示词 → 模型读
- *    知识库 → 重写 → 终态 passed(「门禁 ✓」徽标)+ 账本出现 read docs/kb;
- * 2. 预算防冗余:max_checks=1,第二次写不再被拦(期望行 fired_count=1,
- *    报告重写与副本写入照常完成);
+ * 1. before 闭环:checkpoint(before) 把关 write → 未达标则拦截注入(2026-11-28
+ *    起 assert 已达标智能放行,fired 可为 0) → 模型读知识库 → 写报告 →
+ *    终态 passed(「门禁 ✓」徽标)+ 账本出现 read docs/kb;
+ * 2. 预算防冗余:max_checks=1,注入至多一次(fired≤1;模型预合规时可为 0),
+ *    报告重写与副本写入照常完成;
  * 3. 双保险:checkpoint 提示词指向不可满足的保险库文件 → 终态核对 fail →
  *    gate_retry 修正轮 → 断言「门禁参与判定」(GATE_RETRY attempt +
  *    retry_count≥1;终态 completed(修正轮补齐 assert)或 failed+action_gate
@@ -85,7 +86,7 @@ async function gotoChat(page: Page): Promise<void> {
 // 场景 1:checkpoint(before) 闭环
 // ---------------------------------------------------------------------------
 
-test('before 闭环:checkpoint 拦截首写→读知识库→重写通过(门禁 ✓ 徽标)',
+test('before 闭环:checkpoint 把关读知识库→写报告通过(门禁 ✓ 徽标)',
      async ({ page }, testInfo) => {
   testInfo.annotations.push({ type: 'llm' })   // 1 个真实子会话(两步写入)
   const tk = await adminTokenCached()
@@ -112,12 +113,16 @@ test('before 闭环:checkpoint 拦截首写→读知识库→重写通过(门禁
     expect(child.gate_failed).toBe(0)
     expect(String(child.error_message || '')).not.toContain('action_gate')
 
-    // 拦截发生:期望行预算被消耗(before 注入一次)
+    // 期望行登记；命中预算 0 或 1 都是设计内（2026-11-28 智能放行）：
+    // 模型先读完知识库再写报告 → assert 已达标直接放行不打断（fired=0，
+    // 恰是「检查完成不白拦」特性的生效形态）；模型先写 → 被拦+注入 →
+    // 补读重写（fired=1）。强制不变量由上方 gate_passed 与下方账本 read
+    // 证据承担；「必拦截」的确定性证明在场景 3（不可满足 assert 必命中）
+    // 与 e2e/manual/gate-leak-probe（stub 确定性复现）。
     const fired = dbSeed(`SELECT fired_count, max_checks FROM action_expectations
       WHERE scope_id = '${child.id}' AND mode = 'checkpoint'`)
     expect(fired.length, '应登记 1 条 checkpoint 期望行').toBe(1)
-    expect(Number(fired[0][0]), 'before 注入应消耗预算 fired_count≥1')
-      .toBeGreaterThanOrEqual(1)
+    expect(Number(fired[0][0]), 'fired 不超预算').toBeLessThanOrEqual(Number(fired[0][1]))
 
     // 闭环实锤:账本出现对知识库的 completed read(assert_spec 的证据来源)
     const tc = await (await fetch(
@@ -146,7 +151,7 @@ test('before 闭环:checkpoint 拦截首写→读知识库→重写通过(门禁
 // 场景 2:预算防冗余(max_checks=1)
 // ---------------------------------------------------------------------------
 
-test('预算防冗余:max_checks=1 第二次写不再被拦(fired_count=1)',
+test('预算防冗余:max_checks=1 注入至多一次;重写与副本不被卡(fired≤1)',
      async ({ }, testInfo) => {
   testInfo.annotations.push({ type: 'llm' })   // 1 个真实子会话(三步写入)
   const tk = await adminTokenCached()
@@ -171,11 +176,15 @@ test('预算防冗余:max_checks=1 第二次写不再被拦(fired_count=1)',
     expect(child.status).toBe('completed')
     expect(child.gate_passed).toBeGreaterThanOrEqual(1)
 
-    // 预算核心断言:只有首写被拦(fired_count=1);重写与副本写不再被拦不消耗
+    // 预算上限不变量：max_checks=1 → 注入至多一次。2026-11-28 智能放行后
+    // 模型预合规（先读后写）时可为 0——assert 已达标直接放行；「恰好 1」
+    // 依赖模型不预合规，不再确定性成立（预算机制本身由单测
+    // TestPreCheckCheckpoint 与 gate-leak-probe S1/S2 确定性覆盖）。
+    // 真不变量：重写与副本写都照常完成（不会被反复拦截卡死）。
     const fired = dbSeed(`SELECT fired_count, max_checks FROM action_expectations
       WHERE scope_id = '${child.id}' AND name = '报告写入前核对·预算'`)
     expect(fired.length, '应登记 1 条期望行').toBe(1)
-    expect(Number(fired[0][0]), '预算 1 次:只有首写注入').toBe(1)
+    expect(Number(fired[0][0]), '注入至多一次(≤ max_checks)').toBeLessThanOrEqual(1)
     expect(Number(fired[0][1])).toBe(1)
 
     // 第二次写不再被拦的实锤:报告重写与副本写入都照常完成(非 error 状态)
