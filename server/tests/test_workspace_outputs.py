@@ -2,10 +2,11 @@
 端点的字段集等价锁。"""
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 from utils.workspace_outputs import (
     list_session_files, LISTFILES_MAX_FILES, LISTFILES_MAX_DEPTH, LISTFILES_SKIP_DIRS,
-    augment_with_data_file_id,
+    augment_with_data_file_id, search_session_files,
 )
 
 
@@ -120,3 +121,104 @@ def test_augment_with_data_file_id_in_place():
     assert files[0]['dataFileId'] == 'df-1'
     assert files[1]['dataFileId'] is None
     assert FakeCur._exec_count == 1   # 只一条 SELECT，不 N+1
+
+
+# ---- search_session_files：@ 联想服务端搜索（含克隆仓库内容） ----
+
+
+def _add_cloned_repo(td):
+    """造一个克隆进工作区的代码仓库（含自己的 .git）——AGENTS.md 引导的标准
+    工作区形态，list_session_files 整棵跳过它，@ 联想搜索必须能触及。"""
+    root = Path(td)
+    (root / 'cloned' / '.git').mkdir(parents=True, exist_ok=True)
+    (root / 'cloned' / 'src').mkdir(parents=True, exist_ok=True)
+    (root / 'cloned' / 'code.py').write_text('x=1', encoding='utf-8')
+    (root / 'cloned' / 'src' / 'helper.ts').write_text('export {}', encoding='utf-8')
+    (root / 'cloned' / '.git' / 'config').write_text('[core]', encoding='utf-8')
+
+
+def test_search_finds_nested_repo_files():
+    """克隆仓库（自带 .git）里的文件必须可被搜到；.git 内部永不出现。"""
+    with tempfile.TemporaryDirectory() as td:
+        _make_workspace(td)
+        _add_cloned_repo(td)
+        files, truncated = search_session_files(td, 'helper')
+        paths = [f['path'] for f in files]
+        assert 'cloned/src/helper.ts' in paths
+        assert all('.git/' not in p for p in paths)
+
+
+def test_search_scoring_basename_prefix_beats_substring():
+    """评分与前端 filterFileItems 镜像：basename 前缀 > path 前缀 >
+    basename 子串 > path 子串。"""
+    with tempfile.TemporaryDirectory() as td:
+        _make_workspace(td)
+        root = Path(td)
+        # basename 前缀命中（score 1）
+        (root / 'repo').mkdir(exist_ok=True)
+        (root / 'repo' / 'alpha.py').write_text('1', encoding='utf-8')
+        # basename 子串命中（score 3）：'al' 在 'marshal' 中部
+        (root / 'repo' / 'marshal.py').write_text('2', encoding='utf-8')
+        # path 子串命中（score 4）：basename 不含 'al'
+        (root / 'galaxy').mkdir(exist_ok=True)
+        (root / 'galaxy' / 'beta.py').write_text('3', encoding='utf-8')
+        files, _ = search_session_files(td, 'al')
+        assert [f['path'] for f in files] == ['repo/alpha.py', 'repo/marshal.py', 'galaxy/beta.py']
+
+
+def test_search_empty_query_returns_scan_order():
+    """空 q：全部文件按扫描序返回（uploads 优先，随后 walk 序），用于 @ 裸唤起。"""
+    with tempfile.TemporaryDirectory() as td:
+        _make_workspace(td)
+        files, truncated = search_session_files(td, '', limit=50)
+        paths = [f['path'] for f in files]
+        assert truncated is False
+        assert paths[0] == 'uploads/in.txt'
+        assert 'outputs/report.md' in paths
+        assert 'root.txt' in paths
+
+
+def test_search_limit_truncates_with_flag():
+    with tempfile.TemporaryDirectory() as td:
+        _make_workspace(td)
+        root = Path(td)
+        (root / 'many').mkdir(exist_ok=True)
+        for i in range(8):
+            (root / 'many' / f'item{i}.py').write_text(str(i), encoding='utf-8')
+        files, truncated = search_session_files(td, 'item', limit=3)
+        assert len(files) == 3
+        assert truncated is True
+
+
+def test_search_respects_skip_dirs_and_dotfiles():
+    with tempfile.TemporaryDirectory() as td:
+        _make_workspace(td)
+        _add_cloned_repo(td)
+        files, _ = search_session_files(td, '', limit=50)
+        paths = {f['path'] for f in files}
+        # 既有排除规则不变
+        assert 'node_modules/x.js' not in paths
+        assert '.secret' not in paths
+        assert 'opencode.json' not in paths
+        assert 'cloned/.git/config' not in paths
+
+
+def test_search_no_match_returns_empty():
+    with tempfile.TemporaryDirectory() as td:
+        _make_workspace(td)
+        files, truncated = search_session_files(td, 'zzz-does-not-exist')
+        assert files == []
+        assert truncated is False
+
+
+def test_search_null_workspace_returns_empty():
+    assert search_session_files('', 'x') == ([], False)
+
+
+def test_search_limit_clamped():
+    with tempfile.TemporaryDirectory() as td:
+        _make_workspace(td)
+        files, _ = search_session_files(td, '', limit=0)
+        assert len(files) == 1   # 钳到 1
+        files, _ = search_session_files(td, '', limit=999)
+        assert len(files) <= 50   # 钳到 50

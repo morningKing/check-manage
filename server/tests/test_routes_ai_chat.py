@@ -824,6 +824,83 @@ def test_list_files_other_users_session_404(setup):
     assert resp.status_code == 404
 
 
+# ---- GET /sessions/<sid>/files/search：@ 联想服务端搜索（含克隆仓库） ----
+
+
+def test_search_files_includes_nested_repo_files(setup):
+    """@ 联想必须能搜到克隆进工作区的代码仓库（自带 .git）里的文件——
+    list_files 面向文件抽屉整棵跳过嵌套仓库，搜索端点则要触及它们。"""
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wssearch'
+    (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+    (ws / 'uploads' / 'in.txt').write_text('hi', encoding='utf-8')
+    (ws / 'cloned' / '.git').mkdir(parents=True, exist_ok=True)
+    (ws / 'cloned' / 'src').mkdir(parents=True, exist_ok=True)
+    (ws / 'cloned' / 'src' / 'alpha.py').write_text('x=1', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/files/search?q=alpha', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['truncated'] is False
+    assert [f['path'] for f in body['files']] == ['cloned/src/alpha.py']
+    assert body['files'][0]['dir'] == 'workspace'
+    assert set(body['files'][0].keys()) == {'name', 'path', 'dir', 'size'}
+
+
+def test_search_files_empty_q_lists_uploads_first(setup):
+    """裸 @ 唤起（q 空）也要能拿到全集（uploads 优先），不只是上传文件。"""
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wssearchall'
+    (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+    (ws / 'uploads' / 'in.txt').write_text('hi', encoding='utf-8')
+    (ws / 'report.md').write_text('# r', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/files/search', headers=dev_h)
+    assert resp.status_code == 200
+    paths = [f['path'] for f in resp.get_json()['files']]
+    assert paths == ['uploads/in.txt', 'report.md']
+
+
+def test_search_files_limit_truncates(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wssearchlim'
+    ws.mkdir(parents=True, exist_ok=True)
+    for i in range(5):
+        (ws / f'gen{i}.txt').write_text(str(i), encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/files/search?q=gen&limit=2', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert len(body['files']) == 2
+    assert body['truncated'] is True
+
+
+def test_search_files_null_workspace_returns_empty(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', None)
+    resp = client.get('/ai/chat/sessions/sess_x/files/search?q=x', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'files': [], 'truncated': False}
+
+
+def test_search_files_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None  # not owned by this user
+    resp = client.get('/ai/chat/sessions/sess_other/files/search?q=x', headers=dev_h)
+    assert resp.status_code == 404
+
+
+def test_search_files_bad_limit_falls_back_default(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wssearchbadlim'
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / 'a.txt').write_text('a', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/files/search?q=&limit=abc', headers=dev_h)
+    assert resp.status_code == 200
+    assert len(resp.get_json()['files']) == 1
+
+
 def test_send_message_export_intent_fallback_writes_xlsx(setup):
     from unittest.mock import patch
     client, cursor, oc, dev_h, _, ws_root = setup

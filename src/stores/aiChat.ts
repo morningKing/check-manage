@@ -19,7 +19,8 @@ import {
   type AiSessionGroup,
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
-  getMessages, sendMessage, setMessageFeedback, uploadFile, uploadSkill, listFiles, getChanges,
+  getMessages, sendMessage, setMessageFeedback, uploadFile, uploadSkill, listFiles, searchFiles,
+  getChanges,
   getMcpServices,
   getCommands, postCommand, abortSession, undoToMessage, redoSession as apiRedoSession,
   compactSession as apiCompactSession,
@@ -125,6 +126,14 @@ interface State {
   outputs: Record<string, AiFile[]>
   /** 用户上传到会话 uploads/ 目录的文件（与 agent 产出分开列示，实时刷新）。 */
   uploads: Record<string, AiFile[]>
+  /**
+   * @ 联想服务端搜索结果（含克隆仓库文件）。key: 会话 id。query 记录该结果
+   * 对应的 @ 过滤词，palette 仅在 query 与当前 token 匹配时采用；请求本身由
+   * AiChatView 防抖触发，过期响应在 action 里按 seq 丢弃。
+   */
+  mentionSearch: Record<string, { query: string; files: AiFile[] } | null>
+  /** @ 联想搜索的请求序号（防过期响应覆盖新结果）。 */
+  mentionSearchSeq: Record<string, number>
   changes: Record<string, ChangedFile[]>
   /** 会话全部工具调用时间线（根 + 子代理，agent_tool_calls 账本；大数据量 §1.1 的快查视图） */
   toolCalls: Record<string, SessionToolCall[]>
@@ -275,6 +284,8 @@ export const useAiChatStore = defineStore('aiChat', {
     subtaskTodoGroups: {} as Record<string, Record<string, SubtaskTodoGroup>>,
     outputs: {},
     uploads: {},
+    mentionSearch: {},
+    mentionSearchSeq: {},
     changes: {} as Record<string, ChangedFile[]>,
     toolCalls: {} as Record<string, SessionToolCall[]>,
     toolCallsLoading: {} as Record<string, boolean>,
@@ -315,6 +326,10 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activeUploads(state): AiFile[] {
       return state.activeSessionId ? state.uploads[state.activeSessionId] ?? [] : []
+    },
+    /** 当前会话的 @ 联想服务端搜索结果（query 匹配由 view 校验）。 */
+    activeMentionSearch(state): { query: string; files: AiFile[] } | null {
+      return state.activeSessionId ? state.mentionSearch[state.activeSessionId] ?? null : null
     },
     activeChanges(state): ChangedFile[] {
       return state.activeSessionId ? state.changes[state.activeSessionId] ?? [] : []
@@ -602,6 +617,29 @@ export const useAiChatStore = defineStore('aiChat', {
         // 用户上传的输入文件（uploads/）单独成组，上传后实时可见。
         this.uploads[id] = files.filter(f => f.dir === 'uploads')
       } catch { /* non-fatal */ }
+    },
+
+    /**
+     * @ 联想服务端搜索（含克隆仓库文件，listFiles 扫描跳过嵌套仓库）。
+     * 结果记 query 落 mentionSearch[sid]；响应返回时若已有更新的请求在途
+     * （seq 不匹配）则丢弃，防止慢响应覆盖新 query 的结果。失败非致命——
+     * palette 回退本地 filterFileItems。
+     */
+    async searchMentionFiles(id: string, q: string) {
+      const seq = (this.mentionSearchSeq[id] ?? 0) + 1
+      this.mentionSearchSeq[id] = seq
+      try {
+        const { files } = await searchFiles(id, q)
+        if (this.mentionSearchSeq[id] !== seq) return   // 过期响应
+        this.mentionSearch[id] = { query: q, files }
+      } catch { /* non-fatal */ }
+    },
+
+    /** 把 @ 采纳的文件（可能来自服务端搜索，不在 loadFiles 全集里）并入
+     *  outputs 组，让用户气泡 chip（knownPaths）与点击预览照常工作。 */
+    ensureMentionFile(id: string, f: AiFile) {
+      const list = this.outputs[id] ?? (this.outputs[id] = [])
+      if (!list.some(x => x.path === f.path)) list.push({ ...f })
     },
 
     async loadChanges(id: string): Promise<boolean> {

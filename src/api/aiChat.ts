@@ -386,6 +386,16 @@ export function listFiles(id: string) {
   )
 }
 
+/**
+ * @ 联想服务端文件搜索：与 listFiles 不同，含嵌套 git 仓库（克隆代码树），
+ * 按 q 评分截 top-N，不受 list 端点 1000 条截断影响。q 空返回扫描序前 N。
+ */
+export function searchFiles(id: string, q: string, limit = 20) {
+  return get<{ files: AiFile[]; truncated?: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/files/search`, { q, limit }, { silent: true },
+  )
+}
+
 /** 批任务子会话 → 所属批次 id(404 = 非批子会话)。通知/URL 直开批子会话用。 */
 export function getBatchOfSession(sessionId: string) {
   return get<{ batchId: string }>(

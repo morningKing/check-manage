@@ -486,8 +486,12 @@ const mentionPalette = computed<PaletteItem[]>(() => {
   const agentItems: PaletteItem[] = store.subagents
     .filter((a) => !q || a.name.toLowerCase().includes(q.toLowerCase()))
     .map((a) => ({ kind: 'agent', name: a.name, description: a.description }))
-  const fileItems: PaletteItem[] = filterFileItems(mentionFiles.value, q)
-    .map((f) => ({ kind: 'file', name: f.path, description: fileItemDesc(f) }))
+  // 服务端搜索（含克隆仓库文件——loadFiles 的扫描整棵跳过嵌套 git 仓库）在
+  // query 匹配时优先；在途/未命中回退本地过滤，不白屏。
+  const ms = store.activeMentionSearch
+  const fileSource: AiFile[] = ms && ms.query === q ? ms.files : filterFileItems(mentionFiles.value, q)
+  const fileItems: PaletteItem[] = fileSource
+    .map((f) => ({ kind: 'file', name: f.path, description: fileItemDesc(f), file: f }))
   // agents first, then files — CommandPalette inserts a group header per kind
   return [...agentItems, ...fileItems]
 })
@@ -497,11 +501,24 @@ const paletteOpen = computed(() => activePalette.value.length > 0)
 watch(activePalette, () => { activeIndex.value = 0 })
 // 首次在会话里唤起 @ 补全时懒加载工作区文件（openSession 已加载，这里给新建会话/
 // 尚未触发加载的场景兜底；失败不影响输入）。
+// 服务端文件搜索防抖 250ms 触发：本地过滤即时先显示，结果到达后整组替换
+// （store 侧按 seq 丢弃过期响应，这里只需清掉尚未触发的定时器）。
+let mentionSearchTimer: ReturnType<typeof setTimeout> | null = null
 watch(mentionToken, (tok) => {
+  if (mentionSearchTimer) { clearTimeout(mentionSearchTimer); mentionSearchTimer = null }
+  if (tok && activeId.value) {
+    const sid = activeId.value
+    const q = tok.query
+    mentionSearchTimer = setTimeout(() => {
+      mentionSearchTimer = null
+      store.searchMentionFiles(sid, q)
+    }, 250)
+  }
   if (tok && activeId.value && mentionFiles.value.length === 0) {
     store.loadFiles(activeId.value).catch(() => { /* non-fatal */ })
   }
 })
+onUnmounted(() => { if (mentionSearchTimer) clearTimeout(mentionSearchTimer) })
 const messages = computed(() => store.activeMessages)
 // 轨迹分析会话分组（侧栏「会话」下独立折叠组，默认收起）
 const analysisSessions = computed(() => store.analysisSessions)
@@ -1361,6 +1378,9 @@ function acceptItem(item: PaletteItem) {
       input.value = before + insert + after
       cursorPos.value = before.length + insert.length
     }
+    // 搜索命中的文件可能不在 loadFiles 全集里（仓库文件被 list 扫描跳过），
+    // 并入 outputs 组让气泡 chip 与点击预览可解析。
+    if (item.file && activeId.value) store.ensureMentionFile(activeId.value, item.file)
     return
   }
   if (item.kind === 'skill') input.value = '使用 `' + item.name + '` 技能:'

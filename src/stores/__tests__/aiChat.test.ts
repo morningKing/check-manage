@@ -20,6 +20,7 @@ vi.mock('@/api/aiChat', () => ({
   setMessageFeedback: vi.fn(),
   uploadFile: vi.fn(),
   listFiles: vi.fn(() => Promise.resolve({ files: [] })),
+  searchFiles: vi.fn(() => Promise.resolve({ files: [], truncated: false })),
   getChanges: vi.fn(),
   setPermissionMode: vi.fn(),
   getPendingPermission: vi.fn(),
@@ -310,6 +311,56 @@ describe('useAiChatStore', () => {
     expect(api.uploadFile).toHaveBeenCalledWith('sess_1', expect.any(File))
     expect(vi.mocked(api.listFiles).mock.calls.length).toBeGreaterThan(listCallsBefore)
     expect(store.uploads['sess_1'].map(f => f.name)).toEqual(['data.csv'])
+  })
+
+  // ---- @ 联想服务端搜索（含克隆仓库文件）：mentionSearch 状态与动作 ----
+
+  it('searchMentionFiles stores server results keyed by query', async () => {
+    vi.mocked(api.searchFiles).mockResolvedValue({ files: [
+      { name: 'alpha.py', path: 'repo/src/alpha.py', dir: 'workspace', size: 3 },
+    ], truncated: false })
+
+    const store = useAiChatStore()
+    await store.searchMentionFiles('sess_1', 'alpha')
+
+    expect(api.searchFiles).toHaveBeenCalledWith('sess_1', 'alpha')
+    expect(store.mentionSearch['sess_1']).toEqual({
+      query: 'alpha',
+      files: [{ name: 'alpha.py', path: 'repo/src/alpha.py', dir: 'workspace', size: 3 }],
+    })
+  })
+
+  it('searchMentionFiles drops a stale response whose query is no longer the latest', async () => {
+    let resolveFirst!: (v: Awaited<ReturnType<typeof api.searchFiles>>) => void
+    vi.mocked(api.searchFiles)
+      .mockImplementationOnce(() => new Promise(r => { resolveFirst = r }))
+      .mockResolvedValueOnce({ files: [
+        { name: 'alpha.py', path: 'repo/src/alpha.py', dir: 'workspace', size: 3 },
+      ], truncated: false })
+
+    const store = useAiChatStore()
+    const stale = store.searchMentionFiles('sess_1', 'alp')
+    await store.searchMentionFiles('sess_1', 'alpha')   // 新查询后发先至
+    resolveFirst({ files: [{ name: 'x', path: 'x.py', dir: 'workspace', size: 1 }], truncated: false })
+    await stale; await Promise.resolve()
+
+    // 过期响应不落地——palette 只吃最新 query 的结果
+    expect(store.mentionSearch['sess_1']?.query).toBe('alpha')
+  })
+
+  it('searchMentionFiles failures are non-fatal (local filter fallback stays)', async () => {
+    vi.mocked(api.searchFiles).mockRejectedValue(new Error('boom'))
+    const store = useAiChatStore()
+    await expect(store.searchMentionFiles('sess_1', 'alpha')).resolves.toBeUndefined()
+    expect(store.mentionSearch['sess_1']).toBeUndefined()
+  })
+
+  it('ensureMentionFile adds a searched file once so the bubble chip can resolve it', () => {
+    const store = useAiChatStore()
+    const f = { name: 'alpha.py', path: 'repo/src/alpha.py', dir: 'workspace' as const, size: 3 }
+    store.ensureMentionFile('sess_1', f)
+    store.ensureMentionFile('sess_1', { ...f })
+    expect(store.outputs['sess_1']).toEqual([f])
   })
 
   it('clearSession wipes local history/files, keeps the session active, and reopens the stream', async () => {

@@ -60,7 +60,7 @@ from utils.workspace import (
 from utils.workspace_changes import (git_changes, file_diff, expand_untracked_dir,
                                      read_file_preview, record_session_files,
                                      get_session_files)
-from utils.workspace_outputs import list_session_files
+from utils.workspace_outputs import list_session_files, search_session_files
 from utils.mention_files import inline_file_mentions
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.session_history import render_history_block
@@ -2210,6 +2210,31 @@ def list_files(sid):
     if not workspace_path:   # batch child sessions have no workspace dir
         return jsonify({'files': [], 'truncated': False})
     files, truncated = list_session_files(workspace_path)
+    return jsonify({'files': files, 'truncated': truncated})
+
+
+@ai_chat_bp.route('/sessions/<sid>/files/search', methods=['GET'])
+@login_required
+def search_files(sid):
+    """@ 联想服务端文件搜索（含克隆仓库内容）。
+
+    list_files 面向文件抽屉，整棵跳过嵌套 git 仓库（改动归变更文件面板）；
+    @ 联想恰恰要触及克隆代码树，故走本端点：同一套排除规则但不跳过嵌套
+    仓库，按 q 评分截 top-N，不受 LISTFILES_MAX_FILES 截断影响。q 空时按
+    扫描序返回前 N 个（uploads 优先），供输入框裸 @ 唤起展示全集。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    workspace_path = sess[4]
+    if not workspace_path:   # batch child sessions have no workspace dir
+        return jsonify({'files': [], 'truncated': False})
+    try:
+        limit = int(request.args.get('limit', 20))
+    except (TypeError, ValueError):
+        limit = 20
+    files, truncated = search_session_files(workspace_path, request.args.get('q', ''),
+                                            limit=limit)
     return jsonify({'files': files, 'truncated': truncated})
 
 

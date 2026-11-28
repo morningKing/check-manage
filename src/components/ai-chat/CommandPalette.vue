@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { AiFile } from '@/api/aiChat'
 
-export interface PaletteItem { kind: 'builtin' | 'command' | 'skill' | 'agent' | 'file'; name: string; description: string }
+/** `file` 仅 kind='file' 携带：供采纳后 ensureMentionFile 落库渲染气泡 chip。 */
+export interface PaletteItem { kind: 'builtin' | 'command' | 'skill' | 'agent' | 'file'; name: string; description: string; file?: AiFile }
 const props = withDefaults(defineProps<{ items: PaletteItem[]; activeIndex: number; prefix?: string }>(), { prefix: '/' })
 defineEmits<{ (e: 'select', item: PaletteItem): void }>()
 
