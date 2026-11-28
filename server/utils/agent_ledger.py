@@ -888,17 +888,142 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
 # 2.5 PreToolUse 拦截（P3-C3）
 # ---------------------------------------------------------------------------
 
+_CHECKPOINT_ARGS_CLIP = 600
+_CHECKPOINT_RESUME_NOTE = (
+    '\n\n【门禁过程检查】完成上述要求后，必须重新发起刚才被拦截的工具调用：'
+    'tool={tool}，参数摘要：{args}。'
+    '重新发起该调用之前，不要输出总结或结束任务。'
+)
+
+
+def _checkpoint_resume_reason(prompt: str, tool: str, args_text: str) -> str:
+    """checkpoint(before) 注入内容 = 规则提示词 + 重发契约。
+
+    被拦调用不由系统重放（设计如此），补发只能由模型执行——此前注入只有
+    规则提示词，模型做完检查直接收尾就把原调用丢了（2026-11-28 用户反馈
+    的根因）。契约把「完成后重发、未重发不得收尾」连同原调用工具名与参数
+    摘要写进工具结果；参数摘要截断，避免超长 args 撑爆工具结果通道。"""
+    args = args_text or ''
+    if len(args) > _CHECKPOINT_ARGS_CLIP:
+        args = (args[:_CHECKPOINT_ARGS_CLIP]
+                + f'…(+{len(args_text) - _CHECKPOINT_ARGS_CLIP})')
+    return prompt + _CHECKPOINT_RESUME_NOTE.format(tool=tool, args=args)
+
+
+def _count_ledger_hits(cur, oc_ids, tool: str, pattern: str,
+                       subagents, req_state: str = 'completed') -> int:
+    """账本命中计数——终态核对（check_session_gate）与 checkpoint pre 预评估
+    共用，口径唯一。oc_ids 为参与核对的账本会话集合（根会话或 tree 全子树）；
+    subagents 非空时只统计名单内子代理（ai_chat_subtasks.agent）的调用，
+    根会话与不相关子代理的动作不参与。"""
+    if not oc_ids:
+        return 0
+    if subagents:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM agent_tool_calls t
+            JOIN ai_chat_subtasks st ON st.id = t.subtask_id
+            WHERE t.oc_session_id = ANY(%s)
+              AND t.tool = %s AND t.state = %s
+              AND t.args_text ~ %s
+              AND st.agent = ANY(%s)
+            """,
+            (oc_ids, tool, req_state, pattern, subagents),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM agent_tool_calls
+            WHERE oc_session_id = ANY(%s)
+              AND tool = %s AND state = %s
+              AND args_text ~ %s
+            """,
+            (oc_ids, tool, req_state, pattern),
+        )
+    return cur.fetchone()[0]
+
+
+def _sync_ledger_from_oc(session_id: str, oc_sid: str, ws, oc_ids) -> None:
+    """把 OC 活体消息同步进账本（幂等 upsert，worker 之后写同一行自然覆盖）。
+    子会话逐个尝试，单个失败不拖垮；无运行时/OC 不可达 → 放弃同步（调用方
+    按账本现值保守判定）。"""
+    try:
+        from utils.runtime import get_runtime
+        client = get_runtime().get_client()
+    except Exception:  # noqa: BLE001 —— 无运行时（单测）→ 放弃同步
+        return
+    directory = ws or ''
+    for sid in oc_ids:
+        try:
+            msgs = client.get_messages(sid, directory=directory) or []
+        except Exception:  # noqa: BLE001 —— 单会话失败不拖垮
+            continue
+        if not msgs:
+            continue
+        if sid == oc_sid:
+            record_messages(sid, msgs, root_session_id=session_id)
+        else:
+            record_messages(sid, msgs, root_session_id=session_id,
+                            subtask_id=sid)
+
+
+def _checkpoint_assert_satisfied(cur, session_id: str, scope_type: str,
+                                 assert_spec: dict, subagents) -> bool | None:
+    """checkpoint(before) pre 预评估：assert_spec 的账本前置是否已达成。
+
+    返回 True=已达标（调用方可智能放行）、False=未达标（照常拦+注入）、
+    None=无法评估（无 oc 会话映射 / 字段不可账本化 / 查询异常）→ 调用方
+    回退必拦注入（保守：拿不准就提示一次，终态核对仍兜底）。req_state
+    固定 completed，与终态 checkpoint 分支同口径。
+
+    账本滞后竞态（2026-11-28 探针 S1 实锤）：账本由 worker 轮询/SSE 收敛
+    异步落账（秒级滞后）——模型补做步骤后立刻重发原调用时，该步骤往往
+    还没进账本，只查库会把「已达标」误判成「未达标」再拦一次。因此账本
+    未达标时先把参与会话（tree 作用域含全部子会话）的 OC 活体消息拉回来
+    过同一套提取器落账再重数——口径零漂移，顺带自愈落账滞后。OC 不可达
+    → 按账本现值判定（拿不到活体证据照旧拦+注入，不误放行）。"""
+    try:
+        aspec = assert_spec or {}
+        tool = aspec.get('tool')
+        if not tool:
+            return None
+        pattern = aspec.get('args_pattern') or ''
+        min_count = int(aspec.get('min_count') or 1)
+        cur.execute(
+            "SELECT opencode_session_id, workspace_path FROM ai_chat_sessions "
+            "WHERE id = %s", (session_id,))
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return None
+        oc_sid, ws = row[0], row[1]
+        if (scope_type or 'session') == 'tree':
+            oc_ids = _subtree_oc_ids(cur, session_id, oc_sid)
+        else:
+            oc_ids = [oc_sid]
+        if _count_ledger_hits(cur, oc_ids, tool, pattern,
+                              subagents) >= min_count:
+            return True
+        _sync_ledger_from_oc(session_id, oc_sid, ws, oc_ids)
+        return _count_ledger_hits(cur, oc_ids, tool, pattern,
+                                  subagents) >= min_count
+    except Exception:  # noqa: BLE001 —— 预评估异常按“无法评估”回退必拦
+        return None
+
+
 def pre_check_tool(session_id: str, tool: str, args_text: str,
                    agent_name: str | None = None, get_db=None) -> dict:
     """P3-C3 pre 阻断 + checkpoint 过程检查（before 时机）。
 
     判定顺序：① mode='pre' deny 命中即拦（优先级最高，不计预算）；
     ② mode='checkpoint' AND timing='before' 按 (created_at, id) 序取第一条
-    匹配且有预算的行，原子消耗 fired_count 后注入 prompt——复用 deny 的抛错
-    通道（reason 即注入内容）。`agent_name` 是动作归属子代理名（路由层由 OC
-    会话映射解析；根会话自身动作=None）：带 subagents 名单的行只对名单内
-    子代理注入，名单外（含根会话）不注入不耗预算；无名单行树级全量。查询
-    异常向上抛——由路由统一 fail-open。"""
+    匹配行——先做 assert_spec 预评估（智能放行，2026-11-28）：账本前置已
+    达成 → 直接放行不耗预算（重发必过，不再白拦一次）；未达标/无法评估 →
+    原子消耗 fired_count 后注入 prompt = 规则提示词 + 重发契约
+    （_checkpoint_resume_reason）——复用 deny 的抛错通道（reason 即注入
+    内容）。`agent_name` 是动作归属子代理名（路由层由 OC 会话映射解析；
+    根会话自身动作=None）：带 subagents 名单的行只对名单内子代理注入，
+    名单外（含根会话）不注入不耗预算；无名单行树级全量。查询异常向上抛
+    ——由路由统一 fail-open。"""
     import re as _re
     db_ctx = get_db or _default_get_db
     with db_ctx() as conn:
@@ -917,7 +1042,8 @@ def pre_check_tool(session_id: str, tool: str, args_text: str,
                             'reason': f'门禁规则「{name}」拦截了工具 {tool} 的调用',
                             'rules': len(deny_rows)}
             cur.execute(
-                "SELECT id, name, prompt, args_pattern, subagents, max_checks "
+                "SELECT id, name, prompt, args_pattern, subagents, max_checks, "
+                "       assert_spec, scope_type, check_type "
                 "FROM action_expectations "
                 "WHERE scope_id = %s AND mode = 'checkpoint' "
                 "  AND timing = 'before' AND tool = %s "
@@ -926,11 +1052,38 @@ def pre_check_tool(session_id: str, tool: str, args_text: str,
             )
             check_rows = cur.fetchall()
             rules_n = len(deny_rows) + len(check_rows)
-            for rid, name, prompt, pattern, subagents, max_checks in check_rows:
+            # 短路缓存口径=全会话规则总数（pre + checkpoint(before)，不限工具）：
+            # 插件按 sessionID 缓存 rules=0，若按当前 tool 计数，首个无规则工具
+            # 的调用（如先 read 输入）会把整个会话缓存成"无规则"，跨工具误短路
+            # 后续 write 的 checkpoint 注入（Task 13 E2E 实测复现）。提前算好，
+            # 下面智能放行/命中两条提前返回路径都必须带上，返回 0=误缓存。
+            cur.execute(
+                "SELECT COUNT(*) FROM action_expectations "
+                "WHERE scope_id = %s AND (mode = 'pre' "
+                "  OR (mode = 'checkpoint' AND timing = 'before'))",
+                (session_id,),
+            )
+            session_rules = cur.fetchone()[0]
+            for (rid, name, prompt, pattern, subagents, max_checks,
+                 assert_spec, scope_type, check_type) in check_rows:
                 if not pattern or not _re.search(pattern, args_text or ''):
                     continue
                 if subagents and (not agent_name or agent_name not in subagents):
                     continue
+                # 智能放行（2026-11-28）：assert_spec 的账本前置已达成 → 不再
+                # 打断、不耗预算。此前「预算内首次命中必拦」会把模型已做完
+                # 检查步骤的调用也白拦一次；达标即放行让「检查完成 → 原调用
+                # 必过」机械化，补发不再纯靠模型自觉。file/db_record/verifier
+                # 行无法账本计数 → 无法评估，回退必拦。
+                if assert_spec and check_type not in ('file', 'db_record',
+                                                      'verifier'):
+                    satisfied = _checkpoint_assert_satisfied(
+                        cur, session_id, scope_type, assert_spec, subagents)
+                    if satisfied:
+                        log.info('gate checkpoint-before skip (assert '
+                                 'satisfied) rule=%s sid=%s tool=%s',
+                                 name, session_id, tool)
+                        return {'allow': True, 'rules': session_rules}
                 cur.execute(
                     "UPDATE action_expectations SET fired_count = fired_count + 1 "
                     "WHERE id = %s AND fired_count < max_checks "
@@ -942,18 +1095,13 @@ def pre_check_tool(session_id: str, tool: str, args_text: str,
                     log.info('gate checkpoint-before hit rule=%s sid=%s '
                              'tool=%s fired=%s/%s', name, session_id, tool,
                              fired[1], max_checks)
-                    return {'allow': False, 'reason': prompt, 'rules': rules_n}
-            # 短路缓存口径=全会话规则总数（pre + checkpoint(before)，不限工具）：
-            # 插件按 sessionID 缓存 rules=0，若按当前 tool 计数，首个无规则工具
-            # 的调用（如先 read 输入）会把整个会话缓存成"无规则"，跨工具误短路
-            # 后续 write 的 checkpoint 注入（Task 13 E2E 实测复现）。
-            cur.execute(
-                "SELECT COUNT(*) FROM action_expectations "
-                "WHERE scope_id = %s AND (mode = 'pre' "
-                "  OR (mode = 'checkpoint' AND timing = 'before'))",
-                (session_id,),
-            )
-            session_rules = cur.fetchone()[0]
+                    # 注入 = 规则提示词 + 重发契约：系统不重放被打断的调用，
+                    # 补发必须由模型执行——契约把原调用工具名与参数摘要连同
+                    # 「完成后重发、未重发不得收尾」写进工具结果。
+                    return {'allow': False,
+                            'reason': _checkpoint_resume_reason(prompt, tool,
+                                                                args_text),
+                            'rules': rules_n}
     # rules=0 供插件短路缓存：该会话无 pre 规则也无 checkpoint(before) 规则
     # 时，后续工具调用不再发 pre-check 请求（无规则是常态，热路径零开销）。
     # 口径为全会话规则总数（见上），不是当前 tool 的命中数。
@@ -1187,33 +1335,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                             ids = tree_ids
                         else:
                             ids = [oc_sid]
-                        evidence = 0
-                        if ids:
-                            if subagents:
-                                # 子代理定向:只统计指定名称子代理(subtask)的调用,
-                                # 根会话与不相关子代理的动作不参与核对
-                                cur.execute(
-                                    """
-                                    SELECT COUNT(*) FROM agent_tool_calls t
-                                    JOIN ai_chat_subtasks st ON st.id = t.subtask_id
-                                    WHERE t.oc_session_id = ANY(%s)
-                                      AND t.tool = %s AND t.state = %s
-                                      AND t.args_text ~ %s
-                                      AND st.agent = ANY(%s)
-                                    """,
-                                    (ids, tool, req_state, pattern, subagents),
-                                )
-                            else:
-                                cur.execute(
-                                    """
-                                    SELECT COUNT(*) FROM agent_tool_calls
-                                    WHERE oc_session_id = ANY(%s)
-                                      AND tool = %s AND state = %s
-                                      AND args_text ~ %s
-                                    """,
-                                    (ids, tool, req_state, pattern),
-                                )
-                            evidence = cur.fetchone()[0]
+                        evidence = _count_ledger_hits(cur, ids, tool, pattern,
+                                                      subagents, req_state)
                     status = 'passed' if evidence >= min_count else 'failed'
                     cur.execute(
                         """

@@ -14,13 +14,25 @@
 
 | 模型行为 | 策略配置 | 结果 | 判定 |
 | --- | --- | --- | --- |
-| **采纳**：被拦后按提示词补读输入再重写 | checkpoint + assert **断言步骤本体**（read in.txt） | 行 passed，门禁 ✓ | ✅ 注入有效且可证明 |
+| **采纳**：被拦后按提示词补读输入再重写 | checkpoint + assert **断言步骤本体**（read in.txt） | 重发**智能放行**（fired 恒 1），行 passed，门禁 ✓ | ✅ 注入有效且可证明 |
 | **违抗**：无视注入直接重写 | 同上（断言步骤本体） | 行 **failed**（证据 0），门禁 **×** | ✅ **未漏底**——assert 兜底 fail-closed 拦住 |
 | **违抗** + 策略**未配** assert | checkpoint 无 assert_spec | 行恒「待核对」，门禁 **✓** | ⚠️ **漏底**——步骤未做门禁仍过（见 §5 产品结论） |
 
 **一句话**：过程检查的强制力不在注入本身，而在 **assert_spec 是否断言
 「必须完成的步骤」本身**。断言步骤 → 不采纳必被兜底拦住；断言产物
 （或没配 assert）→ 模型违抗时门禁照过，即漏底。
+
+> **2026-11-28 增补（打断后不补调用的修复）**：此前注入只有规则提示词，
+> 模型做完检查直接收尾就把被打断的原调用丢了（「检查完成不补调用」的
+> 根因）。修复两项，均在后端（插件不动）：
+> ① **注入带重发契约**——注入文本自动附上原调用工具名+参数摘要与
+> 「完成后必须重发、未重发不得收尾」的显式指令；
+> ② **assert 预评估智能放行**——pre 钩子先查账本，前置步骤已达成 →
+> 直接放行不再打断（S1 用 `max_checks=2` 做判别器：旧代码重发会被
+> 第二次拦成 write:error×2 且报告写不出来，新代码 fired 恒 1）。
+> 账本由 worker 轮询异步落账（秒级滞后），只查库会把「模型已补做」误判
+> 成未达标再拦一次——预评估未达标时先把会话的 OC 活体消息同步进账本
+> 再重数（幂等，worker 之后写同一行自然覆盖）。
 
 ## 1. 运行方式（本机，全隔离栈）
 
@@ -55,23 +67,27 @@ npm install --no-audit --no-fund --userconfig <干净配置文件>
 
 ```
 COMPLY（采纳）： write(被拦·注入提示词) → read uploads/in.txt（=按注入补做）
-                → write(预算耗尽·放行) → 收尾文本
+                → write(assert 已达标·智能放行) → 收尾文本
 DEFY（违抗）：   write(被拦·注入提示词) → write 直接重调（无视注入）→ 收尾文本
 修正轮通用：     同会话出现第 2 条 user 消息（gate_retry continue）时触发：
                 read → write → 收尾
 ```
 
-策略（S1/S2 共用）：`checkpoint before write ~ gate-probe-report\.md，
-max_checks=1`，**assert_spec = read ~ in\.txt ≥1**——注意断言的是「步骤」
-（先读输入），不是最终产物（报告已写出）。S3 同规则但去掉 assert_spec。
+策略：`checkpoint before write ~ gate-probe-report\.md`，
+**assert_spec = read ~ in\.txt ≥1**——注意断言的是「步骤」
+（先读输入），不是最终产物（报告已写出）。S1 配 **max_checks=2**（预算
+剩 1 时旧代码会把补做后的重发再拦一次——「打断后不补调用」的确定性
+复现；新代码走 assert 预评估智能放行，fired 恒 1）。S2 同规则但
+**max_checks=1**（违抗的第二次重调必须靠预算耗尽放行，才能落成
+write:completed 供终态判 failed）。S3 同 S2 规则但去掉 assert_spec。
 
 ## 3. 判定表（脚本自动核对，人工复核口径）
 
 | # | 核对点 | S1 预期 | S2 预期 | S3 预期 | 证据在哪 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 注入到达模型 | 是 | 是 | 是 | 沙箱 stub-requests.jsonl 的 tool_result 含注入原文 |
+| 1 | 注入到达模型 | 是（含重发契约原文） | 是 | 是 | 沙箱 stub-requests.jsonl 的 tool_result 含注入原文 |
 | 2 | 账本序列 | write:error → read:completed → write:completed | write:error → write:completed | 同 S2 | agent_tool_calls（按 occurred_at） |
-| 3 | 期望行 | fired 1/1，last_status=passed | fired 1/1，last_status=failed | fired 1/1，last_status=**pending**（恒待核对） | action_expectations |
+| 3 | 期望行 | fired **1/2**（重发智能放行不耗预算），last_status=passed | fired 1/1，last_status=failed | fired 1/1，last_status=**pending**（恒待核对） | action_expectations |
 | 4 | 门禁终态 | passed | **failed** | **passed** | 管理面 gate 端点 gateStatus |
 
 「注入到达模型」是采纳问题的直接证据：模型被拦那一轮收到的 tool 结果

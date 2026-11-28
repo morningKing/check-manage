@@ -1116,8 +1116,10 @@ def cp_scope(db_conn):
 class TestPreCheckCheckpoint:
     def test_budget_consume_then_exhaust_then_allow(self, db_conn, cp_scope):
         r1 = agent_ledger.pre_check_tool(cp_scope, 'write', 'outputs/report.md')
-        assert r1 == {'allow': False, 'reason': '请先读取知识库 docs/kb/ 再写入',
-                      'rules': 1}
+        # 注入 = 规则提示词 + 重发契约（2026-11-28），原提示词必须保留
+        assert r1['allow'] is False
+        assert r1['rules'] == 1
+        assert '请先读取知识库 docs/kb/ 再写入' in r1['reason']
         r2 = agent_ledger.pre_check_tool(cp_scope, 'write', 'outputs/report.md')
         assert r2['allow'] is False          # 预算 2：第二次仍注入
         r3 = agent_ledger.pre_check_tool(cp_scope, 'write', 'outputs/report.md')
@@ -1168,7 +1170,173 @@ class TestPreCheckCheckpoint:
                 scope, 'write', 'r', agent_name=None)['allow'] is True
             hit = agent_ledger.pre_check_tool(
                 scope, 'write', 'r', agent_name='分析师')
-            assert hit['allow'] is False and hit['reason'] == '先读知识库'
+            assert hit['allow'] is False and '先读知识库' in hit['reason']
+        finally:
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM action_expectations WHERE scope_id=%s",
+                            (scope,))
+            db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-28: checkpoint(before) 重发契约 + assert_spec 预评估（智能放行）
+#   打断后系统不重放原调用（设计如此），此前注入只有规则提示词——模型做完
+#   检查直接收尾就把原调用丢了。修复：① 注入附「重新发起原调用」契约；
+#   ② assert_spec 预评估，账本前置已达成 → 放行不打断不耗预算（重发必过）。
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cp_assert_scope(db_conn):
+    """带 assert_spec 的 checkpoint(before) 规则 + 真实会话映射（users/
+    ai_chat_sessions），返回 (scope, uid, oc_sid)，收尾清理。"""
+    suffix = uuid.uuid4().hex[:8]
+    scope = f'sess_cpa2_{suffix}'
+    uid = f'u-cpa2-{suffix}'
+    oc_sid = f'oc-cpa2-{suffix}'
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (id, username, password_hash, display_name,"
+            " role) VALUES (%s, %s, 'x', %s, 'developer')",
+            (uid, f'gate-cpa2-{suffix}', f'Gate CPA2 {suffix}'))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status,"
+            " opencode_session_id, workspace_path)"
+            " VALUES (%s, %s, 'completed', %s, '/tmp/cpa2')",
+            (scope, uid, oc_sid))
+        cur.execute(
+            "INSERT INTO action_expectations (scope_type, scope_id, name,"
+            " tool, args_pattern, require_state, min_count, source,"
+            " check_type, mode, timing, max_checks, fired_count, prompt,"
+            " assert_spec)"
+            " VALUES ('tree', %s, '写前读知识库', 'write', 'outputs/report',"
+            " 'completed', 1, 'batch', 'tool', 'checkpoint', 'before', 2, 0,"
+            " '请先读取知识库 docs/kb/ 再写入', %s)",
+            (scope, '{"tool":"read","args_pattern":"docs/kb/","min_count":1}'))
+    db_conn.commit()
+    yield scope, uid, oc_sid
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id=%s",
+                    (scope,))
+        cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (scope,))
+        cur.execute("DELETE FROM action_expectations WHERE scope_id=%s",
+                    (scope,))
+        cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+    db_conn.commit()
+
+
+def _seed_read_hit(db_conn, oc_sid, scope):
+    """账本播一条已完成的 read（assert_spec 的前置证据）。"""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+            " part_id, tool, args_text, state, occurred_at)"
+            " VALUES (%s, %s, 'p-read', 'read', 'docs/kb/a.md',"
+            " 'completed', NOW())", (oc_sid, scope))
+    db_conn.commit()
+
+
+class TestCheckpointResume:
+    def test_reason_carries_resume_contract(self, db_conn, cp_scope):
+        """注入 = 规则提示词 + 重发契约（工具名 + 参数摘要 + 不得收尾）。"""
+        r = agent_ledger.pre_check_tool(cp_scope, 'write', 'outputs/report.md')
+        assert r['allow'] is False
+        assert '请先读取知识库 docs/kb/ 再写入' in r['reason']   # 原提示词保留
+        assert '重新发起' in r['reason'] and 'write' in r['reason']
+        assert 'outputs/report.md' in r['reason']               # 参数摘要
+
+    def test_reason_args_clipped(self, db_conn, cp_scope):
+        """超长参数摘要截断带 …(+N) 标记，reason 不被 args 撑爆。"""
+        big = 'outputs/report.md ' + 'x' * 3000
+        r = agent_ledger.pre_check_tool(cp_scope, 'write', big)
+        assert r['allow'] is False
+        assert f'…(+{len(big) - 600})' in r['reason']
+        assert len(r['reason']) < 1500
+
+    def test_assert_satisfied_allows_without_budget(self, db_conn,
+                                                    cp_assert_scope):
+        """智能放行：assert_spec 前置已在账本 → allow 不耗预算（重发必过）。"""
+        scope, _uid, oc_sid = cp_assert_scope
+        _seed_read_hit(db_conn, oc_sid, scope)
+        r = agent_ledger.pre_check_tool(scope, 'write', 'outputs/report.md')
+        assert r == {'allow': True, 'rules': 1}
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT fired_count FROM action_expectations "
+                        "WHERE scope_id=%s", (scope,))
+            assert cur.fetchone()[0] == 0          # 未耗预算
+
+    def test_assert_unsatisfied_blocks_and_consumes(self, db_conn,
+                                                    cp_assert_scope,
+                                                    monkeypatch):
+        """未达标照常拦+注入（带契约），预算内第二次仍拦，耗尽后放行。
+
+        活体同步在此打桩掉：单测环境没有 OC 运行时，同步必须无副作用地
+        放弃（探针 S1 已实证真实链路的同步路径）。"""
+        monkeypatch.setattr(agent_ledger, '_sync_ledger_from_oc',
+                            lambda *a, **k: None)
+        scope, _uid, _oc = cp_assert_scope
+        r1 = agent_ledger.pre_check_tool(scope, 'write', 'outputs/report.md')
+        assert r1['allow'] is False and '重新发起' in r1['reason']
+        r2 = agent_ledger.pre_check_tool(scope, 'write', 'outputs/report.md')
+        assert r2['allow'] is False                # 预算 2
+        r3 = agent_ledger.pre_check_tool(scope, 'write', 'outputs/report.md')
+        assert r3 == {'allow': True, 'rules': 1}   # 预算耗尽
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT fired_count FROM action_expectations "
+                        "WHERE scope_id=%s", (scope,))
+            assert cur.fetchone()[0] == 2
+
+    def test_assert_satisfied_via_live_sync(self, db_conn, cp_assert_scope,
+                                            monkeypatch):
+        """账本滞后竞态修复：账本未达标 → 活体同步（拉 OC 消息过同一提取器
+        落账）→ 重数达标 → 放行不耗预算。探针 S1 实锤：模型补做 read 后立刻
+        重发，worker 轮询还没落账，只查库会把已达标误判成未达标再拦一次。"""
+        scope, _uid, oc_sid = cp_assert_scope
+
+        def fake_sync(_sid, _oc, _ws, _ids):
+            # 模拟 _sync_ledger_from_oc 的效果：活体消息经提取器落账
+            _seed_read_hit(db_conn, oc_sid, scope)
+
+        monkeypatch.setattr(agent_ledger, '_sync_ledger_from_oc', fake_sync)
+        r = agent_ledger.pre_check_tool(scope, 'write', 'outputs/report.md')
+        assert r == {'allow': True, 'rules': 1}
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT fired_count FROM action_expectations "
+                        "WHERE scope_id=%s", (scope,))
+            assert cur.fetchone()[0] == 0          # 放行未耗预算
+
+    def test_assert_satisfied_overrides_exhausted_budget(self, db_conn,
+                                                         cp_assert_scope,
+                                                         monkeypatch):
+        """先拦一次（未达标），模型补做后重发 → 即使预算耗尽也放行。"""
+        monkeypatch.setattr(agent_ledger, '_sync_ledger_from_oc',
+                            lambda *a, **k: None)
+        scope, _uid, oc_sid = cp_assert_scope
+        assert agent_ledger.pre_check_tool(
+            scope, 'write', 'outputs/report.md')['allow'] is False  # fired=1/2
+        _seed_read_hit(db_conn, oc_sid, scope)
+        r2 = agent_ledger.pre_check_tool(scope, 'write', 'outputs/report.md')
+        assert r2['allow'] is True                 # 达标放行（本行未耗预算）
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT fired_count FROM action_expectations "
+                        "WHERE scope_id=%s", (scope,))
+            assert cur.fetchone()[0] == 1
+
+    def test_no_oc_mapping_falls_back_to_block(self, db_conn):
+        """无会话映射（评估不了）→ 回退必拦注入，不误放行。"""
+        scope = f'sess_cpnomap_{uuid.uuid4().hex[:8]}'
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO action_expectations (scope_type, scope_id, name,"
+                " tool, args_pattern, require_state, min_count, source,"
+                " check_type, mode, timing, max_checks, fired_count, prompt,"
+                " assert_spec)"
+                " VALUES ('tree', %s, '无映射', 'write', 'r', 'completed', 1,"
+                " 'batch', 'tool', 'checkpoint', 'before', 1, 0, '先读', %s)",
+                (scope, '{"tool":"read","args_pattern":"kb","min_count":1}'))
+        db_conn.commit()
+        try:
+            r = agent_ledger.pre_check_tool(scope, 'write', 'r')
+            assert r['allow'] is False and '重新发起' in r['reason']
         finally:
             with db_conn.cursor() as cur:
                 cur.execute("DELETE FROM action_expectations WHERE scope_id=%s",

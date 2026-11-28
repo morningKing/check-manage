@@ -8,10 +8,13 @@
 
 场景与预期（详见同目录 README.md）：
   S1 采纳     stub: write(被拦+注入)→read in.txt(补做)→write→收尾
-              策略: checkpoint(before write) + assert(read in.txt)
+              策略: checkpoint(before write) + assert(read in.txt)，
+                    max_checks=2——预算剩 1 时旧代码会把重发再拦一次
+                    （write:error×2、fired=2）；2026-11-28 起 assert 预评估
+                    智能放行（不耗预算）→ fired 恒 1，是修复的确定性判据
               预期: 门禁 passed；账本序 write(error)→read→write(completed)
   S2 违抗     stub: write(被拦+注入)→write 直接重调(无视注入)→收尾
-              策略: 同 S1（断言的是「步骤」而不是产物）
+              策略: 同 S1 的规则但 max_checks=1（断言的是「步骤」不是产物）
               预期: 门禁 failed（fail-closed 兜底拦住，不漏底）
   S3 违抗+无断言 stub 行为同 S2；策略不配 assert_spec
               预期: 门禁 passed + 行恒「待核对」→ 漏底实锤（设计内但
@@ -112,22 +115,29 @@ def _wait_ready(port, path, timeout_s):
     return False
 
 # ---------------------------------------------------------------- 策略/提示词
-STEP_ASSERT_POLICY = {
-    'name': 'PROBE-过程检查-断言步骤本体',
-    'description': 'assert 断言「必须完成的步骤」（read in.txt）本身，非最终产物',
-    'enabled': True,
-    'checks': [{
-        'name': '写入报告前必须先读输入',
-        'check_type': 'tool', 'mode': 'checkpoint',
-        'tool': 'write', 'args_pattern': 'gate-probe-report\\.md',
-        'timing': 'before', 'max_checks': 1, 'scope': 'tree',
-        'prompt': '过程检查：写入 gate-probe-report.md 前，必须先用 read 工具'
-                  '完整读取 uploads/in.txt，核对你将写入的要点与该文件原文一致；'
-                  '确认后重新执行本次写入。不要改用其他工具写文件。',
-        'assert_spec': {'tool': 'read', 'args_pattern': 'in\\.txt',
-                        'min_count': 1},
-    }],
-}
+def step_assert_policy(max_checks=1):
+    """「断言步骤本体」策略。S1 用 max_checks=2：预算剩 1 时旧代码会把
+    模型补做后的重发再拦一次（write:error×2、报告永远写不出来——正是
+    「打断后不补调用」的确定性复现）；新代码 assert 预评估智能放行，
+    fired 恒 1。S2 用 max_checks=1（违抗场景第二次重调必须放行才能落成
+    write:completed 供终态判 failed）。"""
+    return {
+        # 策略名全局唯一（重名 400），必须带 max_checks 区分 S1/S2 两条
+        'name': 'PROBE-过程检查-断言步骤本体-mc' + str(max_checks),
+        'description': 'assert 断言「必须完成的步骤」（read in.txt）本身，非最终产物',
+        'enabled': True,
+        'checks': [{
+            'name': '写入报告前必须先读输入',
+            'check_type': 'tool', 'mode': 'checkpoint',
+            'tool': 'write', 'args_pattern': 'gate-probe-report\\.md',
+            'timing': 'before', 'max_checks': max_checks, 'scope': 'tree',
+            'prompt': '过程检查：写入 gate-probe-report.md 前，必须先用 read 工具'
+                      '完整读取 uploads/in.txt，核对你将写入的要点与该文件原文一致；'
+                      '确认后重新执行本次写入。不要改用其他工具写文件。',
+            'assert_spec': {'tool': 'read', 'args_pattern': 'in\\.txt',
+                            'min_count': 1},
+        }],
+    }
 
 NO_ASSERT_POLICY = {
     'name': 'PROBE-过程检查-无终态断言',
@@ -450,6 +460,16 @@ def stub_saw_injection():
         return False
 
 
+def stub_saw_resume_contract():
+    """stub 日志工具结果里出现「重发契约」原文（2026-11-28 起注入携带，
+    旧注入只有规则提示词——本证据可区分插件/后端是否部署了修复版）。"""
+    try:
+        with open(STUB_LOG, encoding='utf-8') as f:
+            return '重新发起刚才被拦截的工具调用' in f.read()
+    except OSError:
+        return False
+
+
 def verdict(ev, gate_status):
     seq = [r['tool'] + ':' + r['state'] for r in ev['ledger']]
     exp = (ev['expectations'] or [{}])[0]
@@ -459,15 +479,22 @@ def verdict(ev, gate_status):
          'injection_reached_model': stub_saw_injection()}
     if ev['tag'] == 'S1':
         v['scenario'] = '采纳（补做步骤）'
+        v['resume_contract_seen'] = stub_saw_resume_contract()
         v['expect'] = ('write:error → read:completed → write:completed；'
-                       '行 passed；门禁 passed')
+                       'fired 恒 1/2（重发经 assert 预评估智能放行，不再拦）；'
+                       '注入含重发契约；行 passed；门禁 passed')
         v['pass'] = (seq == ['write:error', 'read:completed',
                              'write:completed']
+                     and exp.get('fired_count') == 1
+                     and exp.get('max_checks') == 2
                      and exp.get('last_status') == 'passed'
                      and gate_status == 'passed'
-                     and v['injection_reached_model'])
-        v['meaning'] = ('注入到达模型且被采纳（先补读后重写），'
-                        '终态断言（步骤本体）通过')
+                     and v['injection_reached_model']
+                     and v['resume_contract_seen'])
+        v['meaning'] = ('注入（含重发契约）到达模型且被采纳（先补读后重写）；'
+                        '重发走 assert 智能放行（fired 恒 1——旧代码此处 '
+                        'write:error×2 且报告写不出来，即「打断后不补调用」'
+                        '实锤）；终态断言（步骤本体）通过')
     elif ev['tag'] == 'S2':
         v['scenario'] = '违抗（无视注入直接重写）'
         v['expect'] = ('write:error → write:completed（无 read）；'
@@ -500,6 +527,9 @@ def print_report(verdicts):
               + '   行: ' + str(v['row_status'])
               + '(证据 ' + str(v['evidence']) + ')   门禁: '
               + str(v['gate_status']))
+        if 'resume_contract_seen' in v:
+            print('   重发契约   : ' + ('已随注入到达模型' if v['resume_contract_seen']
+                                        else '未出现（后端未部署修复版？）'))
         print('   预期       : ' + v['expect'])
         print('   结论       : ' + v['meaning'])
 
@@ -512,15 +542,17 @@ def main():
     procs = start_stack()
     try:
         H = api_login()
-        pid_step = create_policy(H, STEP_ASSERT_POLICY)
+        pid_s1 = create_policy(H, step_assert_policy(2))
+        pid_s2 = create_policy(H, step_assert_policy(1))
         pid_noassert = create_policy(H, NO_ASSERT_POLICY)
-        print('[probe] policies: step-assert=' + pid_step
+        print('[probe] policies: step-assert-mc2=' + pid_s1
+              + ' step-assert-mc1=' + pid_s2
               + ' no-assert=' + pid_noassert)
 
         verdicts = []
         for tag, pid, scenario in (
-                ('S1', pid_step, 'COMPLY'),
-                ('S2', pid_step, 'DEFY'),
+                ('S1', pid_s1, 'COMPLY'),
+                ('S2', pid_s2, 'DEFY'),
                 ('S3', pid_noassert, 'DEFY')):
             bid = create_batch(H, tag, pid, scenario)
             detail = wait_terminal(H, bid)

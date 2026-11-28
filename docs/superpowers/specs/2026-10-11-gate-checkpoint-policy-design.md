@@ -110,6 +110,28 @@ nullable TEXT 列，应用层校验（不加 FK RESTRICT——终态批的历史
 - 树作用域沿用：期望登记在根作用域，`_resolve_scope_id` 把子代理 OC 会话归属
   根会话，子代理动作同样受检。
 
+> **2026-11-28 增补（「打断后不补调用」修复，本节判定顺序的修订）**：
+> 原设计中「补发」是纯隐式期望——注入只有规则提示词，模型做完检查直接
+> 收尾就把被打断的原调用丢了。修订两项（后端 only，插件零改动不变）：
+>
+> 1. **注入带重发契约**：命中返回的 `reason` = 规则提示词 + 固定后缀
+>    （原调用工具名 + 参数摘要（截 600 字符）+「完成后必须重发、未重发
+>    不得收尾」）。deny 分支文案不变。
+> 2. **assert 预评估智能放行（判定顺序变化）**：checkpoint 匹配行在消耗
+>    预算**之前**先做 `assert_spec` 预评估——账本前置已达成（tool/pattern/
+>    min_count 计数，口径与 §6.1 终态分支一致，`_count_ledger_hits` 共享）
+>    → `{allow: true}` 直接放行，不耗预算；未达标/无法评估（无会话映射、
+>    file/db_record/verifier 型）→ 原路径消耗预算+注入。预算耗尽但 assert
+>    已达成同样放行——「检查完成 → 原调用必过」机械化。
+>    **账本滞后竞态**（gate-leak-probe S1 实锤）：账本由 worker 轮询/SSE
+>    收敛异步落账（秒级滞后），模型补做后立刻重发时账本往往还没落，只查库
+>    会把已达标误判成未达标再拦一次。预评估未达标时先把参与会话（tree 含
+>    全部子会话）的 OC 活体消息经 `get_messages`+`record_messages`（幂等
+>    upsert）同步进账本再重数；OC 不可达按账本现值保守判定。
+>    智能放行的提前返回路径必须携带全会话 `rules` 总数（Task 13 短路缓存
+>    教训）。判别证据：gate-leak-probe S1 用 `max_checks=2`——旧代码重发
+>    被第二次拦（write:error×2、报告写不出来），新代码 fired 恒 1。
+
 ### 4.2 after 侧（新端点 `POST /ai/gate/internal/post-check`）
 
 - 入参/鉴权/鉴权失败语义与 `/pre-check` 同形：`{sessionId, tool, argsText}` +
